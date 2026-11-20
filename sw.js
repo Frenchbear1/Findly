@@ -1,5 +1,5 @@
 // Offline support: app files are served from cache and refreshed in the background.
-const CACHE = 'instant-search-v42';
+const CACHE = 'instant-search-v43';
 const SHELL = [
   './', 'index.html', 'css/app.css',
   'js/app.js', 'js/search.js', 'js/store.js', 'js/ingest.js', 'js/pdf.js', 'js/keys.js', 'js/htmlview.js', 'js/mhtml.js', 'js/remote.js', 'js/themes.js', 'js/boards.js',

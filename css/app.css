@@ -1339,7 +1339,9 @@ body.nav-swipe #results .gap { display: none; }
 /* every layer of a result, not just its card, leaves sideways drags to the swipe (the cropped area scrolls
    on its own otherwise, which would take the gesture first) */
 body.nav-swipe #results .page.hit, body.nav-swipe #results .page.hit *, body.nav-swipe #results .page.visit, body.nav-swipe #results .page.visit * { touch-action: pan-y pinch-zoom; }
-body.nav-swipe #results .page.hit .crop-clip, body.nav-swipe #results .page.visit .crop-clip, body.nav-swipe #results .page.hit .page-body, body.nav-swipe #results .page.visit .page-body { overflow-x: hidden; }
+/* only the cropped area itself stops scrolling sideways; the card must not clip, or the arrows set into
+   its border get cut off */
+body.nav-swipe #results .page.hit .crop-clip, body.nav-swipe #results .page.visit .crop-clip { overflow-x: hidden; }
 .page.hit, .page.visit { will-change: auto; }
 .swipe-peek { position: fixed; top: 50%; z-index: 60; display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 14px; border-radius: 999px;
   background: color-mix(in srgb, var(--panel) 92%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border: 1px solid var(--line-2);
