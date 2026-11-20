@@ -1153,7 +1153,7 @@ async function goVisit(home, n, dir, rec = true, prepped = null) {
     // it was already peeking in from the side: carry on like a carousel, both pages moving together
     const w = shown.offsetWidth + SWIPE_GAP;
     const t = Math.max(240, Math.min(420, Math.abs(next._peekX) * 1.1));
-    shown.animate([{ transform: `translateX(${from}px)`, opacity: 1 }, { transform: `translateX(${-dir * w}px)`, opacity: 0.25 }], { duration: t, easing: ease, fill: 'forwards' }).onfinish = (ev) => { finish(); ev.target.cancel(); };
+    shown.animate([{ transform: `translateX(${from}px)`, opacity: shown._dragO ?? 1 }, { transform: `translateX(${-dir * w}px)`, opacity: 0 }], { duration: t, easing: ease, fill: 'forwards' }).onfinish = (ev) => { finish(); ev.target.cancel(); };
     next.animate([{ transform: `translateX(${next._peekX}px)` }, { transform: 'none' }], { duration: t, easing: ease });
     next._peekX = null;
   } else {
@@ -1161,13 +1161,15 @@ async function goVisit(home, n, dir, rec = true, prepped = null) {
     next.animate([{ transform: `translateX(${dir * 30}%)`, opacity: 0, filter: 'blur(3px)' }, { transform: 'none', opacity: 1, filter: 'none' }], { duration: 460, easing: ease });
   }
   shown._drag = 0;
+  shown._dragO = null;
 }
-const SWIPE_GAP = 14;
+const SWIPE_GAP = 30;
 const SWIPE_AT = 72; // how far to drag before letting go switches pages
 function bindPageSwipe(host) {
   let s = null;
   // the marker that sits on the seam between the two pages: the page number in a ring that fills as you drag
-  const peek = el('div', 'swipe-peek', `<svg viewBox="0 0 56 56"><circle class="tr" cx="28" cy="28" r="25"/><circle class="pr" cx="28" cy="28" r="25" pathLength="100"/></svg><span class="sp-n"></span><span class="sp-a">${I.chevron}</span>`);
+  // an arrow in the gap between the two pages, pointing the way you're going
+  const peek = el('div', 'swipe-peek', I.chevron);
   document.body.append(peek);
   const pageOf = (t) => {
     const art = t.closest?.('.page.hit, .page.visit');
@@ -1187,8 +1189,8 @@ function bindPageSwipe(host) {
     if (!s.on) {
       if (!s.moved && Math.hypot(dx, dy) > 5) s.moved = performance.now();
       if (!s.moved && performance.now() - s.t > 420) { s = null; return; } // held still: that's a long press for selecting
-      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { s = null; return; } // scrolling
-      if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+      if (Math.abs(dy) > 16 && Math.abs(dy) > Math.abs(dx) * 1.4) { s = null; return; } // that's scrolling
+      if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy) * 0.7) return; // a slanted swipe still counts
       if (String(getSelection?.() || '').trim()) { s = null; return; }
       s.on = true;
       s.w = s.art.offsetWidth;
@@ -1211,20 +1213,21 @@ function bindPageSwipe(host) {
     }
     // the page follows your finger; the next one comes in from the side, right behind it
     const move = edge ? Math.sign(dx) * Math.min(60, Math.abs(dx) * 0.3) : dx;
+    const p = Math.min(1, Math.abs(dx) / SWIPE_AT);
     s.art.style.transform = `translateX(${move}px)`;
+    s.art.style.opacity = String(edge ? 1 : 1 - Math.min(0.7, (Math.abs(dx) / (s.w * 0.6)) * 0.7)); // the page you're leaving fades
     s.art._drag = move;
+    s.art._dragO = Number(s.art.style.opacity);
     const peekX = dir * (s.w + SWIPE_GAP) + move;
     if (s.prep) s.prep.style.transform = `translateX(${peekX}px)`;
     // the seam marker, kept in the middle of what you can see of the page
     if (edge) { hidePeek(); return; }
     const r = s.art.getBoundingClientRect();
     const top = Math.max(r.top, topOffset()), bot = Math.min(r.bottom, innerHeight - 96);
-    const p = Math.min(1, Math.abs(dx) / SWIPE_AT);
     const seam = dir > 0 ? r.right + SWIPE_GAP / 2 : r.left - SWIPE_GAP / 2;
-    peek.style.left = Math.max(30, Math.min(innerWidth - 30, seam)) + 'px';
+    peek.style.left = seam + 'px';
     peek.style.top = (bot > top ? (top + bot) / 2 : innerHeight / 2) + 'px';
-    peek.style.setProperty('--p', String(p * 100));
-    peek.querySelector('.sp-n').textContent = n + 1;
+    peek.style.opacity = String(Math.min(1, p * 1.5));
     peek.classList.toggle('back', dir < 0);
     peek.classList.add('on');
     const go = p >= 1;
@@ -1240,13 +1243,15 @@ function bindPageSwipe(host) {
     hidePeek();
     if (!on) { if (prep) { prep._cleanup?.(); prep.remove(); } return; }
     art._swiped = performance.now();
-    const from = art.style.transform;
+    const from = art.style.transform, fromO = art.style.opacity || '1';
     art.style.transform = '';
+    art.style.opacity = '';
     const dir = dx < 0 ? 1 : -1;
     if (!ok || dir !== sdir || (Math.abs(dx) < SWIPE_AT && v < 0.45) || !prep && Number(art.dataset.n) + dir !== Number((art._home || art).dataset.n)) {
       // not far enough: both pages settle back
       art._drag = 0;
-      if (!reduceMotion()) art.animate([{ transform: from }, { transform: 'none' }], { duration: 260, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
+      art._dragO = null;
+      if (!reduceMotion()) art.animate([{ transform: from, opacity: fromO }, { transform: 'none', opacity: 1 }], { duration: 260, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
       if (prep) {
         const a = prep.animate([{ transform: prep.style.transform }, { transform: `translateX(${sdir * (w + SWIPE_GAP)}px)` }], { duration: 260, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
         a.onfinish = () => { prep._cleanup?.(); prep.remove(); };
@@ -1256,6 +1261,11 @@ function bindPageSwipe(host) {
     if (prep) prep._peekX = dir * (w + SWIPE_GAP) + (art._drag || 0);
     goVisit(art._home || art, Number(art.dataset.n) + dir, dir, true, prep);
   };
+  host.addEventListener('touchmove', (e) => {
+    if (!s) return;
+    const t = e.touches[0];
+    if (s.on || (t && Math.abs(t.clientX - s.x) > Math.abs(t.clientY - s.y))) e.preventDefault();
+  }, { passive: false });
   host.addEventListener('pointerup', (e) => end(e, true));
   host.addEventListener('pointercancel', (e) => end(e, false));
   // a swipe isn't a tap on the page
