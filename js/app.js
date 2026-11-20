@@ -641,7 +641,17 @@ function expandEdge(art, side) {
   }
   const added = body.offsetHeight - h0;
   if (added > 0 && !reduceMotion()) {
-    body.animate([{ clipPath: side === 'top' ? `inset(${added}px 0 0 0)` : `inset(0 0 ${added}px 0)` }, { clipPath: 'inset(0 0 0 0)' }], { duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+    // reveal the page itself; the arrows in the border stay put on top the whole time
+    const parts = [...body.children].filter((c) => !c.matches('.edge-nav, .col-nav'));
+    let off = 0;
+    const total = parts.reduce((t, c) => t + c.offsetHeight, 0);
+    for (const c of parts) {
+      const h = c.offsetHeight;
+      // how much of the new strip falls in this part
+      const cut = side === 'top' ? Math.max(0, Math.min(h, added - off)) : Math.max(0, Math.min(h, off + h - (total - added)));
+      off += h;
+      if (cut > 0) c.animate([{ clipPath: side === 'top' ? `inset(${cut}px 0 0 0)` : `inset(0 0 ${cut}px 0)` }, { clipPath: 'inset(0 0 0 0)' }], { duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+    }
   }
 }
 // Open a cropped page out to the whole page ('all'), or crop it to the hits again ('crop'), keeping the
