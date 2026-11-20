@@ -31,7 +31,15 @@ const now = () => Date.now();
 
 export function initBoards(api) {
   const { esc, el, I, toast, recordCustom } = api;
-  const B = { boards: [], items: [], loaded: null, at: null, q: '', type: 'all', doc: '', sort: 'new', urls: new Map() };
+  const LAYOUT = 'instant-search:boards-layout';
+  const B = { boards: [], items: [], loaded: null, at: null, q: '', type: 'all', doc: '', sort: 'new', urls: new Map(), layout: (() => { try { return localStorage.getItem(LAYOUT) || 'cards'; } catch { return 'cards'; } })() };
+  const LAYOUTS = [
+    ['cards', 'Cards', '<svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="9" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="5.5" rx="1.5"/><rect x="13.5" y="12" width="7" height="8.5" rx="1.5"/><rect x="3.5" y="15.5" width="7" height="5" rx="1.5"/></svg>'],
+    ['full', 'Full posts', '<svg viewBox="0 0 24 24"><rect x="4" y="3.5" width="16" height="11" rx="1.6"/><path d="M4 18h16M4 21h10"/></svg>'],
+    ['list', 'List', '<svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="5" height="5" rx="1.2"/><rect x="3.5" y="14.5" width="5" height="5" rx="1.2"/><path d="M11.5 6h9M11.5 8.5h6M11.5 16h9M11.5 18.5h6"/></svg>'],
+  ];
+  let viewer = null; // the open post, if any
+  let skipPop = false;
 
   function load() {
     if (!B.loaded) {
@@ -199,6 +207,7 @@ export function initBoards(api) {
         <label class="bv-search">${api.searchIcon}<input type="search" placeholder="Search saved results and notes" autocomplete="off" enterkeyhint="search"><button class="icon-btn sm" data-clear aria-label="Clear" hidden>${I.x}</button></label>
         <div class="bv-filters">
           <div class="seg small bv-type">${[['all', 'All'], ['page', 'Pages'], ['note', 'Notes'], ['pinned', 'Pinned']].map(([k, l]) => `<button data-type="${k}">${l}</button>`).join('')}</div>
+          <div class="seg small bv-layout" role="group" aria-label="Layout">${LAYOUTS.map(([k, l, ic]) => `<button data-layout="${k}" title="${l}" aria-label="${l}">${ic}</button>`).join('')}</div>
           <select class="bv-doc" aria-label="Filter by document"></select>
           <select class="bv-sort" aria-label="Sort">
             <option value="new">Newest first</option><option value="old">Oldest first</option><option value="edited">Recently edited</option>
@@ -215,7 +224,11 @@ export function initBoards(api) {
     view.querySelector('.bv-doc').addEventListener('change', (e) => { B.doc = e.target.value; renderBody(); });
     view.querySelector('.bv-sort').addEventListener('change', (e) => { B.sort = e.target.value; renderBody(); });
     view.addEventListener('click', onClick);
-    addEventListener('popstate', () => { if (!view.hidden) close(true); });
+    addEventListener('popstate', () => {
+      if (skipPop) { skipPop = false; return; }
+      if (viewer) { viewer.close(); return; } // Back closes the post first, then the boards
+      if (!view.hidden) close(true);
+    });
     return view;
   }
 
@@ -238,6 +251,7 @@ export function initBoards(api) {
     if (!fromPop && history.state?.boards) history.back();
   }
   const isOpen = () => !!view && !view.hidden;
+  const postOpen = () => !!viewer;
 
   function render() {
     if (!view || view.hidden) return;
@@ -246,6 +260,7 @@ export function initBoards(api) {
     view.querySelector('[data-bmenu]').hidden = !B.at;
     view.querySelector('[data-back]').hidden = !B.at;
     view.querySelectorAll('.bv-type button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.type === B.type)));
+    view.querySelectorAll('.bv-layout button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.layout === B.layout)));
     view.querySelector('.bv-sort').value = B.sort;
     renderBody();
   }
@@ -280,16 +295,17 @@ export function initBoards(api) {
   const when = (t) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   function itemCard(it, showWhere) {
     const title = it.title || (it.kind === 'note' ? 'Note' : `${it.docName || 'Page'}`);
-    const meta = it.kind === 'page' ? `${it.docName ? `${esc(it.docName)} · ` : ''}p. ${(it.n ?? 0) + 1}` : `Note · ${when(it.updated)}`;
+    // the document's name shows once: as the title when there's no title of your own, or under it
+    const meta = it.kind === 'page' ? `${it.title && it.docName ? `${esc(it.docName)} · ` : ''}Page ${(it.n ?? 0) + 1}` : `Note · ${when(it.updated)}`;
     const body = it.image
       ? `<img src="${imgUrl(it)}" alt="" loading="lazy" width="${it.w || ''}" height="${it.h || ''}">`
       : it.kind === 'note'
-      ? `<div class="bv-note">${esc(it.note || '').slice(0, 600) || '<span class="muted">Empty note</span>'}</div>`
-      : `<div class="bv-text">${esc((it.text || '').slice(0, 500))}</div>`;
+      ? `<div class="bv-note">${(B.layout === 'full' ? esc(it.note || '') : esc(it.note || '').slice(0, 600)) || '<span class="muted">Empty note</span>'}</div>`
+      : `<div class="bv-text">${esc(B.layout === 'full' ? it.text || '' : (it.text || '').slice(0, 500))}</div>`;
     return `<article class="bv-card${it.pinned ? ' pinned' : ''}" data-item="${it.id}">
       <div class="bv-media">${body}</div>
       <div class="bv-cap"><b>${esc(title)}</b><small>${meta}${showWhere && it.boardId !== B.at ? ` · <i>${esc(pathName(it.boardId))}</i>` : ''}</small>
-      ${it.kind === 'page' && it.note ? `<p>${esc(it.note.slice(0, 160))}</p>` : ''}</div>
+      ${it.kind === 'page' && it.note ? `<p>${esc(B.layout === 'full' ? it.note : it.note.slice(0, 160))}</p>` : ''}</div>
       ${it.pinned ? `<span class="bv-pin" title="Pinned">${api.pinIcon}</span>` : ''}
       <button class="bv-more" data-imenu="${it.id}" aria-label="Options">${I.more}</button>
     </article>`;
@@ -329,6 +345,7 @@ export function initBoards(api) {
         : `<div class="bv-empty">${I.board}<b>${B.at ? 'This board is empty' : 'Save results to boards'}</b><span>${B.at ? 'Tap a result page and choose <b>Add to board</b>, or add a note or a board inside this one.' : 'Tap any result page and choose <b>Add to board</b>. Saved results keep the crop they had — and boards can hold boards.'}</span></div>`;
     }
     body.innerHTML = html;
+    body.className = `bv-body l-${B.layout}`;
   }
 
   async function onClick(e) {
@@ -338,6 +355,8 @@ export function initBoards(api) {
     const go = t.closest('[data-go]');
     if (go) { B.at = go.dataset.go || null; return render(); }
     if (t.closest('[data-clear]')) { const i = view.querySelector('.bv-search input'); i.value = ''; B.q = ''; t.closest('[data-clear]').hidden = true; i.focus(); return renderBody(); }
+    const lay = t.closest('[data-layout]');
+    if (lay) { B.layout = lay.dataset.layout; try { localStorage.setItem(LAYOUT, B.layout); } catch {} view.querySelector('.bv-body').scrollTop = 0; return render(); }
     const type = t.closest('[data-type]');
     if (type) { B.type = type.dataset.type; return render(); }
     if (t.closest('[data-newboard]')) { const name = await ask(B.at ? `New board in “${board(B.at).name}”` : 'New board'); if (name) await createBoard(name, B.at); return; }
@@ -385,52 +404,122 @@ export function initBoards(api) {
     ]);
   }
 
-  // The item sheet: big view, editable title and note, and everything you can do with it.
+  // A post, full screen: the saved page at full width, its title and note, and a row of actions along
+  // the bottom that never sits over the content. Title and page are plain text until you tap them.
   function openItem(it, focusNote = false) {
     if (!it) return;
+    if (viewer) viewer.close();
+    const order = [...view.querySelectorAll('.bv-body [data-item]')].map((n) => n.dataset.item).filter((id, i, a) => a.indexOf(id) === i);
     const d = el('dialog', 'bv-item');
-    const hasDoc = it.kind === 'page' && api.hasDoc(it.docId);
-    d.innerHTML = `<div class="bi">
-      <header><input class="bi-title" value="${esc(it.title)}" placeholder="${it.kind === 'note' ? 'Note title' : esc(it.docName ? `${it.docName} · p. ${(it.n ?? 0) + 1}` : 'Title')}" maxlength="140"><button class="icon-btn sm" data-x aria-label="Close">${I.x}</button></header>
-      ${it.image ? `<div class="bi-img"><img src="${imgUrl(it)}" alt=""></div>` : it.text ? `<div class="bi-text">${esc(it.text)}</div>` : ''}
-      <textarea class="bi-note" placeholder="${it.kind === 'note' ? 'Write anything…' : 'Add a note…'}" rows="${it.kind === 'note' ? 8 : 3}">${esc(it.note || '')}</textarea>
-      <p class="bi-meta">${it.kind === 'page' ? `${esc(it.docName || '')} · page ${(it.n ?? 0) + 1}${it.q ? ` · searched “${esc(it.q)}”` : ''} · ` : ''}in ${esc(pathName(it.boardId) || 'Boards')} · saved ${when(it.created)}</p>
-      <div class="bi-acts">
-        <button class="pk-tog" data-a="pin" aria-pressed="${!!it.pinned}">${api.pinIcon}${it.pinned ? 'Pinned' : 'Pin'}</button>
-        ${hasDoc ? `<button class="pk-tog" data-a="open">${I.book}Go to page</button>` : ''}
-        ${it.q && hasDoc ? `<button class="pk-tog" data-a="search">${api.searchIcon}Search again</button>` : ''}
-        <button class="pk-tog" data-a="move">${I.out}Move</button>
-        ${it.text || it.note ? `<button class="pk-tog" data-a="copy">${I.copy}Copy text</button>` : ''}
-        ${it.image ? `<button class="pk-tog" data-a="save">${I.save}Save image</button>` : ''}
-        <button class="pk-tog danger" data-a="del">${I.trash}Remove</button>
-      </div>
-    </div>`;
-    document.body.append(d);
-    const title = d.querySelector('.bi-title');
-    const note = d.querySelector('.bi-note');
-    let dirty = false;
-    const flush = async () => { if (!dirty) return; dirty = false; it.title = title.value.trim(); it.note = note.value; await saveItem(it); render(); };
-    let tmr;
+    viewer = d;
+    let cur = it, dirty = false, tmr;
+    const flush = async () => { if (!dirty) return; dirty = false; await saveItem(cur); render(); };
     const later = () => { dirty = true; clearTimeout(tmr); tmr = setTimeout(flush, 500); };
-    title.addEventListener('input', later);
-    note.addEventListener('input', later);
-    d.addEventListener('close', () => { clearTimeout(tmr); flush(); d.remove(); });
+    const autosize = (ta) => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 2 + 'px'; };
+    const defTitle = (x) => (x.kind === 'note' ? 'Note' : x.docName || 'Saved page');
+
+    const fill = (x, focus) => {
+      cur = x;
+      const hasDoc = x.kind === 'page' && api.hasDoc(x.docId);
+      const at = order.indexOf(x.id);
+      const acts = [
+        ['pin', api.pinIcon, x.pinned ? 'Pinned' : 'Pin', x.pinned],
+        hasDoc && ['open', I.book, 'Open'],
+        x.q && hasDoc && ['search', api.searchIcon, 'Search'],
+        ['move', I.out, 'Move'],
+        (x.text || x.note) && ['copy', I.copy, 'Copy'],
+        x.image && ['save', I.save, 'Save'],
+        ['del', I.trash, 'Remove'],
+      ].filter(Boolean);
+      d.innerHTML = `
+        <header class="bi-top">
+          <button class="icon-btn" data-x aria-label="Back">${I.arrowLeft}</button>
+          <div class="bi-head">
+            <button class="bi-title-t${x.title ? '' : ' def'}" data-edit="title" title="Tap to rename">${esc(x.title || defTitle(x))}</button>
+            ${x.kind === 'page' ? `<div class="bi-sub">${x.title ? `<span>${esc(x.docName || 'Document')}</span> · ` : ''}<button data-edit="page" title="Tap to change the page">Page ${(x.n ?? 0) + 1}</button></div>` : `<div class="bi-sub"><span>Note · ${when(x.updated)}</span></div>`}
+          </div>
+          ${order.length > 1 && at >= 0 ? `<div class="bi-step"><button class="icon-btn sm" data-step="-1" aria-label="Previous post" ${at <= 0 ? 'disabled' : ''}>${I.arrowLeft}</button><small>${at + 1}/${order.length}</small><button class="icon-btn sm nx" data-step="1" aria-label="Next post" ${at >= order.length - 1 ? 'disabled' : ''}>${I.arrowLeft}</button></div>` : ''}
+        </header>
+        <div class="bi-scroll">
+          ${x.image ? `<div class="bi-img"><img src="${imgUrl(x)}" alt=""></div>` : x.text ? `<div class="bi-text">${esc(x.text)}</div>` : ''}
+          <textarea class="bi-note" placeholder="${x.kind === 'note' ? 'Write anything…' : 'Add a note…'}" rows="${x.kind === 'note' ? 8 : 2}">${esc(x.note || '')}</textarea>
+          <p class="bi-meta">${x.q ? `Searched “${esc(x.q)}” · ` : ''}in ${esc(pathName(x.boardId) || 'Boards')} · saved ${when(x.created)}</p>
+        </div>
+        <nav class="bi-bar" style="--n:${acts.length}">${acts.map(([a, ic, l, on]) => `<button data-a="${a}"${a === 'del' ? ' class="danger"' : ''}${on != null ? ` aria-pressed="${!!on}"` : ''}>${ic}<span>${l}</span></button>`).join('')}</nav>`;
+      const note = d.querySelector('.bi-note');
+      note.addEventListener('input', () => { cur.note = note.value; autosize(note); later(); });
+      requestAnimationFrame(() => autosize(note));
+      d.querySelector('.bi-scroll').scrollTop = 0;
+      if (focus) setTimeout(() => note.focus(), 60);
+    };
+
+    // tap the title or the page number to edit it; Enter or tapping away puts it back to plain text
+    const edit = (btn) => {
+      const what = btn.dataset.edit;
+      const inp = document.createElement('input');
+      inp.className = `bi-edit ${what}`;
+      if (what === 'title') { inp.value = cur.title || ''; inp.placeholder = defTitle(cur); inp.maxLength = 140; }
+      else { inp.type = 'number'; inp.inputMode = 'numeric'; inp.min = '1'; inp.value = String((cur.n ?? 0) + 1); }
+      btn.replaceWith(inp);
+      inp.focus();
+      inp.select?.();
+      let done = false;
+      const finish = async (keep) => {
+        if (done) return;
+        done = true;
+        if (keep) {
+          if (what === 'title') cur.title = inp.value.trim();
+          else { const v = parseInt(inp.value, 10); if (v > 0) cur.n = v - 1; }
+          dirty = true;
+          await flush();
+        }
+        fill(cur);
+      };
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); } });
+      inp.addEventListener('blur', () => finish(true));
+    };
+
+    d.addEventListener('cancel', (e) => { if (d.querySelector('.bi-edit')) e.preventDefault(); });
+    d.addEventListener('close', () => {
+      clearTimeout(tmr);
+      flush();
+      d.remove();
+      if (viewer === d) viewer = null;
+      if (history.state?.boardsItem) { skipPop = true; history.back(); }
+    });
     d.addEventListener('click', async (e) => {
-      if (e.target === d || e.target.closest('[data-x]')) return d.close();
+      if (e.target.closest('[data-x]')) return d.close();
+      const ed = e.target.closest('[data-edit]');
+      if (ed) return edit(ed);
+      const st = e.target.closest('[data-step]');
+      if (st) { await flush(); const next = B.items.find((y) => y.id === order[order.indexOf(cur.id) + Number(st.dataset.step)]); if (next) fill(next); return; }
       const a = e.target.closest('[data-a]')?.dataset.a;
       if (!a) return;
-      if (a === 'pin') { it.pinned = !it.pinned; await saveItem(it); e.target.closest('[data-a]').outerHTML = `<button class="pk-tog" data-a="pin" aria-pressed="${it.pinned}">${api.pinIcon}${it.pinned ? 'Pinned' : 'Pin'}</button>`; render(); }
-      else if (a === 'open') { d.close(); close(); api.openDoc(it.docId, it.n); }
-      else if (a === 'search') { d.close(); close(); api.search(it.q, it.mode); }
-      else if (a === 'move') { const id = await pick('Move to', { action: 'Move here', start: it.boardId }); if (id && id !== it.boardId) { await moveTo([{ kind: 'item', it }], id); d.close(); } }
-      else if (a === 'copy') api.copy([it.title, it.text, it.note].filter(Boolean).join('\n\n'));
-      else if (a === 'save') api.saveBlob(it.image, `${(it.title || it.docName || 'saved').replace(/[\\/:*?"<>|]+/g, ' ').slice(0, 80)}${it.n != null ? ` p${it.n + 1}` : ''}.jpg`);
-      else if (a === 'del') { d.close(); removeItems([it]); }
+      const x = cur;
+      if (a === 'pin') { x.pinned = !x.pinned; await saveItem(x); fill(x); render(); }
+      else if (a === 'open') { d.close(); close(); api.openDoc(x.docId, x.n); }
+      else if (a === 'search') { d.close(); close(); api.search(x.q, x.mode); }
+      else if (a === 'move') { const id = await pick('Move to', { action: 'Move here', start: x.boardId }); if (id && id !== x.boardId) { await moveTo([{ kind: 'item', it: x }], id); fill(x); } }
+      else if (a === 'copy') api.copy([x.title, x.text, x.note].filter(Boolean).join('\n\n'));
+      else if (a === 'save') api.saveBlob(x.image, `${(x.title || x.docName || 'saved').replace(/[\\/:*?"<>|]+/g, ' ').slice(0, 80)}${x.n != null ? ` p${x.n + 1}` : ''}.jpg`);
+      else if (a === 'del') { d.close(); removeItems([x]); }
     });
+    // swipe sideways across the post for the previous or next one
+    let sx = null;
+    d.addEventListener('pointerdown', (e) => { sx = e.target.closest('.bi-scroll') && !e.target.closest('textarea, input') ? { x: e.clientX, y: e.clientY, t: performance.now() } : null; });
+    d.addEventListener('pointerup', (e) => {
+      if (!sx) return;
+      const dx = e.clientX - sx.x, dy = e.clientY - sx.y;
+      if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 2 && performance.now() - sx.t < 600) d.querySelector(`[data-step="${dx < 0 ? 1 : -1}"]:not([disabled])`)?.click();
+      sx = null;
+    });
+    fill(it, focusNote);
+    document.body.append(d);
     d.showModal();
-    if (focusNote) setTimeout(() => note.focus(), 40);
+    try { history.pushState({ boards: true, boardsItem: true }, ''); } catch {}
+    d.animate([{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }], { duration: 240, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
   }
 
   load();
-  return { open, close, isOpen, menuItems, pick, addTo, load };
+  return { open, close, isOpen, postOpen, menuItems, pick, addTo, load };
 }
