@@ -1144,9 +1144,9 @@ async function goVisit(home, n, dir, rec = true, prepped = null) {
     for (const k of ['position', 'zIndex', 'pointerEvents', 'top', 'left', 'width', 'margin', 'transform', 'opacity']) shown.style[k] = '';
     shown._busy = false;
     markStuck();
-    toTop();
+    if (rec) toTop();
   };
-  if (!ghost) { shown._busy = false; if (!reduceMotion()) next.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260 }); markStuck(); toTop(); return; }
+  if (!ghost) { shown._busy = false; if (!reduceMotion()) next.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260 }); markStuck(); if (rec) toTop(); return; }
   const from = shown._drag || 0; // where the finger left it
   const ease = 'cubic-bezier(0.25, 0.9, 0.3, 1)';
   if (next._peekX != null) {
@@ -3793,7 +3793,56 @@ function snapshot(extra = {}) {
     ...extra,
   };
 }
-async function restoreSnap(s) {
+// Undo and redo leave you where you are: whatever hit (or page) you're looking at stays at the same spot on
+// screen while things open or close around it, even as pages finish drawing.
+function grabAnchor() {
+  const a = currentArt();
+  if (!a) return null;
+  const { top, bottom } = readingArea();
+  const mid = (top + bottom) / 2;
+  let best = null, bd = Infinity;
+  for (const m of a.querySelectorAll('[data-h]')) {
+    if (m.closest('.clone')) continue;
+    const r = m.getBoundingClientRect();
+    if (!r.height) continue;
+    const d = Math.abs((r.top + r.bottom) / 2 - mid);
+    if (d < bd) { bd = d; best = m; }
+  }
+  const home = a._home || a;
+  return { doc: home.dataset.doc, n: Number(home.dataset.n), h: best?.dataset.h ?? null, y: best?.getBoundingClientRect().top, ay: a.getBoundingClientRect().top };
+}
+function findAnchor(an) {
+  let art = active.pageEls?.get(pkey(an.doc, an.n));
+  if (!art) return null;
+  if (art.hidden && art._visit) art = art._visit;
+  if (art.hidden || !art.isConnected) return null;
+  if (an.h != null) {
+    for (const m of art.querySelectorAll(`[data-h="${an.h}"]`)) if (!m.closest('.clone') && m.getBoundingClientRect().height) return [m, an.y];
+  }
+  return [art, an.ay];
+}
+let anchorHold = 0;
+function holdAnchor(an, ms = 900) {
+  const id = ++anchorHold;
+  const t0 = performance.now();
+  const stop = () => { anchorHold++; };
+  // your own scrolling always wins
+  addEventListener('wheel', stop, { once: true, passive: true });
+  addEventListener('touchstart', stop, { once: true, passive: true });
+  const step = () => {
+    if (id !== anchorHold) return;
+    const f = findAnchor(an);
+    if (f) {
+      const d = f[0].getBoundingClientRect().top - f[1];
+      if (Math.abs(d) > 0.5) window.scrollBy({ top: d, behavior: 'instant' });
+    }
+    if (performance.now() - t0 < ms) requestAnimationFrame(step);
+    else { removeEventListener('wheel', stop); removeEventListener('touchstart', stop); }
+  };
+  step();
+  return !!findAnchor(an);
+}
+async function restoreSnap(s, an = null) {
   H.busy = true;
   try {
     const zoomChanged = prefs.zoom !== s.p.zoom;
@@ -3816,9 +3865,12 @@ async function restoreSnap(s) {
       else { if (trimChanged) renderView(reader); else refreshInPlace(reader); }
     } else if (active === results) {
       renderView(results);
-      const art = s.at?.doc != null ? results.pageEls.get(pkey(s.at.doc, s.at.n)) : null;
-      if (art) window.scrollBy({ top: art.getBoundingClientRect().top - s.at.off, behavior: 'instant' });
-      else if (s.at) window.scrollTo({ top: s.at.y, behavior: 'instant' });
+      // stay put; only if what you were looking at is gone (another search) go back to where that one was
+      if (!(an && holdAnchor(an))) {
+        const art = s.at?.doc != null ? results.pageEls.get(pkey(s.at.doc, s.at.n)) : null;
+        if (art) window.scrollBy({ top: art.getBoundingClientRect().top - s.at.off, behavior: 'instant' });
+        else if (s.at) window.scrollTo({ top: s.at.y, behavior: 'instant' });
+      }
     }
     if (active === reader && reader.dirty) results.dirty = true;
     updateChrome();
@@ -3852,8 +3904,9 @@ async function undo() {
   if (!e) { toast('Nothing to undo', { ms: 1200 }); return; }
   H.group = null;
   closeMenu();
-  if (e.undo) { H.busy = true; try { await e.undo(); } finally { H.busy = false; } }
-  else { e.after = snapshot(); await restoreSnap(e.before); }
+  const an = grabAnchor();
+  if (e.undo) { H.busy = true; try { await e.undo(); } finally { H.busy = false; } if (an) holdAnchor(an); }
+  else { e.after = snapshot(); await restoreSnap(e.before, an); }
   H.redo.push(e);
   showUndo('redo', `Undone: ${e.label}`);
 }
@@ -3862,8 +3915,9 @@ async function redo() {
   if (!e) { toast('Nothing to redo', { ms: 1200 }); return; }
   H.group = null;
   closeMenu();
-  if (e.redo) { H.busy = true; try { await e.redo(); } finally { H.busy = false; } }
-  else await restoreSnap(e.after);
+  const an = grabAnchor();
+  if (e.redo) { H.busy = true; try { await e.redo(); } finally { H.busy = false; } if (an) holdAnchor(an); }
+  else await restoreSnap(e.after, an);
   H.undo.push(e);
   showUndo('undo', `Redone: ${e.label}`);
 }
