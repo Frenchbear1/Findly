@@ -363,7 +363,12 @@ function headHtml(v, doc, n, ctx, flat = false) {
   const open = v.kind === 'results'
     ? `<button class="chip-btn" data-act="open" title="Read the whole document from this page">${I.book}Open</button>`
     : '';
-  return `<span class="pno">Page ${n + 1}</span>${badge}<span class="grow"></span>${toggle}${open}`;
+  let rank = '';
+  if (flat && !ctx) {
+    const i = v.list.findIndex((r) => r.flat && r.doc.id === doc.id && r.pages[0].n === n);
+    if (i >= 0) rank = `<span class="rank" title="Ranked ${fmt(i + 1)} by hits">${fmt(i + 1)}</span>`;
+  }
+  return `${rank}<span class="pno">Page ${n + 1}</span>${badge}<span class="grow"></span>${toggle}${open}`;
 }
 
 function pageEl(v, doc, n, R) {
@@ -556,7 +561,7 @@ function cropBand(art, content) {
   if (a <= 0 && b >= 1) return null;
   return [Math.max(0, a), Math.min(1, b)];
 }
-const cropEdge = (side) => `<button class="crop-more ${side}" data-act="crop-${side}" title="${side === 'top' ? 'Show the top of this page' : 'Show the rest of this page'}">${side === 'top' ? I.up : I.down}<span>${side === 'top' ? 'Top of page' : 'Rest of page'}</span></button>`;
+const cropEdge = (side) => `<button class="crop-more ${side}" data-act="crop-${side}" title="${side === 'top' ? 'Show the top of this page' : 'Show the rest of this page'}"><span>${side === 'top' ? I.up : I.down}${side === 'top' ? 'Top' : 'More'}</span></button>`;
 function applyCrop(art) {
   const body = art.lastElementChild;
   let clip = body.querySelector(':scope > .crop-clip');
@@ -663,15 +668,19 @@ function gapEl(doc, a, b, count, R) {
   g._R = R;
   g.dataset.a = a;
   g.dataset.b = b;
-  const label = a < 0 ? `${plural(hidden, 'page')} before` : b >= count ? `${plural(hidden, 'more page')}` : R?.flat ? plural(hidden, 'page') : `${plural(hidden, 'page')} without hits`;
+  // one row, no labels: the buttons say what's hidden
+  const unfold = '<svg viewBox="0 0 24 24"><path d="M8 7l4-4 4 4M8 17l4 4 4-4"/></svg>';
   let html = '';
   if (hidden === 1) {
-    html = `<span class="gap-label">${label}</span><button class="gap-btn" data-act="all">Show page ${a + 2}</button>`;
+    html = `<button class="gap-btn" data-act="all" title="Show page ${a + 2}">${unfold}Page ${a + 2}</button>`;
+  } else if (R?.flat) {
+    // a ranked page: just step to the page above or below it
+    html = a < 0 ? `<button class="gap-btn" data-act="before" title="Show the page right before">${I.up}Page ${b}</button>`
+      : `<button class="gap-btn" data-act="after" title="Show the page right after">${I.down}Page ${a + 2}</button>`;
   } else {
     if (a >= 0) html += `<button class="gap-btn" data-act="after" title="Show the page right after">${I.down}Page ${a + 2}</button>`;
-    html += `<span class="gap-label">${label}</span>`;
+    html += `<button class="gap-btn subtle" data-act="all" title="Show all ${fmt(hidden)} pages${a < 0 ? ' before' : b >= count ? ' after' : ' in between'}">${unfold}${plural(hidden, 'page')}</button>`;
     if (b < count) html += `<button class="gap-btn" data-act="before" title="Show the page right before">${I.up}Page ${b}</button>`;
-    html += `<button class="gap-btn subtle" data-act="all">Show all ${fmt(hidden)}</button>`;
   }
   g.innerHTML = `<div class="gap-inner">${html}</div>`;
   return g;
@@ -709,18 +718,30 @@ function onGap(g, act) {
   g.replaceWith(...nodes);
   const pages = nodes.filter((x) => x.classList.contains('page'));
   (act === 'before' ? pages[pages.length - 1] : pages[0])?.classList.add('fresh');
+  syncRankRows(v);
+}
+
+// Ranked pages from the same document, one after another: the "page below" of one and the "page above"
+// of the next share a single row.
+function syncRankRows(v) {
+  for (const sec of v.root.querySelectorAll('.doc-sec.ranked')) {
+    const prev = sec.previousElementSibling;
+    const a = prev?.querySelector(':scope > .doc-pages')?.lastElementChild;
+    const b = sec.querySelector(':scope > .doc-pages')?.firstElementChild;
+    sec.classList.toggle('merge-gap', sec.classList.contains('same-doc') && !!a?.classList.contains('gap') && !!b?.classList.contains('gap'));
+  }
 }
 
 // ---------- rendering views ----------
 function docHeadHtml(v, doc, R) {
   const count = S.texts.get(doc.id)?.length || 0;
   if (R?.flat) {
-    const rank = v.list.indexOf(R) + 1;
-    return `<span class="rank">${fmt(rank)}</span><span class="ftype ${doc.kind}">${KIND_LABEL[doc.kind] || 'TXT'}</span><h2 title="${esc(doc.name)}">${esc(doc.name)}</h2><span class="dstat"><b>${plural(R.hits, 'hit')}</b> on page ${fmt(R.pages[0].n + 1)} of ${fmt(count)}</span><span class="grow"></span>`;
+    const f = folderOf(doc);
+    return `<span class="ftype ${doc.kind}">${KIND_LABEL[doc.kind] || 'TXT'}</span><h2 title="${esc(doc.name)}">${esc(doc.name)}</h2>${f ? `<span class="dfolder" title="Folder">${I.folder}${esc(f.name)}</span>` : ''}<span class="grow"></span>`;
   }
   const stat = R && webMode(doc, R) ? `<b>${plural(R.hits, 'hit')}</b>`
     : R
-    ? `<b>${plural(R.hits, 'hit')}</b> on ${plural(R.pages.length, 'page')} of ${fmt(count)}`
+    ? `<b>${plural(R.hits, 'hit')}</b> on ${plural(R.pages.length, 'page')}<span class="dof"> of ${fmt(count)}</span>`
     : S.matcher ? `No hits · ${plural(count, 'page')}` : plural(count, 'page');
   const btn = v.kind === 'results'
     ? `<button class="chip-btn" data-act="read" title="Read the whole document">${I.book}Read whole</button>`
@@ -734,7 +755,11 @@ function sectionEl(v, doc, R) {
   const sec = el('section', 'doc-sec');
   sec.dataset.doc = doc.id;
   sec.dataset.key = groupKey(R, doc);
-  if (R?.flat) sec.classList.add('ranked');
+  if (R?.flat) {
+    sec.classList.add('ranked');
+    const prev = v.list[v.list.indexOf(R) - 1];
+    if (prev?.doc.id === doc.id) sec.classList.add('same-doc'); // same document as the page above: no repeat of its name
+  }
   sec.append(el('div', 'doc-head', docHeadHtml(v, doc, R)));
   const pages = el('div', 'doc-pages');
   const count = S.texts.get(doc.id)?.length || 0;
@@ -806,6 +831,7 @@ function renderView(v, { keepScroll = true } = {}) {
   const frag = document.createDocumentFragment();
   for (const R of v.list) frag.append(sectionEl(v, R.doc, R));
   v.root.append(frag);
+  syncRankRows(v);
   if (!keepScroll) window.scrollTo({ top: 0, behavior: 'instant' });
   done();
 }
