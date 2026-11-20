@@ -5,6 +5,8 @@ import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION } from './pdf.js';
 import { renderHtmlPage, forgetHtml, renderedText } from './htmlview.js';
 import { remoteFetch, remoteInfo, remoteChanged, download, documentLinks, looksLikeDocument, fileNameFor, editionKey, linkKey, linkSimilarity, SAME_DOC_SCORE, helper, NeedsHelper } from './remote.js';
 import { comboFromEvent, comboLabel, worksWhileTyping, isMac } from './keys.js';
+import { applyReadingTheme, openThemeSheet, THEME_DEFAULTS } from './themes.js';
+import { initBoards } from './boards.js';
 
 // ---------- small helpers ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -68,12 +70,19 @@ const I = {
   more: '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg>',
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   check: '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  pin: '<svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6.5 3.5 3.5h-11L10 9.5z"/><path d="M12 13v8"/></svg>',
+  search: '<svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.6-4.6"/></svg>',
   pencil: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
   trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
   out: '<svg viewBox="0 0 24 24"><path d="M15 12H4M8 8l-4 4 4 4M14 5h5a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-5"/></svg>',
   upload: '<svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>',
   crop: '<svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"/></svg>',
   expand: '<svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
+  undo: '<svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>',
+  redo: '<svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>',
+  columns: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M6.5 8.5h3M6.5 12h3M14.5 8.5h3M14.5 12h3"/></svg>',
+  board: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="9" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="1.6"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="1.6"/><rect x="3" y="15" width="7.5" height="6" rx="1.6"/></svg>',
+  palette: '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0 0 18c1.1 0 1.6-.9 1.2-1.8l-.4-.9c-.5-1.1.3-2.3 1.5-2.3H17a4 4 0 0 0 4-4c0-5-4-9-9-9z"/><circle cx="7.5" cy="11" r="1.2"/><circle cx="10.5" cy="7" r="1.2"/><circle cx="15.5" cy="7.5" r="1.2"/></svg>',
   save: '<svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
   copy: '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
   wide: '<svg viewBox="0 0 24 24"><path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4"/></svg>',
@@ -85,9 +94,11 @@ const I = {
 const PREF_KEY = 'instant-search:prefs';
 const PREFS_V = 2;
 const prefs = Object.assign(
-  { mode: 'all', matchCase: false, wholeWord: false, near: 8, sort: 'library', view: 'original', theme: 'auto', q: '', zoom: 'width', compact: false, sideHidden: false, keys: {}, v: PREFS_V, crop: true, cropLines: 3, trim: true },
+  { mode: 'all', matchCase: false, wholeWord: false, near: 8, sort: 'library', view: 'original', theme: 'auto', q: '', zoom: 'width', compact: false, sideHidden: false, keys: {}, v: PREFS_V, crop: true, cropLines: 3, trim: true, columns: false },
   (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch { return {}; } })()
 );
+// reading themes replace the old light/dark/auto switch
+for (const [k, v] of Object.entries(THEME_DEFAULTS)) if (!(k in prefs)) prefs[k] = k === 'rtheme' ? ({ light: 'daylight', dark: 'night' }[prefs.theme] || 'auto') : structuredClone(v);
 // v2: pages open as the original and fit the width by default; Regex is gone
 if ((prefs.v || 1) < 2) { prefs.view = 'original'; prefs.zoom = 'width'; prefs.v = PREFS_V; }
 if (!MODES[prefs.mode]) prefs.mode = 'all';
@@ -440,7 +451,7 @@ function fill(art) {
       try {
         const pdf = await getPdf(doc.id, () => store.file(doc.id));
         if (token !== art._token) return;
-        const r = await renderPdfPage(pdf, n, body, ranges, BASE_W * zoomValue(), { trim: !!prefs.trim });
+        const r = await renderPdfPage(pdf, n, body, ranges, BASE_W * zoomValue(), { trim: !!prefs.trim, columns: !!prefs.columns && v.kind === 'results' });
         if (token !== art._token) { r.cleanup(); return; }
         r.show();
         art._cleanup = r.cleanup;
@@ -558,9 +569,13 @@ function cropBand(art, content) {
 }
 function applyCrop(art) {
   const body = art.lastElementChild;
-  let clip = body.querySelector(':scope > .crop-clip');
-  const content = clip ? clip.querySelector('.pdf-frame, .page-text') : body.querySelector(':scope > .pdf-frame, :scope > .page-text');
+  const content = body.querySelector('.pdf-frame:not(.clone), .page-text');
   if (!content) return;
+  const plan = colPlan(art, content);
+  if (plan) { layoutPieces(art, body, content, plan); return; }
+  if (body.classList.contains('pieces')) unpiece(art, body, content);
+  art._regions = null;
+  let clip = body.querySelector(':scope > .crop-clip');
   const hits = cropWanted(art) ? cropBand(art, content) : null; // the band around the hits, or null = whole page
   // wide view also trims the blank top and bottom of a PDF page, wherever the page's top or bottom shows
   const ty = prefs.trim && content.dataset.ty ? content.dataset.ty.split(',').map(Number) : null;
@@ -601,21 +616,186 @@ function applyCrop(art) {
 // hits where they are on screen.
 function expandCrop(art, how) {
   const key = pkey(art.dataset.doc, Number(art.dataset.n));
+  record(how === 'crop' ? `Crop page ${Number(art.dataset.n) + 1}` : `Whole page ${Number(art.dataset.n) + 1}`);
+  const from = how === 'crop' ? null : visibleRegion(art);
   if (how === 'crop') cropOpen.delete(key);
   else cropOpen.set(key, { top: true, bottom: true });
-  const content = art.querySelector('.pdf-frame, .page-text');
+  const content = art.querySelector('.pdf-frame:not(.clone), .page-text');
   const before = content?.getBoundingClientRect().top;
   applyCrop(art);
+  if (from && content?.classList.contains('pdf-frame')) { zoomOutTo(art, from); return; }
   if (before == null) return;
   const after = content.getBoundingClientRect().top;
   if (after !== before) window.scrollBy({ top: after - before, behavior: 'instant' });
+  if (!reduceMotion()) art.lastElementChild.animate([{ opacity: 0.35, transform: 'scale(0.985)' }, { opacity: 1, transform: 'none' }], { duration: 300, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
+}
+
+// ---------- column view ----------
+// With columns on, a cropped hit page shows only the column(s) holding its hits — a, b, c… — each cut to the
+// lines around its hits and filling the width. "Show the whole page" zooms back out to the full page.
+const COL_NAMES = 'abcdefgh';
+const boxCenter = (b) => parseFloat(b.style.left) / 100 + parseFloat(b.style.width) / 200;
+function colPlan(art, content) {
+  if (!prefs.columns || !content.classList.contains('pdf-frame') || !cropWanted(art)) return null;
+  const open = cropOpen.get(pkey(art.dataset.doc, Number(art.dataset.n)));
+  if (open?.top && open?.bottom) return null;
+  const cols = content.dataset.cols ? JSON.parse(content.dataset.cols) : null;
+  if (!cols) return null;
+  const boxes = [...content.querySelectorAll('.box.m')];
+  if (!boxes.length) return null;
+  const colOf = (b) => cols.findIndex(([x0, x1]) => boxCenter(b) >= x0 && boxCenter(b) < x1);
+  if (boxes.some((b) => colOf(b) < 0)) return null; // a hit across the gutter (a heading, say): show the page as usual
+  const hs = boxes.map((b) => parseFloat(b.style.height) / 100).filter((h) => h > 0).sort((a, b) => a - b);
+  const line = (hs[hs.length >> 1] || 0.015) * 1.15;
+  const pad = line * (Number(prefs.cropLines) || 3);
+  const ty = prefs.trim && content.dataset.ty ? content.dataset.ty.split(',').map(Number) : [0, 1];
+  const pieces = [];
+  cols.forEach((span, i) => {
+    const mine = boxes.filter((b) => colOf(b) === i);
+    if (!mine.length) return;
+    let a = Math.min(...mine.map((b) => parseFloat(b.style.top) / 100)) - pad;
+    let z = Math.max(...mine.map((b) => (parseFloat(b.style.top) + parseFloat(b.style.height)) / 100)) + pad;
+    if (open?.top || a < ty[0] + line * 1.5) a = ty[0];
+    if (open?.bottom || z > ty[1] - line * 1.5) z = ty[1];
+    pieces.push({ col: i, span, band: [Math.max(0, a), Math.min(1, z)], cutA: a > ty[0] + 0.005, cutB: z < ty[1] - 0.005 });
+  });
+  return pieces.length ? { cols, pieces } : null;
+}
+function cloneFrame(frame) {
+  const c = frame.cloneNode(true);
+  c.classList.add('clone');
+  const src = frame.querySelector('canvas'), dst = c.querySelector('canvas');
+  if (src && dst) { dst.width = src.width; dst.height = src.height; dst.getContext('2d').drawImage(src, 0, 0); }
+  return c;
+}
+function frameSpan(frame, span) {
+  if (span) { frame.style.setProperty('--ts', (1 / (span[1] - span[0])).toFixed(4)); frame.style.setProperty('--tx0', span[0].toFixed(4)); }
+  else { frame.style.removeProperty('--ts'); frame.style.removeProperty('--tx0'); }
+}
+function unpiece(art, body, content) {
+  for (const b of content.querySelectorAll('.box.off')) {
+    b.classList.remove('off');
+    if (b.dataset.hOff != null) { b.dataset.h = b.dataset.hOff; delete b.dataset.hOff; }
+  }
+  frameSpan(content, content.dataset.tx ? content.dataset.tx.split(',').map(Number) : null);
+  if (body.querySelector(':scope > .piece')) body.replaceChildren(content);
+  body.classList.remove('pieces');
+  body._pieceSig = null;
+  art._regions = null;
+}
+function layoutPieces(art, body, content, plan) {
+  const sig = plan.pieces.map((p) => p.col).join(',');
+  if (body._pieceSig !== sig || !body.querySelector(':scope > .piece')) {
+    unpiece(art, body, content);
+    const frames = plan.pieces.map((_, k) => (k === 0 ? content : cloneFrame(content)));
+    body.replaceChildren();
+    plan.pieces.forEach((pc, k) => {
+      const frame = frames[k];
+      frameSpan(frame, pc.span);
+      // each hit lives in exactly one piece, so jumping to it lands in the right column
+      for (const b of frame.querySelectorAll('.box')) {
+        const c = boxCenter(b);
+        if (c >= pc.span[0] && c < pc.span[1]) continue;
+        if (k > 0) { b.remove(); continue; }
+        b.classList.add('off');
+        if (b.dataset.h != null) { b.dataset.hOff = b.dataset.h; delete b.dataset.h; }
+      }
+      const clip = el('div', 'crop-clip piece');
+      const inner = el('div', 'crop-inner');
+      inner.append(frame);
+      clip.append(inner);
+      if (plan.cols.length > 1) clip.append(el('span', 'col-tag', COL_NAMES[pc.col]));
+      body.append(clip);
+    });
+    body._pieceSig = sig;
+    art._cropRO?.disconnect();
+    let seen = 0;
+    art._cropRO = new ResizeObserver(() => {
+      const h = content.offsetHeight;
+      if (Math.abs(h - seen) > 0.5) { seen = h; applyCrop(art); }
+    });
+    art._cropRO.observe(content);
+  }
+  const so = content.querySelector('.pdf-page');
+  [...body.querySelectorAll(':scope > .piece')].forEach((clip, k) => {
+    const pc = plan.pieces[k];
+    const frame = clip.querySelector('.pdf-frame');
+    if (k > 0) {
+      // the copy's invisible text is sized for its own width
+      const sc = frame.querySelector('.pdf-page');
+      const sf = parseFloat(so?.style.getPropertyValue('--sf'));
+      if (sf && so.clientWidth && sc) sc.style.setProperty('--sf', ((sf * sc.clientWidth) / so.clientWidth).toFixed(5));
+    }
+    const H = frame.offsetHeight;
+    clip.style.height = Math.max(24, Math.round((pc.band[1] - pc.band[0]) * H)) + 'px';
+    clip.firstElementChild.style.marginTop = -Math.round(pc.band[0] * H) + 'px';
+    clip.classList.toggle('cut-a', pc.cutA);
+    clip.classList.toggle('cut-b', pc.cutB);
+  });
+  body.classList.add('cropped', 'pieces');
+  body.classList.remove('cut-top', 'cut-bottom');
+  art._band = null;
+  art._regions = plan.pieces.map((p) => ({ x: p.span, y: p.band }));
+}
+// What part of the page is on screen right now (for the zoom-out): its rect, and where it sits on the page.
+function visibleRegion(art) {
+  const body = art.lastElementChild;
+  const pieces = [...body.querySelectorAll(':scope > .piece')];
+  const clip = pieces.find((p) => p.querySelector('.cur')) || pieces[0] || body.querySelector(':scope > .crop-clip');
+  const frame = clip?.querySelector('.pdf-frame');
+  if (!frame) return null;
+  const ts = parseFloat(frame.style.getPropertyValue('--ts')) || 1;
+  const tx0 = parseFloat(frame.style.getPropertyValue('--tx0')) || 0;
+  const k = pieces.indexOf(clip);
+  const y = k >= 0 ? art._regions?.[k]?.y : art._band;
+  if (!y) return null;
+  return { rect: clip.getBoundingClientRect(), x: [tx0, tx0 + 1 / ts], y };
+}
+// The page zooms out from the part you were reading to the whole page: the rest of the page (other
+// columns included) comes in around it, while that part stays where your eyes are.
+function zoomOutTo(art, from) {
+  const body = art.lastElementChild;
+  const sheet = body.querySelector('.pdf-frame:not(.clone) .pdf-page');
+  if (!sheet) return;
+  let S = sheet.getBoundingClientRect();
+  const dy = S.top + from.y[0] * S.height - from.rect.top;
+  if (Math.abs(dy) > 1) { window.scrollBy({ top: dy, behavior: 'instant' }); S = sheet.getBoundingClientRect(); }
+  if (reduceMotion()) return;
+  const R = { left: S.left + from.x[0] * S.width, top: S.top + from.y[0] * S.height, width: (from.x[1] - from.x[0]) * S.width, height: (from.y[1] - from.y[0]) * S.height };
+  const E = body.getBoundingClientRect();
+  const k = from.rect.width / Math.max(1, R.width);
+  const tx = from.rect.left - E.left - (R.left - E.left) * k;
+  const ty = from.rect.top - E.top - (R.top - E.top) * k;
+  const px = (v) => `${Math.max(0, v).toFixed(1)}px`;
+  const clipFrom = `inset(${px(R.top - E.top)} ${px(E.right - R.left - R.width)} ${px(E.bottom - R.top - R.height)} ${px(R.left - E.left)} round 14px)`;
+  art.classList.add('zooming');
+  body.style.transformOrigin = '0 0';
+  const anim = body.animate(
+    [{ transform: `translate(${tx.toFixed(1)}px, ${ty.toFixed(1)}px) scale(${k.toFixed(4)})`, clipPath: clipFrom }, { transform: 'none', clipPath: 'inset(0px 0px 0px 0px round 14px)' }],
+    { duration: 640, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+  );
+  anim.onfinish = anim.oncancel = () => { art.classList.remove('zooming'); body.style.transformOrigin = ''; };
+}
+function setFit(mode) {
+  const same = mode === 'column' ? prefs.columns : !prefs.columns && prefs.zoom === mode;
+  const offCol = same && mode === 'column'; // column view off → back to fit width
+  record(offCol ? 'Column view off' : same ? 'Zoom 100%' : mode === 'column' ? 'Column view' : mode === 'page' ? 'Fit page' : 'Fit width');
+  H.busy = true;
+  try {
+    prefs.columns = !same && mode === 'column';
+    prefs.zoom = offCol ? 'width' : same ? 1 : mode === 'page' ? 'page' : 'width';
+    savePrefs();
+    applyZoom();
+    recropAll();
+  } finally { H.busy = false; }
 }
 // What a page will roughly take before it's drawn (a cropped hit page is only a band of the page).
 function bodyEstimate(art, doc, n) {
   const full = art._flat && doc.kind === 'html' ? estimate(doc, n, 'text') : estimate(doc, n);
   if (!cropWanted(art)) return full;
   const z = zoomValue();
-  const line = pageMode(doc, n) === 'original' ? (BASE_W * z * S.pageAspect) / 52 : 16.5 * 1.66 * z;
+  const orig = pageMode(doc, n) === 'original';
+  const line = (orig ? (BASE_W * z * S.pageAspect) / 52 : 16.5 * 1.66 * z) * (orig && prefs.columns ? 2 : 1);
   return Math.min(full, Math.round(line * (2 * (Number(prefs.cropLines) || 3) + 2) + 70));
 }
 let recropT = 0;
@@ -633,12 +813,14 @@ function recropAll() {
   });
 }
 function setCrop(on) {
+  record(on ? 'Crop to hits' : 'Show whole pages');
   prefs.crop = !!on;
   savePrefs();
   syncControls();
   recropAll();
 }
 function setTrim(on) {
+  record(on ? 'Trim margins' : 'Keep margins');
   prefs.trim = !!on;
   savePrefs();
   syncControls();
@@ -648,6 +830,7 @@ function setTrim(on) {
   }
 }
 function setCropLines(n) {
+  record('Lines around hits', { group: 'lines' });
   prefs.cropLines = Math.max(1, Math.min(15, Math.round(Number(n) || 3)));
   savePrefs();
   syncControls();
@@ -698,7 +881,10 @@ function nodesBetween(v, doc, vis, a, b, R) {
   return nodes;
 }
 
-function onGap(g, act) {
+// Open the page(s) hidden by a gap. The new page is drawn out of sight first; only once it's ready does it
+// take its place — in one step, with what you're looking at staying exactly where it is — and then glide in.
+async function onGap(g, act) {
+  if (g._busy || !g.isConnected) return;
   const v = active;
   const doc = docById(g.dataset.doc);
   if (!doc) return;
@@ -706,37 +892,60 @@ function onGap(g, act) {
   const b = Number(g.dataset.b);
   const R = g._R;
   const key = g.dataset.key;
+  record(act === 'all' ? `Show ${plural(b - a - 1, 'page')}` : `Show page ${(act === 'after' ? a + 1 : b - 1) + 1}`);
   if (!v.revealed.has(key)) v.revealed.set(key, new Set());
   const set = v.revealed.get(key);
   if (act === 'after') set.add(a + 1);
   else if (act === 'before') set.add(b - 1);
   else for (let n = a + 1; n < b; n++) set.add(n);
-  // What you're looking at stays put: anything opened above you pushes nothing down — the page grows
-  // upward out of sight (scroll up to read it); anything opened below simply appears under you.
+  const nodes = nodesBetween(v, doc, visiblePages(v, doc, R), a, b, R);
+  const pages = nodes.filter((x) => x.classList.contains('page'));
+
+  // 1) draw it out of sight, right where it will go (same width, nothing moves yet)
+  g._busy = true;
+  g.classList.add('busy');
+  const stage = el('div', 'gap-stage');
+  stage.style.top = g.offsetTop + 'px';
+  stage.append(...nodes);
+  g.after(stage);
+  const first = act === 'after' ? pages.slice(0, 2) : pages.slice(-2);
+  await Promise.race([Promise.all(first.map((p) => fill(p))), new Promise((r) => setTimeout(r, 2500))]);
+  if (!g.isConnected) { stage.remove(); return; } // the list was rebuilt meanwhile
+
+  // 2) put it in place in one step; when it opens above you, scroll by exactly its height so nothing jumps
   const html = document.documentElement;
   html.style.overflowAnchor = 'none';
-  const nodes = nodesBetween(v, doc, visiblePages(v, doc, R), a, b, R);
-  const ref = g.nextElementSibling || g.closest('.doc-sec')?.nextElementSibling; // the content below the opening
+  const ref = act === 'after' ? null : stage.nextElementSibling || g.closest('.doc-sec')?.nextElementSibling;
   const refTop = ref?.getBoundingClientRect().top;
-  g.replaceWith(...nodes);
-  if (ref && act !== 'after') {
-    window.scrollBy({ top: ref.getBoundingClientRect().top - refTop, behavior: 'instant' });
-    // the new pages fill in after being drawn and grow; keep what's below them still while they do
-    const sizes = new Map();
+  stage.replaceWith(...nodes);
+  g.remove();
+  if (ref) {
+    const d = ref.getBoundingClientRect().top - refTop;
+    if (d) window.scrollBy({ top: d, behavior: 'instant' });
+    // pages further up that weren't drawn yet still grow later: keep compensating for those
+    const sizes = new Map(nodes.map((x) => [x, x.offsetHeight]));
     const ro = new ResizeObserver((entries) => {
-      let d = 0;
+      let dd = 0;
       for (const en of entries) {
         const h = en.target.offsetHeight;
-        if (sizes.has(en.target)) d += h - sizes.get(en.target);
+        dd += h - (sizes.get(en.target) ?? h);
         sizes.set(en.target, h);
       }
-      if (d) window.scrollBy({ top: d, behavior: 'instant' });
+      if (dd) window.scrollBy({ top: dd, behavior: 'instant' });
     });
     nodes.forEach((x) => ro.observe(x));
     setTimeout(() => { ro.disconnect(); html.style.overflowAnchor = ''; }, 2500);
   } else requestAnimationFrame(() => { html.style.overflowAnchor = ''; });
-  const pages = nodes.filter((x) => x.classList.contains('page'));
-  for (const p of pages) p.classList.add(act === 'after' ? 'fresh-down' : 'fresh-up');
+
+  // 3) the unveil: a quick, springy glide (transform + opacity only, so it stays smooth)
+  if (reduceMotion()) return;
+  const from = act === 'after' ? 'translateY(-26px) scale(0.965)' : 'translateY(26px) scale(0.965)';
+  for (const p of pages) {
+    const r = p.getBoundingClientRect();
+    if (r.bottom < -40 || r.top > innerHeight + 40) continue;
+    p.style.transformOrigin = act === 'after' ? '50% 0' : '50% 100%';
+    p.animate([{ opacity: 0, transform: from }, { opacity: 1, transform: 'none' }], { duration: 520, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' });
+  }
 }
 
 
@@ -1078,6 +1287,7 @@ async function scrollToPage(v, docId, n) {
 async function openReader(docId, n) {
   const doc = docById(docId);
   if (!doc || doc.status) return;
+  record('Open the document');
   if (active === results) results.scrollY = scrollY;
   curPageN = n ?? 0;
   curArt = null;
@@ -1094,6 +1304,7 @@ async function openReader(docId, n) {
 
 function closeReader() {
   if (active !== reader) return;
+  record('Back to results');
   clearView(reader);
   reader.docId = null;
   active = results;
@@ -1115,6 +1326,10 @@ function updateCounter() {
   $('#mCountText').textContent = !v.total ? '0' : v.cur < 0 ? fmt(v.total) : `${fmt(v.cur + 1)}/${fmt(v.total)}`;
   ['mPrev', 'mNext', 'mPrevPage', 'mNextPage', 'mCount'].forEach((id) => ($('#' + id).disabled = !v.total));
   $('#clearBtn').hidden = !q.value;
+  // on phones and tablets the count lives on the pages-panel button, keeping the search box free for typing
+  const n = v.total;
+  $('#panelCount').textContent = n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k` : fmt(n);
+  $('#panelBtn').setAttribute('aria-label', `${plural(n, 'hit')} — pages with hits`);
 }
 
 function updateSummary() {
@@ -1266,7 +1481,9 @@ function syncControls() {
   setHTML($('#mMode'), pill);
   $('#zoomVal').textContent = Math.round(zoomValue() * 100) + '%';
   $('#fitWidth').setAttribute('aria-pressed', String(prefs.zoom === 'width'));
-  $('#fitPage').setAttribute('aria-pressed', String(prefs.zoom === 'page'));
+  $('#fitPage').setAttribute('aria-pressed', String(prefs.zoom === 'page' && !prefs.columns));
+  $('#fitWidth').setAttribute('aria-pressed', String(prefs.zoom === 'width' && !prefs.columns));
+  $('#fitCol').setAttribute('aria-pressed', String(!!prefs.columns));
   $('#cropBtn').setAttribute('aria-pressed', String(!!prefs.crop));
   $('#trimBtn').setAttribute('aria-pressed', String(!!prefs.trim));
   $('#cropSpan').hidden = !prefs.crop;
@@ -1668,7 +1885,7 @@ function fillMenu(m, items, { onBack } = {}) {
     if (it.header) { m.append(el('div', 'menu-head', esc(it.header))); continue; }
     if (it.node) { m.append(it.node()); continue; }
     const b = el('button', `menu-item${it.danger ? ' danger' : ''}${it.checked ? ' checked' : ''}${it.submenu ? ' has-sub' : ''}`,
-      `${it.icon || '<span class="menu-gap"></span>'}<span>${esc(it.label)}</span>${it.checked ? I.check : ''}${it.submenu ? `<i class="sub-arrow${it.run ? ' split' : ''}" title="Show what’s inside">${I.chevron}</i>` : ''}`);
+      `${it.icon || '<span class="menu-gap"></span>'}<span>${esc(it.label)}${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</span>${it.checked ? I.check : ''}${it.submenu ? `<i class="sub-arrow${it.run ? ' split' : ''}" title="Show what’s inside">${I.chevron}</i>` : ''}`);
     b.setAttribute('role', 'menuitem');
     if (it.disabled) b.disabled = true;
     if (it.submenu) {
@@ -3098,13 +3315,186 @@ function toast(msg, { action, onAction, ms = 4200 } = {}) {
   return t;
 }
 
+// ---------- undo / redo ----------
+// Everything you do — searching, switching how pages look, opening pages, cropping, boards — can be undone
+// and redone: tap the Undo chip that briefly takes the search type's place on the floating bar, swipe the
+// bar left-to-right (undo) or right-to-left (redo), or press Ctrl+Z / Ctrl+Shift+Z.
+const H = { undo: [], redo: [], busy: false, group: null, groupAt: 0, ready: false };
+const SNAP_KEYS = ['mode', 'matchCase', 'wholeWord', 'near', 'sort', 'view', 'zoom', 'crop', 'cropLines', 'trim', 'columns'];
+function pageSpot() {
+  const a = currentArt();
+  if (!a) return { y: scrollY };
+  return { doc: a.dataset.doc, n: Number(a.dataset.n), off: a.getBoundingClientRect().top, y: scrollY };
+}
+function snapshot(extra = {}) {
+  return {
+    q: q.value,
+    p: Object.fromEntries(SNAP_KEYS.map((k) => [k, prefs[k]])),
+    revealed: new Map([...results.revealed].map(([k, set]) => [k, new Set(set)])),
+    cropOpen: new Map([...cropOpen].map(([k, v]) => [k, { ...v }])),
+    override: new Map(override),
+    reader: active === reader ? { doc: reader.docId, n: curPageN } : null,
+    at: pageSpot(),
+    ...extra,
+  };
+}
+async function restoreSnap(s) {
+  H.busy = true;
+  try {
+    const zoomChanged = prefs.zoom !== s.p.zoom;
+    const trimChanged = prefs.trim !== s.p.trim || prefs.columns !== s.p.columns;
+    Object.assign(prefs, s.p);
+    savePrefs();
+    q.value = s.q;
+    override.clear();
+    for (const [k, v] of s.override) override.set(k, v);
+    if (!s.reader && active === reader) closeReader();
+    runSearch();
+    results.revealed = new Map([...s.revealed].map(([k, set]) => [k, new Set(set)]));
+    cropOpen.clear();
+    for (const [k, v] of s.cropOpen) cropOpen.set(k, { ...v });
+    results.dirty = true;
+    syncControls();
+    if (zoomChanged) document.documentElement.style.setProperty('--z', zoomValue().toFixed(4));
+    if (s.reader) {
+      if (active !== reader || reader.docId !== s.reader.doc) await openReader(s.reader.doc, s.reader.n);
+      else { if (trimChanged) renderView(reader); else refreshInPlace(reader); }
+    } else if (active === results) {
+      renderView(results);
+      const art = s.at?.doc != null ? results.pageEls.get(pkey(s.at.doc, s.at.n)) : null;
+      if (art) window.scrollBy({ top: art.getBoundingClientRect().top - s.at.off, behavior: 'instant' });
+      else if (s.at) window.scrollTo({ top: s.at.y, behavior: 'instant' });
+    }
+    if (active === reader && reader.dirty) results.dirty = true;
+    updateChrome();
+  } finally {
+    H.busy = false;
+  }
+}
+// Call right before changing something. Repeats of the same kind within a moment (typing, a slider) are one step.
+function record(label, { group = null, snap = null } = {}) {
+  if (H.busy || !H.ready) return;
+  const now = performance.now();
+  if (group && H.group === group && now - H.groupAt < 1600) { H.groupAt = now; showUndo('undo'); return; }
+  H.group = group;
+  H.groupAt = now;
+  H.undo.push({ label, before: typeof snap === 'function' ? snap() : snap || snapshot() });
+  if (H.undo.length > 120) H.undo.shift();
+  H.redo.length = 0;
+  showUndo('undo');
+}
+// For things kept outside the view state (boards): give the two directions yourself.
+function recordCustom(label, undo, redo) {
+  if (H.busy) return;
+  H.undo.push({ label, undo, redo });
+  if (H.undo.length > 120) H.undo.shift();
+  H.redo.length = 0;
+  H.group = null;
+  showUndo('undo');
+}
+async function undo() {
+  const e = H.undo.pop();
+  if (!e) { toast('Nothing to undo', { ms: 1200 }); return; }
+  H.group = null;
+  closeMenu();
+  if (e.undo) { H.busy = true; try { await e.undo(); } finally { H.busy = false; } }
+  else { e.after = snapshot(); await restoreSnap(e.before); }
+  H.redo.push(e);
+  showUndo('redo', `Undone: ${e.label}`);
+}
+async function redo() {
+  const e = H.redo.pop();
+  if (!e) { toast('Nothing to redo', { ms: 1200 }); return; }
+  H.group = null;
+  closeMenu();
+  if (e.redo) { H.busy = true; try { await e.redo(); } finally { H.busy = false; } }
+  else await restoreSnap(e.after);
+  H.undo.push(e);
+  showUndo('undo', `Redone: ${e.label}`);
+}
+// The chip: "Undo" right after you do something, "Redo" right after an undo; it steps aside after a moment.
+let undoTimer = 0;
+function showUndo(kind, note) {
+  const label = kind === 'undo' ? 'Undo' : 'Redo';
+  for (const b of [$('#mUndo'), $('#dUndo')]) {
+    if (!b) continue;
+    b.dataset.kind = kind;
+    b.innerHTML = `${kind === 'undo' ? I.undo : I.redo}<span>${label}</span>`;
+    b.title = `${label}: ${(kind === 'undo' ? H.undo : H.redo).at(-1)?.label || ''} (${kind === 'undo' ? MOD + '+Z' : MOD + '+Shift+Z'})`;
+  }
+  document.body.classList.add('undo-on');
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => document.body.classList.remove('undo-on'), note ? 2600 : 3600);
+  if (note) {
+    const hint = $('#swipeHint');
+    if (hint) { hint.textContent = note; hint.className = 'swipe-hint flash'; clearTimeout(hint._t); hint._t = setTimeout(() => (hint.className = 'swipe-hint'), 1400); }
+  }
+}
+// Swipe the floating bar: left→right undoes, right→left redoes. Quick sideways flicks only, so tapping,
+// holding and the other gestures on the bar keep working.
+const bar = { swiping: false, justSwiped: 0, jogging: false, resets: [] };
+function bindBarSwipe(el) {
+  let s = null;
+  const hint = $('#swipeHint');
+  const feedback = (dx) => {
+    const dir = dx > 0 ? 'undo' : 'redo';
+    const list = dir === 'undo' ? H.undo : H.redo;
+    const ready = Math.abs(dx) > 56;
+    el.style.setProperty('--swx', `${Math.max(-60, Math.min(60, dx * 0.18))}px`);
+    hint.innerHTML = list.length ? `${dir === 'undo' ? I.undo : ''}<span>${dir === 'undo' ? 'Undo' : 'Redo'} · ${esc(list.at(-1).label)}</span>${dir === 'redo' ? I.redo : ''}` : `<span>Nothing to ${dir}</span>`;
+    hint.className = `swipe-hint show${ready && list.length ? ' ready' : ''}`;
+    hint.style.opacity = Math.min(1, Math.abs(dx) / 40);
+    if (ready && !s.buzzed && list.length) { s.buzzed = true; navigator.vibrate?.(6); }
+    if (!ready) s.buzzed = false;
+  };
+  el.addEventListener('pointerdown', (e) => { if (e.button === 0) s = { x: e.clientX, y: e.clientY, t: performance.now(), on: false }; }, true);
+  el.addEventListener('pointermove', (e) => {
+    if (!s) return;
+    const dx = e.clientX - s.x, dy = e.clientY - s.y;
+    if (!s.on) {
+      if (bar.jogging) { s = null; return; }
+      const quick = performance.now() - s.t < 300;
+      if (quick && Math.abs(dx) > 16 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        s.on = true;
+        bar.swiping = true;
+        bar.resets.forEach((f) => f());
+        closeMenu();
+        el.classList.add('swiping');
+        try { el.setPointerCapture(e.pointerId); } catch {}
+      } else if (!quick && Math.hypot(dx, dy) > 16) { s = null; return; } // a slow drag belongs to the control under it
+      else return;
+    }
+    e.stopPropagation();
+    feedback(dx);
+  }, true);
+  const end = (e, ok) => {
+    if (!s) return;
+    const was = s;
+    s = null;
+    if (!was.on) return;
+    e?.stopPropagation();
+    bar.justSwiped = performance.now();
+    setTimeout(() => (bar.swiping = false), 0);
+    el.classList.remove('swiping');
+    el.style.removeProperty('--swx');
+    hint.className = 'swipe-hint';
+    hint.style.opacity = '';
+    const dx = e ? e.clientX - was.x : 0;
+    if (ok && dx > 56) undo();
+    else if (ok && dx < -56) redo();
+  };
+  el.addEventListener('pointerup', (e) => end(e, true), true);
+  el.addEventListener('pointercancel', (e) => end(e, false), true);
+  el.addEventListener('click', (e) => { if (performance.now() - bar.justSwiped < 450) { e.stopPropagation(); e.preventDefault(); } }, true);
+}
+
 // ---------- theme ----------
 function applyTheme() {
-  const r = document.documentElement;
-  if (prefs.theme === 'auto') r.removeAttribute('data-theme');
-  else r.dataset.theme = prefs.theme;
-  const dark = prefs.theme === 'dark' || (prefs.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
-  $('meta[name="theme-color"]').content = dark ? '#16171a' : '#f5f4f1';
+  applyReadingTheme(prefs);
+}
+function openThemes() {
+  closeMenu();
+  openThemeSheet(prefs, { save: savePrefs });
 }
 
 // ---------- events ----------
@@ -3203,7 +3593,11 @@ function bind() {
   addEventListener('resize', closeMenu);
   $('.sidebar').addEventListener('scroll', closeMenu, true);
 
-  q.addEventListener('input', () => { $('#clearBtn').hidden = !q.value; scheduleSearch(); });
+  q.addEventListener('input', () => {
+    record('Search', { group: 'search', snap: () => snapshot({ q: prefs.q }) });
+    $('#clearBtn').hidden = !q.value;
+    scheduleSearch();
+  });
   q.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -3213,7 +3607,8 @@ function bind() {
       if (q.value) { q.value = ''; runSearch(); } else q.blur();
     }
   });
-  $('#clearBtn').addEventListener('click', () => { q.value = ''; runSearch(); q.focus(); });
+  $('#clearBtn').addEventListener('pointerdown', (e) => e.preventDefault()); // keep the keyboard up and the box focused
+  $('#clearBtn').addEventListener('click', () => { record('Clear search'); q.value = ''; runSearch(); q.focus(); });
   $('#prevBtn').addEventListener('click', () => step(-1));
   $('#nextBtn').addEventListener('click', () => step(1));
 
@@ -3221,10 +3616,10 @@ function bind() {
     const b = e.target.closest('button[data-mode]');
     if (b) setMode(b.dataset.mode);
   });
-  $('#nearN').addEventListener('input', (e) => { prefs.near = Math.max(1, Math.min(200, Number(e.target.value) || 8)); scheduleSearch(); });
-  $('#caseBtn').addEventListener('click', () => { prefs.matchCase = !prefs.matchCase; runSearch(); });
-  $('#wordBtn').addEventListener('click', () => { prefs.wholeWord = !prefs.wholeWord; runSearch(); });
-  $('#sortSel2').addEventListener('change', (e) => { prefs.sort = e.target.value; runSearch(); });
+  $('#nearN').addEventListener('input', (e) => { record('Near distance', { group: 'near' }); prefs.near = Math.max(1, Math.min(200, Number(e.target.value) || 8)); scheduleSearch(); });
+  $('#caseBtn').addEventListener('click', () => { record('Match case'); prefs.matchCase = !prefs.matchCase; runSearch(); });
+  $('#wordBtn').addEventListener('click', () => { record('Whole words'); prefs.wholeWord = !prefs.wholeWord; runSearch(); });
+  $('#sortSel2').addEventListener('change', (e) => { record('Sort'); prefs.sort = e.target.value; runSearch(); });
   $('#viewSeg').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-view]');
     if (b) setView(b.dataset.view);
@@ -3232,8 +3627,9 @@ function bind() {
   $('#zoomIn').addEventListener('click', () => zoomBy(1));
   $('#zoomOut').addEventListener('click', () => zoomBy(-1));
   $('#zoomVal').addEventListener('click', () => setZoom(1));
-  $('#fitWidth').addEventListener('click', () => setZoom(prefs.zoom === 'width' ? 1 : 'width'));
-  $('#fitPage').addEventListener('click', () => setZoom(prefs.zoom === 'page' ? 1 : 'page'));
+  $('#fitWidth').addEventListener('click', () => setFit('width'));
+  $('#fitCol').addEventListener('click', () => setFit('column'));
+  $('#fitPage').addEventListener('click', () => setFit('page'));
   $('#cropBtn').addEventListener('click', () => setCrop(!prefs.crop));
   $('#trimBtn').addEventListener('click', () => setTrim(!prefs.trim));
   $('#cropLines').addEventListener('input', (e) => setCropLines(e.target.value));
@@ -3253,6 +3649,8 @@ function bind() {
   bindSideResize();
   // phone reading bar
   bindModePicker($('#mMode'));
+  bindBarSwipe($('#mbar'));
+  for (const b of [$('#mUndo'), $('#dUndo')]) b.addEventListener('click', () => (b.dataset.kind === 'redo' ? redo() : undo()));
   bindHoldMenu($('#mMore'), moreItems);
   bindJog($('#mCount'));
   $('#mPrev').addEventListener('click', () => step(-1));
@@ -3305,13 +3703,8 @@ function bind() {
     const mine = bindings(actionById(id));
     setBindings(id, mine.includes(combo) ? mine : [...mine, combo]);
   }, true);
-  $('#themeBtn').addEventListener('click', () => {
-    prefs.theme = { auto: 'light', light: 'dark', dark: 'auto' }[prefs.theme] || 'auto';
-    savePrefs();
-    applyTheme();
-    syncControls();
-    toast(`Theme: ${prefs.theme === 'auto' ? 'match system' : prefs.theme}`, { ms: 1600 });
-  });
+  $('#themeBtn').addEventListener('click', openThemes);
+  $('#boardsBtn').addEventListener('click', openBoards);
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
   $('#helpBtn').addEventListener('click', () => $('#help').showModal());
   $('#help').addEventListener('click', (e) => { if (e.target === e.currentTarget || e.target.closest('[data-close]')) $('#help').close(); });
@@ -3495,7 +3888,17 @@ function bind() {
 
   // keyboard
   addEventListener('keydown', (e) => {
+    // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z or Ctrl+Y redoes (inside a text box the box does its own undo)
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[zy]$/i.test(e.key) && !$('dialog[open]')) {
+      const el = document.activeElement;
+      if (!(/INPUT|TEXTAREA|SELECT/.test(el?.tagName) || el?.isContentEditable)) {
+        e.preventDefault();
+        if (e.key.toLowerCase() === 'y' || e.shiftKey) redo(); else undo();
+        return;
+      }
+    }
     if (e.key === 'Escape' && $('.pop-menu')) { closeMenu(); return; }
+    if (boards.isOpen()) { if (e.key === 'Escape' && !$('dialog[open]')) boards.close(); return; }
     if (e.key === 'Escape' && document.body.classList.contains('panel')) { setPanel(false); return; }
     if ($('dialog[open]') || e.isComposing) return;
     const combo = comboFromEvent(e);
@@ -3603,6 +4006,7 @@ function applyZoom() {
   }, 260);
 }
 function setZoom(z) {
+  if (prefs.zoom !== z) record('Zoom', { group: 'zoom' });
   prefs.zoom = z;
   savePrefs();
   applyZoom();
@@ -3695,14 +4099,15 @@ const ACTIONS = [
   { group: 'Search' },
   { id: 'focusSearch', label: 'Go to the search box', keys: ['/', `${MOD}+K`, `${MOD}+F`], run: () => { q.focus(); q.select(); } },
   ...Object.keys(MODES).map((m, i) => ({ id: `mode_${m}`, label: `Search type: ${MODES[m].label}`, keys: [`Alt+${i + 1}`], run: () => setMode(m) })),
-  { id: 'toggleCase', label: 'Match case on/off', keys: ['Alt+C'], run: () => { prefs.matchCase = !prefs.matchCase; runSearch(); } },
-  { id: 'toggleWord', label: 'Whole words on/off', keys: ['Alt+W'], run: () => { prefs.wholeWord = !prefs.wholeWord; runSearch(); } },
+  { id: 'toggleCase', label: 'Match case on/off', keys: ['Alt+C'], run: () => { record('Match case'); prefs.matchCase = !prefs.matchCase; runSearch(); } },
+  { id: 'toggleWord', label: 'Whole words on/off', keys: ['Alt+W'], run: () => { record('Whole words'); prefs.wholeWord = !prefs.wholeWord; runSearch(); } },
   { group: 'View' },
   { id: 'zoomIn', label: 'Zoom in', keys: ['=', 'Shift+='], run: () => zoomBy(1) },
   { id: 'zoomOut', label: 'Zoom out', keys: ['-'], run: () => zoomBy(-1) },
   { id: 'zoomReset', label: 'Zoom 100%', keys: ['0'], run: () => setZoom(1) },
-  { id: 'fitWidth', label: 'Fit width', keys: ['W'], run: () => setZoom('width') },
-  { id: 'fitPage', label: 'Fit page', keys: ['F'], run: () => setZoom('page') },
+  { id: 'fitWidth', label: 'Fit width', keys: ['W'], run: () => setFit('width') },
+  { id: 'fitPage', label: 'Fit page', keys: ['F'], run: () => setFit('page') },
+  { id: 'fitColumn', label: 'Column view (just the column with your hits)', keys: ['V'], run: () => setFit('column') },
   { id: 'toggleView', label: 'PDF pages: text / original', keys: ['O'], run: () => setView(prefs.view === 'text' ? 'original' : 'text') },
   { id: 'toggleCrop', label: 'Crop result pages to the hits', keys: ['C'], run: () => setCrop(!prefs.crop) },
   { id: 'toggleTrim', label: 'Trim page margins (wide view)', keys: ['M'], run: () => setTrim(!prefs.trim) },
@@ -3710,6 +4115,7 @@ const ACTIONS = [
   { id: 'toggleLibrary', label: 'Hide / show the library', keys: ['L'], run: () => toggleLibrary() },
   { id: 'readDoc', label: 'Read the whole document you’re on', keys: ['R'], run: () => { const c = currentDocAndPage(); if (c && active === results) openReader(c.docId, c.n); } },
   { id: 'back', label: 'Back to results', keys: ['Escape', 'B'], run: () => closeReader() },
+  { id: 'openBoards', label: 'Open your boards', keys: ['Shift+B'], run: () => openBoards() },
   { id: 'openKeys', label: 'Show these shortcuts', keys: ['Shift+/'], run: () => openKeys() },
 ];
 const actionById = (id) => ACTIONS.find((a) => a.id === id);
@@ -3830,6 +4236,7 @@ function toggleLibrary() {
 }
 function setView(view) {
   if (prefs.view === view) return;
+  record(view === 'text' ? 'Text pages' : 'Original pages');
   prefs.view = view;
   savePrefs();
   override.clear();
@@ -3863,12 +4270,14 @@ function openPicker(anchor) {
     if (o) { closeMenu(); setMode(o.dataset.mode); return; }
     const t = e.target.closest('[data-tog]');
     if (t) {
+      record(t.dataset.tog === 'case' ? 'Match case' : 'Whole words');
       if (t.dataset.tog === 'case') prefs.matchCase = !prefs.matchCase;
       else prefs.wholeWord = !prefs.wholeWord;
     }
     const n = e.target.closest('[data-near]');
     if (n) {
       const cur = Number(prefs.near) || 8;
+      record('Near distance', { group: 'near' });
       prefs.near = Number(n.dataset.near) > 0 ? (NEAR_STEPS.find((x) => x > cur) ?? cur) : ([...NEAR_STEPS].reverse().find((x) => x < cur) ?? cur);
     }
     if (!t && !n) return;
@@ -3909,8 +4318,9 @@ function bindModePicker(anchor) {
     anchor.setPointerCapture(e.pointerId);
     anchor.classList.add('pressing');
   });
+  bar.resets.push(() => { if (st) { st = null; anchor.classList.remove('pressing'); } });
   anchor.addEventListener('pointermove', (e) => {
-    if (!st) return;
+    if (!st || bar.swiping) return;
     if (!st.moved && Math.hypot(e.clientX - st.x, e.clientY - st.y) > 10) st.moved = true;
     if (st.moved) light(rowAt(e.clientX, e.clientY));
   });
@@ -3971,9 +4381,11 @@ function bindHoldMenu(el, getItems) {
     el.setPointerCapture(e.pointerId);
     st.timer = setTimeout(open, 240);
   });
+  bar.resets.push(() => { if (st) { clearTimeout(st.timer); st = null; el.classList.remove('holding'); } });
   el.addEventListener('pointermove', (e) => {
-    if (!st) return;
-    if (!st.open && Math.hypot(e.clientX - st.x, e.clientY - st.y) > 10) open();
+    if (!st || bar.swiping) return;
+    const dx = e.clientX - st.x, dy = e.clientY - st.y;
+    if (!st.open && Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) open();
     if (st.open) hot(e.clientX, e.clientY);
   });
   const end = (e, apply) => {
@@ -4028,8 +4440,8 @@ function moreItems() {
   items.push({ header: 'Zoom' },
     { node: panelRow('zoom-row', `<button class="pk-step" data-v="-1" aria-label="Zoom out">${I.minus}</button><button class="mp-zoom" data-v="1">${Math.round(zoomValue() * 100)}%</button><button class="pk-step" data-v="+1" aria-label="Zoom in">${I.plus}</button>`,
       (v) => (v === '1' ? setZoom(1) : zoomBy(Number(v)))) },
-    { node: panelRow('two', `<button class="pk-tog" data-v="width" ${on(prefs.zoom === 'width')}>${I.fitW}Fit width</button><button class="pk-tog" data-v="page" ${on(prefs.zoom === 'page')}>${I.fitP}Fit page</button>`,
-      (v) => setZoom(prefs.zoom === v ? 1 : v)) });
+    { node: panelRow('two three', `<button class="pk-tog" data-v="width" ${on(prefs.zoom === 'width' && !prefs.columns)}>${I.fitW}Width</button>${S.docs.some((d) => d.kind === 'pdf') ? `<button class="pk-tog" data-v="column" ${on(prefs.columns)} title="Show just the column(s) with your hits, filling the width">${I.columns}Column</button>` : ''}<button class="pk-tog" data-v="page" ${on(prefs.zoom === 'page' && !prefs.columns)}>${I.fitP}Page</button>`,
+      (v) => setFit(v)) });
   const crop = active === results;
   const trim = S.docs.some((d) => d.kind === 'pdf');
   if (crop || trim) {
@@ -4038,12 +4450,14 @@ function moreItems() {
     if (crop && prefs.crop) items.push({ node: cropSliderRow });
   }
   items.push({ header: 'Search' }, { node: panelRow('two', `<button class="pk-tog" data-v="case" ${on(prefs.matchCase)}><i>Aa</i>Match case</button><button class="pk-tog" data-v="word" ${on(prefs.wholeWord)}><i><u>ab</u></i>Whole words</button>`,
-    (v) => { if (v === 'case') prefs.matchCase = !prefs.matchCase; else prefs.wholeWord = !prefs.wholeWord; syncControls(); runSearch(); }) });
+    (v) => { record(v === 'case' ? 'Match case' : 'Whole words'); if (v === 'case') prefs.matchCase = !prefs.matchCase; else prefs.wholeWord = !prefs.wholeWord; syncControls(); runSearch(); }) });
   if (active === results) {
     items.push({ header: 'Sort by most hits' }, { node: panelRow('seg-row', `<div class="seg">${[['library', 'Library', 'Library order'], ['hits', 'Documents', 'Documents with most hits'], ['pages', 'Pages', 'Pages with most hits']].map(([k, label, title]) => `<button data-v="${k}" title="${title}" ${on(prefs.sort === k)}>${label}</button>`).join('')}</div>`,
-      (v) => { prefs.sort = v; runSearch(); }) });
+      (v) => { if (prefs.sort !== v) record('Sort'); prefs.sort = v; runSearch(); }) });
   }
-  items.push({ sep: true }, { node: panelRow('two', `${active === reader ? `<button class="pk-tog" data-v="back">${I.arrowLeft}Results</button>` : ''}<button class="pk-tog" data-v="lib">${I.folder}Library</button>`,
+  items.push({ sep: true }, { node: panelRow('two', `<button class="pk-tog" data-v="theme">${I.palette}Theme</button><button class="pk-tog" data-v="boards">${I.board}Boards</button>`,
+    (v) => (v === 'theme' ? openThemes() : openBoards())) },
+  { node: panelRow('two', `${active === reader ? `<button class="pk-tog" data-v="back">${I.arrowLeft}Results</button>` : ''}<button class="pk-tog" data-v="lib">${I.folder}Library</button>`,
     (v) => { closeMenu(); if (v === 'back') closeReader(); else toggleLibrary(); }) });
   return items;
 }
@@ -4053,6 +4467,7 @@ function togglePageMode(art) {
   const sec = art.closest('.doc-sec');
   const doc = docById(art.dataset.doc);
   const n = Number(art.dataset.n);
+  record(pageMode(doc, n) === 'original' ? `Page ${n + 1} as text` : `Page ${n + 1} original`);
   if (doc.kind === 'html') {
     override.set(pkey(doc.id, WEB), pageMode(doc, n) === 'original' ? 'text' : 'original');
     const v = art._v;
@@ -4096,8 +4511,66 @@ function pageItems(art) {
   const text = art._web ? '' : S.texts.get(doc.id)?.[n] || '';
   if (text.trim()) items.push({ label: 'Copy the page’s text', icon: I.copy, run: () => toast(copyText(doc.kind === 'pdf' ? reflow(text) : text) ? 'Page text copied' : 'Couldn’t copy', { ms: 1600 }) });
   const save = art._web ? [] : saveItems(art);
-  if (save.length) items.push({ sep: true }, { label: 'Save as…', icon: I.save, submenu: () => save });
+  items.push({ sep: true });
+  if (!art._web) items.push({ label: 'Add to board', icon: I.board, submenu: () => boards.menuItems(() => boardSeed(art)) });
+  if (save.length) items.push({ label: 'Save as…', icon: I.save, submenu: () => save });
   return items;
+}
+
+// ---------- boards ----------
+// What gets saved to a board: the page exactly as it's shown (cropped band, columns, trimmed margins…) as a
+// picture, plus its text so it can be searched; text pages are kept as text.
+function pageExcerpt(art) {
+  const doc = docById(art.dataset.doc);
+  const raw = S.texts.get(doc.id)?.[Number(art.dataset.n)] || '';
+  const t = doc.kind === 'pdf' ? reflow(raw) : raw;
+  if (!art._band || art._regions) return t.slice(0, 6000).trim();
+  const a = Math.floor(art._band[0] * t.length), b = Math.ceil(art._band[1] * t.length);
+  const from = Math.max(0, t.lastIndexOf(' ', a) + 1), to = t.indexOf(' ', b);
+  return t.slice(from, to < 0 ? undefined : to).trim();
+}
+async function boardSeed(art) {
+  const doc = docById(art.dataset.doc);
+  const n = Number(art.dataset.n);
+  const base = { docId: doc.id, docName: doc.name, n, q: prefs.q || q.value, mode: prefs.mode, title: '', text: pageExcerpt(art) };
+  if (doc.kind === 'pdf' && art.querySelector('.pdf-frame:not(.clone)')) {
+    const c = await pageCanvas(art, true, 1200);
+    const image = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.86));
+    const out = { ...base, image, w: c.width, h: c.height, cropped: !!(art._band || art._regions) };
+    c.width = c.height = 0;
+    return out;
+  }
+  return base;
+}
+const boards = initBoards({
+  esc, el, I, toast, recordCustom,
+  pinIcon: I.pin,
+  searchIcon: I.search,
+  menu: (anchor, items) => openMenu(anchor, items),
+  hasDoc: (id) => !!docById(id),
+  openDoc: (id, n) => {
+    if (!docById(id)) { toast('That document isn’t in your library any more'); return; }
+    if (active === reader && reader.docId === id) scrollToPage(reader, id, n ?? 0);
+    else openReader(id, n ?? 0);
+  },
+  search: (text, mode) => {
+    record('Search');
+    H.busy = true;
+    try {
+      if (mode && MODES[mode]) prefs.mode = mode;
+      if (active === reader) closeReader();
+      q.value = text || '';
+      runSearch();
+      syncControls();
+    } finally { H.busy = false; }
+  },
+  copy: (text) => toast(copyText(text) ? 'Copied' : 'Couldn’t copy', { ms: 1400 }),
+  saveBlob,
+});
+function openBoards() {
+  closeMenu();
+  closeDrawer();
+  boards.open();
 }
 
 // ---------- saving a page, or the part of it you're looking at ----------
@@ -4126,19 +4599,21 @@ function saveItems(art) {
   return items;
 }
 // Draws the page sharply (with the highlights you see), cut to what's on screen when `section` is set.
-async function pageCanvas(art, section) {
+async function pageCanvas(art, section, width = 2000) {
   const doc = docById(art.dataset.doc);
   const n = Number(art.dataset.n);
   const pdf = await getPdf(doc.id, () => store.file(doc.id));
   const page = await pdf.getPage(n + 1);
   const base = page.getViewport({ scale: 1 });
   let x = [0, 1], y = [0, 1];
-  const frame = art.querySelector('.pdf-frame');
+  const frame = art.querySelector('.pdf-frame:not(.clone)');
   if (section) {
     if (frame?.dataset.tx) x = frame.dataset.tx.split(',').map(Number);
     if (art._band) y = art._band;
   }
-  const scale = Math.min(2000 / (base.width * (x[1] - x[0])), 4096 / base.width, 4096 / base.height);
+  const regions = section && art._regions?.length ? art._regions : [{ x, y }];
+  const narrow = Math.min(...regions.map((r) => r.x[1] - r.x[0]));
+  const scale = Math.min(width / (base.width * narrow), 4096 / base.width, 4096 / base.height);
   const vp = page.getViewport({ scale });
   const full = document.createElement('canvas');
   full.width = Math.floor(vp.width);
@@ -4156,12 +4631,23 @@ async function pageCanvas(art, section) {
     else { ctx.fillStyle = cs.borderBottomColor; ctx.fillRect(L, T + H - 2 * scale, W, 2 * scale); }
   }
   ctx.globalCompositeOperation = 'source-over';
-  const sx = Math.floor(x[0] * full.width), sy = Math.floor(y[0] * full.height);
-  const sw = Math.max(1, Math.round((x[1] - x[0]) * full.width)), sh = Math.max(1, Math.round((y[1] - y[0]) * full.height));
+  // one piece, or the column pieces stacked like they're shown, each as wide as the picture
+  const cuts = regions.map((r) => ({ sx: Math.floor(r.x[0] * full.width), sy: Math.floor(r.y[0] * full.height), sw: Math.max(1, Math.round((r.x[1] - r.x[0]) * full.width)), sh: Math.max(1, Math.round((r.y[1] - r.y[0]) * full.height)) }));
+  const W = Math.max(...cuts.map((c) => c.sw));
+  const gap = cuts.length > 1 ? Math.round(W * 0.02) : 0;
   const out = document.createElement('canvas');
-  out.width = sw;
-  out.height = sh;
-  out.getContext('2d', { alpha: false }).drawImage(full, sx, sy, sw, sh, 0, 0, sw, sh);
+  out.width = W;
+  out.height = cuts.reduce((h, c) => h + Math.round((c.sh * W) / c.sw), 0) + gap * (cuts.length - 1);
+  const oc = out.getContext('2d', { alpha: false });
+  oc.fillStyle = '#fff';
+  oc.fillRect(0, 0, out.width, out.height);
+  let at = 0;
+  for (const c of cuts) {
+    const h = Math.round((c.sh * W) / c.sw);
+    oc.drawImage(full, c.sx, c.sy, c.sw, c.sh, 0, at, W, h);
+    at += h + gap;
+    if (gap) { oc.fillStyle = '#e3e0da'; oc.fillRect(0, at - gap / 2 - 1, W, 2); }
+  }
   full.width = full.height = 0;
   return out;
 }
@@ -4214,13 +4700,20 @@ function bindJog(el) {
     if (e.button !== 0 || !active.total) return;
     const v = active;
     const moved = v.navY == null || Math.abs(scrollY - v.navY) > innerHeight * 0.8;
-    j = { x: e.clientX, start: v.cur >= 0 && !moved ? v.cur : Math.max(0, startFromViewport(v, 1)), moved: false, last: v.cur };
+    j = { x: e.clientX, t: performance.now(), start: v.cur >= 0 && !moved ? v.cur : Math.max(0, startFromViewport(v, 1)), moved: false, last: v.cur };
     el.setPointerCapture(e.pointerId);
   });
+  bar.resets.push(() => { if (j) { j = null; el.classList.remove('jogging'); bar.jogging = false; } });
   el.addEventListener('pointermove', (e) => {
-    if (!j) return;
+    if (!j || bar.swiping) return;
     const dx = e.clientX - j.x;
-    if (!j.moved && Math.abs(dx) > 8) { j.moved = true; el.classList.add('jogging'); }
+    // hold a moment, then slide, to scrub; a quick flick is the bar's undo/redo swipe
+    if (!j.moved && Math.abs(dx) > 8) {
+      if (performance.now() - j.t < 300) return;
+      j.moved = true;
+      bar.jogging = true;
+      el.classList.add('jogging');
+    }
     if (!j.moved) return;
     const k = Math.max(0, Math.min(active.total - 1, j.start + Math.trunc(dx / 22)));
     if (k !== j.last) { j.last = k; navigator.vibrate?.(3); goTo(active, k, { instant: true }); }
@@ -4230,7 +4723,8 @@ function bindJog(el) {
     const s = j;
     j = null;
     el.classList.remove('jogging');
-    if (!s.moved && apply) step(1);
+    bar.jogging = false;
+    if (!s.moved && apply && !bar.swiping && performance.now() - bar.justSwiped > 450) step(1);
   };
   el.addEventListener('pointerup', () => end(true));
   el.addEventListener('pointercancel', () => end(false));
@@ -4260,6 +4754,7 @@ function onScrollBars() {
 
 function setMode(mode) {
   if (!MODES[mode] || prefs.mode === mode) return;
+  record('Search type');
   prefs.mode = mode;
   syncControls();
   runSearch();
@@ -4294,6 +4789,7 @@ async function start() {
     setTimeout(() => checkSources({ quiet: true }), 1500);
   }
   document.body.classList.add('ready');
+  H.ready = true;
   navigator.storage?.persist?.().catch(() => {});
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
   if (!matchMedia('(pointer: coarse)').matches && S.docs.length) q.focus();

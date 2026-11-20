@@ -121,6 +121,60 @@ function textBox(items, base) {
   };
 }
 
+// Columns (a, b, c…): where the text's vertical gutters split the page, as [left, right] fractions of its
+// width — or null for a page that's one column. A gutter is a strip that almost no text crosses (a heading
+// running across the page is fine); columns narrower than a fifth of the page don't count.
+function textColumns(items, base) {
+  const N = 240;
+  const cov = new Float32Array(N);
+  for (const it of items) {
+    if (!it.str || !it.str.trim()) continue;
+    const t = it.transform;
+    if (Math.abs(t[1]) > 0.01 || Math.abs(t[2]) > 0.01) continue;
+    const tx = pdfjsLib.Util.transform(base.transform, t);
+    const fh = Math.hypot(tx[2], tx[3]) || 10;
+    const w = (it.width || 0) * base.scale;
+    const i0 = Math.max(0, Math.floor((tx[4] / base.width) * N));
+    const i1 = Math.min(N - 1, Math.ceil(((tx[4] + w) / base.width) * N) - 1);
+    for (let i = i0; i <= i1; i++) cov[i] += fh;
+  }
+  let lo = 0, hi = N - 1;
+  while (lo < N && !cov[lo]) lo++;
+  while (hi > lo && !cov[hi]) hi--;
+  if (hi - lo < N * 0.4) return null;
+  let max = 0;
+  for (let i = lo; i <= hi; i++) max = Math.max(max, cov[i]);
+  const quiet = (i) => cov[i] < max * 0.06;
+  const cols = [];
+  let start = lo;
+  for (let i = lo + 1; i < hi; ) {
+    if (!quiet(i)) { i++; continue; }
+    let j = i;
+    while (j < hi && quiet(j)) j++;
+    if (j - i >= 3) { cols.push([start, i]); start = j; }
+    i = j + 1;
+  }
+  cols.push([start, hi + 1]);
+  const keep = cols.filter(([a, b]) => (b - a) / N >= 0.2).map(([a, b]) => [a / N, b / N]);
+  if (keep.length < 2) return null;
+  // a column reaches as far as the lines that start in it actually run (a long line can poke into the gutter)
+  const ends = keep.map(([, b]) => b);
+  for (const it of items) {
+    if (!it.str || !it.str.trim()) continue;
+    const t = it.transform;
+    if (Math.abs(t[1]) > 0.01 || Math.abs(t[2]) > 0.01) continue;
+    const tx = pdfjsLib.Util.transform(base.transform, t);
+    const x0 = tx[4] / base.width, x1 = (tx[4] + (it.width || 0) * base.scale) / base.width;
+    const k = keep.findIndex(([a, b]) => x0 >= a - 0.005 && x0 < b);
+    if (k >= 0) ends[k] = Math.max(ends[k], Math.min(x1, keep[k + 1]?.[0] ?? 1));
+  }
+  // a little breathing room, but never reaching into the next column's text
+  return keep.map(([a], k) => [
+    Math.max(0, a - 0.012, k > 0 ? ends[k - 1] + 0.003 : 0),
+    Math.min(1, ends[k] + 0.012, k < keep.length - 1 ? keep[k + 1][0] - 0.003 : 1),
+  ]);
+}
+
 // Invisible, selectable text laid over the drawn page, so a long press selects words like on any web page.
 // Sizes follow --sf (CSS pixels per PDF unit), kept up to date as the page is resized.
 function textLayer(items, styles, base) {
@@ -153,7 +207,7 @@ function textLayer(items, styles, base) {
   return layer;
 }
 
-export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false } = {}) {
+export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false, columns = false } = {}) {
   const page = await pdf.getPage(n + 1);
   const base = page.getViewport({ scale: 1 });
   const content = await page.getTextContent();
@@ -161,7 +215,10 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false 
   const box = trim ? textBox(content.items, base) : { x: null, y: null };
   const span = box.x;
   const ts = span ? 1 / (span[1] - span[0]) : 1;
-  const cssWidth = Math.max(width || 0, host.clientWidth || 700) * ts;
+  const cols = textColumns(content.items, base);
+  // in column view a column fills the width, so draw sharp enough for the narrowest one
+  const tsDraw = columns && cols ? Math.max(ts, ...cols.map(([a, b]) => 1 / (b - a))) : ts;
+  const cssWidth = Math.max(width || 0, host.clientWidth || 700) * tsDraw;
   const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   const scale = Math.min(cssWidth * dpr, 4096) / base.width;
   const vp = page.getViewport({ scale });
@@ -174,6 +231,7 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false 
   sheet.style.aspectRatio = `${base.width} / ${base.height}`;
   if (span) { frame.style.setProperty('--ts', ts.toFixed(4)); frame.style.setProperty('--tx0', span[0].toFixed(4)); frame.dataset.tx = span.join(','); }
   if (box.y) frame.dataset.ty = box.y.join(','); // where the text starts and ends down the page
+  if (cols) frame.dataset.cols = JSON.stringify(cols.map(([a, b]) => [+a.toFixed(4), +b.toFixed(4)]));
   const canvas = document.createElement('canvas');
   canvas.width = Math.floor(vp.width);
   canvas.height = Math.floor(vp.height);
