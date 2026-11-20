@@ -5104,8 +5104,53 @@ function bindJog(el) {
 // On phones the top bar slides away while you read and comes back when you scroll up.
 let lastScrollY = 0;
 let scrollAcc = 0;
+// A page's label only gets its frosted backing once it's stuck under the headers (then the page scrolls
+// beneath it); until then it's see-through, so the tabs and arrows beside it show and can be tapped.
+let stuckRaf = 0;
+const stuckNow = new Set();
+function markStuck() {
+  if (stuckRaf) return;
+  stuckRaf = requestAnimationFrame(() => {
+    stuckRaf = 0;
+    const view = document.body.dataset.view === 'reader' ? $('#reader') : $('#results');
+    const now = new Set();
+    for (const art of view.querySelectorAll('.page:not([hidden])')) {
+      const a = art.getBoundingClientRect();
+      if (a.top > 320) break;
+      if (a.bottom < 0) continue;
+      const head = art.firstElementChild;
+      if (head?.classList.contains('page-head') && head.getBoundingClientRect().top - a.top > 0.5) now.add(head);
+    }
+    for (const h of stuckNow) if (!now.has(h)) h.classList.remove('stuck');
+    for (const h of now) h.classList.add('stuck');
+    stuckNow.clear();
+    now.forEach((h) => stuckNow.add(h));
+  });
+}
+addEventListener('scroll', markStuck, { passive: true });
+addEventListener('resize', markStuck);
+
+// The headers stuck under the top bar glide up and down with it (moved with transforms, not by animating
+// their sticky position, so nothing gaps or stutters while you scroll).
+const BAR_EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
 function setBarHidden(h) {
-  if (document.body.classList.contains('bar-hidden') !== h) document.body.classList.toggle('bar-hidden', h);
+  const b = document.body;
+  if (b.classList.contains('bar-hidden') === h) return;
+  const heads = [];
+  if (!reduceMotion()) {
+    const view = b.dataset.view === 'reader' ? $('#reader') : $('#results');
+    for (const e of view.querySelectorAll('.doc-head, .page-head')) {
+      const r = e.getBoundingClientRect();
+      if (r.bottom < -2 || r.top > 240) continue;
+      heads.push([e, r.top]);
+    }
+  }
+  b.classList.toggle('bar-hidden', h);
+  markStuck();
+  for (const [e, t] of heads) {
+    const d = t - e.getBoundingClientRect().top;
+    if (Math.abs(d) > 0.5) e.animate([{ transform: `translateY(${d}px)` }, { transform: 'none' }], { duration: 280, easing: BAR_EASE });
+  }
 }
 function onScrollBars() {
   const y = scrollY;

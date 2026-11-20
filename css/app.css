@@ -249,7 +249,7 @@ body.side-resizing.side-collapsing .sidebar { opacity: 0.45; }
 
 /* ===== Top bar ===== */
 .topbar {
-  position: sticky; top: 0; z-index: 20; transition: transform 0.25s ease;
+  position: sticky; top: 0; z-index: 20; transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
   padding: 14px 28px 0;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   -webkit-backdrop-filter: saturate(160%) blur(14px);
@@ -544,14 +544,23 @@ mark.m.cur { background: var(--cur); color: var(--cur-ink); box-shadow: 0 0 0 2p
 .gap.has-up { margin-bottom: -30px; }
 .gap-row { display: flex; align-items: center; gap: 8px; }
 .gap-tab {
-  pointer-events: auto; position: relative; z-index: 2; display: inline-flex; align-items: center; gap: 4px;
-  height: 28px; padding: 0 12px 0 9px; background: var(--card); border: 1px solid var(--line);
+  pointer-events: auto; position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 4px;
+  height: 28px; padding: 0 12px 0 9px; background: var(--bg); border: 1px solid var(--line-2); --r: 9px;
   font-size: 12.5px; font-weight: 600; color: var(--ink-2); white-space: nowrap; transition: color 0.15s;
 }
 .gap-tab svg { width: 14px; height: 14px; stroke-width: 2.3; }
-.gap-tab.down { border-top-color: var(--card); border-radius: 0 0 12px 12px; transform: translateY(-1px); box-shadow: 0 7px 12px -9px rgba(30, 25, 15, 0.45); }
-.gap-tab.up { border-bottom-color: var(--card); border-radius: 12px 12px 0 0; transform: translateY(1px); box-shadow: 0 -5px 10px -9px rgba(30, 25, 15, 0.35); }
-.page.extra + .gap .gap-tab.down { background: var(--card-2); border-top-color: var(--card-2); }
+.gap-tab.down { border-top-color: transparent; border-radius: 0 0 12px 12px; transform: translateY(-1px); }
+.gap-tab.up { border-bottom-color: transparent; border-radius: 12px 12px 0 0; transform: translateY(1px); }
+/* where a tab meets its page, its sides flare out in a curve (the tab's rounding, turned inside out) */
+.gap-tab::before, .gap-tab::after { content: ""; position: absolute; width: var(--r); height: var(--r); pointer-events: none; }
+.gap-tab.down::before, .gap-tab.down::after { top: -1px; }
+.gap-tab.up::before, .gap-tab.up::after { bottom: -1px; }
+.gap-tab::before { left: calc(1px - var(--r) - 1px); }
+.gap-tab::after { right: calc(1px - var(--r) - 1px); }
+.gap-tab.down::before { background: radial-gradient(circle at 0 100%, transparent calc(var(--r) - 1px), var(--line-2) calc(var(--r) - 0.6px), var(--line-2) calc(var(--r) + 0.2px), var(--bg) calc(var(--r) + 0.7px)); }
+.gap-tab.down::after { background: radial-gradient(circle at 100% 100%, transparent calc(var(--r) - 1px), var(--line-2) calc(var(--r) - 0.6px), var(--line-2) calc(var(--r) + 0.2px), var(--bg) calc(var(--r) + 0.7px)); }
+.gap-tab.up::before { background: radial-gradient(circle at 0 0, transparent calc(var(--r) - 1px), var(--line-2) calc(var(--r) - 0.6px), var(--line-2) calc(var(--r) + 0.2px), var(--bg) calc(var(--r) + 0.7px)); }
+.gap-tab.up::after { background: radial-gradient(circle at 100% 0, transparent calc(var(--r) - 1px), var(--line-2) calc(var(--r) - 0.6px), var(--line-2) calc(var(--r) + 0.2px), var(--bg) calc(var(--r) + 0.7px)); }
 .gap-tab:hover { color: var(--accent); }
 .gap-all { pointer-events: auto; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
 .gap-all svg { width: 13px; height: 13px; }
@@ -771,7 +780,6 @@ dialog[open] { animation: dlg 0.2s ease-out; }
   .m-count:disabled { opacity: 0.5; }
   body.has-dock .toasts { bottom: calc(72px + env(safe-area-inset-bottom)); }
   body.bar-hidden .topbar { transform: translateY(calc(-100% - 2px)); }
-  .doc-head { transition: top 0.25s ease; }
   body.bar-hidden .doc-head { top: 0; }
   .menu-item { min-height: 40px; font-size: 14px; }
   .menu-head { padding-top: 4px; }
@@ -938,9 +946,8 @@ button svg { pointer-events: none; }
 
 /* A page's label stays in view while you read that page (under the document's name), so it's never hidden */
 .page-head {
-  position: sticky; top: calc(var(--top-h) + 48px); z-index: 1; margin-inline: -6px; padding-inline: 12px 10px;
-  background: color-mix(in srgb, var(--bg) 92%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-  border-radius: 0 0 10px 10px; transition: top 0.25s ease;
+  position: sticky; top: calc(var(--top-h) + 48px); z-index: 4; margin-inline: -6px; padding-inline: 12px 10px;
+  border-radius: 0 0 10px 10px; pointer-events: none;
 }
 #reader .page-head, .doc-sec.same-doc .page-head { top: var(--top-h); }
 body.bar-hidden .page-head { top: 48px; }
@@ -989,7 +996,10 @@ body.undo-on .d-undo { display: inline-flex; animation: undoIn 0.32s cubic-bezie
 .doc-pages { position: relative; }
 .gap-stage { position: absolute; left: 0; right: 0; visibility: hidden; pointer-events: none; z-index: -1; }
 .gap.busy [data-act] { pointer-events: none; }
-.gap.busy .gap-tab::after, .gap.busy .gap-all::after {
+.gap.busy .gap-tab svg { animation: tabBusy 0.6s ease-in-out infinite alternate; }
+.gap.busy .gap-tab { color: var(--accent); }
+@keyframes tabBusy { to { transform: translateY(2px); opacity: 0.5; } }
+.gap.busy .gap-all::after {
   content: ""; width: 11px; height: 11px; margin-left: 4px; border: 2px solid currentColor; border-right-color: transparent;
   border-radius: 50%; animation: spin 0.7s linear infinite;
 }
@@ -1332,3 +1342,11 @@ body.nav-swipe #results .page.hit .page-body, body.nav-swipe #results .page.visi
 .visit-back { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px 0 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12.5px; font-weight: 650; white-space: nowrap; }
 .visit-back svg { width: 15px; height: 15px; stroke-width: 2.2; }
 .visit-back:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+/* each page card keeps its own layers (paper grain, arrows, hit marks) to itself, so the translucent
+   headers above always pass over them */
+.page-body { isolation: isolate; }
+.page-head > * { pointer-events: auto; }
+.page-head > .grow { pointer-events: none; }
+.page-head.stuck { pointer-events: auto; background: color-mix(in srgb, var(--bg) 90%, transparent); -webkit-backdrop-filter: blur(12px) saturate(150%); backdrop-filter: blur(12px) saturate(150%); }
+.doc-head { background: color-mix(in srgb, var(--bg) 90%, transparent); -webkit-backdrop-filter: blur(12px) saturate(150%); backdrop-filter: blur(12px) saturate(150%); }
