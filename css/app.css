@@ -1297,3 +1297,38 @@ html.paper.doc-dark .pdf-page::after, html.paper[data-theme="dark"] .page-body:h
 @media (hover: hover) and (pointer: fine) { .tbar-arrow:not([hidden]) { display: grid; } }
 .tbar-row.dragging { cursor: grabbing; scroll-snap-type: none; }
 .tbar-row.dragging .tcard { pointer-events: none; }
+
+/* Lines around hits: − ±N + */
+.crop-step { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px; }
+.crop-step button, .stepper button { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; color: var(--ink-2); }
+.crop-step button:hover:not(:disabled), .stepper button:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.crop-step button:disabled, .stepper button:disabled { opacity: 0.3; }
+.crop-step svg, .stepper svg { width: 16px; height: 16px; stroke-width: 2.4; }
+.crop-step output, .stepper output { min-width: 30px; text-align: center; font-size: 13px; font-weight: 650; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.stepper { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 11px; background: var(--bg); border: 1px solid var(--line); }
+.stepper button { width: 34px; height: 32px; }
+
+/* A cropped result's top and bottom borders split around an arrow, like the side arrows */
+.page-body.cropped, .page-body.cropped:has(.pdf-frame) { overflow: visible; }
+.page-body.cropped > .crop-clip { border-radius: 13px; }
+.page-body.cropped:has(.page-text) > .crop-clip { border-radius: 0; }
+.edge-nav { position: absolute; left: 50%; z-index: 3; display: grid; place-items: center; width: 72px; height: 20px; padding: 0; transform: translate(-50%, -50%); background: none; color: var(--ink-2); transition: color 0.15s; }
+.edge-nav.top { top: -0.5px; }
+.edge-nav.bottom { top: calc(100% + 0.5px); }
+.edge-nav .cn-eye { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.edge-nav .cn-eye path { fill: none; stroke: var(--line-2); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.edge-nav .cn-eye path.f { fill: var(--bg); stroke: none; }
+.edge-nav > svg:not(.cn-eye) { position: relative; width: 14px; height: 14px; stroke-width: 2.6; }
+.edge-nav:hover, .edge-nav:active { color: var(--accent); }
+.edge-nav::before { content: ""; position: absolute; inset: -12px -10px; }
+/* the page label sits above the card: keep the top arrow clear of it */
+.page:has(.edge-nav.top) .page-head { padding-bottom: 12px; }
+
+/* Swipe mode: no tabs between results; a result can show the page before or after it instead */
+body.nav-swipe #results .gap { display: none; }
+body.nav-swipe #results .page.hit .page-body, body.nav-swipe #results .page.visit .page-body { touch-action: pan-y pinch-zoom; }
+.page.visit-stage { position: absolute; visibility: hidden; pointer-events: none; left: -200vw; }
+.page.visit .page-body { background: var(--card); }
+.visit-back { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px 0 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12.5px; font-weight: 650; white-space: nowrap; }
+.visit-back svg { width: 15px; height: 15px; stroke-width: 2.2; }
+.visit-back:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }

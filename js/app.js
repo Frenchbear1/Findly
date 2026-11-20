@@ -94,7 +94,7 @@ const I = {
 const PREF_KEY = 'instant-search:prefs';
 const PREFS_V = 2;
 const prefs = Object.assign(
-  { mode: 'all', matchCase: false, wholeWord: false, near: 8, sort: 'library', view: 'original', theme: 'auto', q: '', zoom: 'width', compact: false, sideHidden: false, keys: {}, v: PREFS_V, crop: true, cropLines: 3, trim: true, columns: false },
+  { mode: 'all', matchCase: false, wholeWord: false, near: 8, sort: 'library', view: 'original', theme: 'auto', q: '', zoom: 'width', compact: false, sideHidden: false, keys: {}, v: PREFS_V, crop: true, cropLines: 3, trim: true, columns: false, pageNav: 'tabs' },
   (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch { return {}; } })()
 );
 // reading themes replace the old light/dark/auto switch
@@ -611,6 +611,38 @@ function applyCrop(art) {
   body.classList.toggle('cropped', !!hits);
   body.classList.toggle('cut-top', !!hits && hits[0] > (ty?.[0] || 0) + 0.005);
   body.classList.toggle('cut-bottom', !!hits && hits[1] < (ty?.[1] ?? 1) - 0.005);
+  edgeNavs(body, body.classList.contains('cut-top'), body.classList.contains('cut-bottom'));
+}
+// Arrows set into the top and bottom borders of a cropped result: tap to open the page up or down.
+const EYE_H = 'M0 10C13 10 16 1.5 27 1.5L49 1.5C60 1.5 63 10 76 10C63 10 60 18.5 49 18.5L27 18.5C16 18.5 13 10 0 10';
+function edgeNavs(body, top, bottom) {
+  for (const b of body.querySelectorAll(':scope > .edge-nav')) b.remove();
+  const make = (side) => {
+    const b = el('button', `edge-nav ${side}`, `<svg class="cn-eye" viewBox="0 0 76 20" preserveAspectRatio="none"><path class="f" d="${EYE_H}Z"/><path d="${EYE_H}"/></svg>${side === 'top' ? I.up : I.down}`);
+    b.dataset.act = `edge-${side}`;
+    b.setAttribute('aria-label', side === 'top' ? 'Show the page above this' : 'Show the rest of the page below');
+    body.append(b);
+  };
+  if (top) make('top');
+  if (bottom) make('bottom');
+}
+function expandEdge(art, side) {
+  const key = pkey(art.dataset.doc, Number(art.dataset.n));
+  record(side === 'top' ? 'Show above' : 'Show below');
+  cropOpen.set(key, { ...cropOpen.get(key), [side]: true });
+  const body = art.lastElementChild;
+  const anchor = body.querySelector('.box.m, mark.m');
+  const before = anchor?.getBoundingClientRect().top;
+  const h0 = body.offsetHeight;
+  applyCrop(art);
+  if (side === 'top' && before != null) {
+    const d = anchor.getBoundingClientRect().top - before;
+    if (d) window.scrollBy({ top: d, behavior: 'instant' });
+  }
+  const added = body.offsetHeight - h0;
+  if (added > 0 && !reduceMotion()) {
+    body.animate([{ clipPath: side === 'top' ? `inset(${added}px 0 0 0)` : `inset(0 0 ${added}px 0)` }, { clipPath: 'inset(0 0 0 0)' }], { duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+  }
 }
 // Open a cropped page out to the whole page ('all'), or crop it to the hits again ('crop'), keeping the
 // hits where they are on screen.
@@ -866,6 +898,7 @@ function layoutPieces(art, body, content, plan) {
   art._band = null;
   art._regions = plan.pieces.map((p) => ({ x: p.span, y: p.band }));
   art._plan = plan;
+  edgeNavs(body, plan.pieces.some((p) => p.cutA), plan.pieces.some((p) => p.cutB));
 }
 // The border splits around a side arrow and closes again after it, like a venturi run backwards.
 const EYE = 'M10 0C10 13 1.5 16 1.5 27L1.5 49C1.5 60 10 63 10 76C10 63 18.5 60 18.5 49L18.5 27C18.5 16 10 13 10 0';
@@ -998,6 +1031,151 @@ function setCropLines(n) {
   savePrefs();
   syncControls();
   if (prefs.crop) recropAll();
+}
+
+function setPageNav(v) {
+  if (prefs.pageNav === v) return;
+  record(v === 'swipe' ? 'Swipe for pages' : 'Tabs for pages');
+  prefs.pageNav = v;
+  savePrefs();
+  syncControls();
+  redrawMenu?.();
+  if (v === 'swipe' && !localStorage.getItem('instant-search:swipe-told')) {
+    toast('Swipe a result sideways for the page before or after it');
+    try { localStorage.setItem('instant-search:swipe-told', '1'); } catch {}
+  }
+}
+
+// ---------- swiping a result to the page before or after it ----------
+// The next (or previous) page slides in over the result, as a whole page; a button by the page number
+// brings the result back. The list of results never grows.
+function visitEl(home, n) {
+  const v = home._v;
+  const doc = docById(home.dataset.doc);
+  const art = el('article', 'page extra visit');
+  art.dataset.doc = doc.id;
+  art.dataset.n = n;
+  art._v = v;
+  art._ctx = true;
+  art._flat = home._flat;
+  art._home = home;
+  const info = v.info.get(pkey(doc.id, n));
+  const hn = Number(home.dataset.n);
+  const head = el('header', 'page-head', `<span class="pno">Page ${n + 1}</span>${info ? `<span class="phits">${fmt(info.ranges.length)}</span>` : ''}<span class="grow"></span><button class="visit-back" data-act="visit-back" title="Back to the result">${I.undo}Page ${hn + 1}</button>`);
+  const body = el('div', 'page-body');
+  body.style.minHeight = Math.round(home.lastElementChild.offsetHeight) + 'px';
+  art.append(head, body);
+  return art;
+}
+async function goVisit(home, n, dir, rec = true) {
+  const cur = home._visit || null;
+  const shown = cur || home;
+  const curN = Number(shown.dataset.n);
+  const homeN = Number(home.dataset.n);
+  if (n === curN || !shown.isConnected || shown._busy) return;
+  const count = S.texts.get(home.dataset.doc)?.length || 0;
+  if (n < 0 || n >= count) { // the document ends here: a little bump
+    if (!reduceMotion()) shown.animate([{ transform: 'none' }, { transform: `translateX(${-dir * 18}px)` }, { transform: 'none' }], { duration: 260, easing: 'ease-out' });
+    return;
+  }
+  if (rec) recordCustom(`Page ${n + 1}`, () => goVisit(home, curN, -dir, false), () => goVisit(home, n, dir, false));
+  shown._busy = true;
+  let next = home;
+  if (n !== homeN) {
+    next = visitEl(home, n);
+    // drawn out of sight first, then swapped in all at once
+    next.classList.add('visit-stage');
+    next.style.width = shown.offsetWidth + 'px';
+    shown.after(next);
+    await Promise.race([fill(next), new Promise((r) => setTimeout(r, 2500))]);
+    next.lastElementChild.style.minHeight = '';
+    next.classList.remove('visit-stage');
+    next.style.width = '';
+    if (!shown.isConnected) { next.remove(); return; }
+  }
+  const html = document.documentElement;
+  html.style.overflowAnchor = 'none';
+  const top = shown.getBoundingClientRect().top;
+  if (next === home) { home.hidden = false; cur?.after(home); }
+  if (cur) { cur._cleanup?.(); cur.remove(); }
+  else home.hidden = true;
+  home._visit = next === home ? null : next;
+  shown._busy = false;
+  const d = next.getBoundingClientRect().top - top;
+  if (d) window.scrollBy({ top: d, behavior: 'instant' });
+  // starting a page after: from its top; when it's above the result, the top is where it was too
+  if (next.getBoundingClientRect().top < topOffset()) next.scrollIntoView({ block: 'start', behavior: 'instant' }), window.scrollBy({ top: -topOffset() - 8, behavior: 'instant' });
+  requestAnimationFrame(() => { html.style.overflowAnchor = ''; });
+  if (!reduceMotion()) {
+    next.animate(dir ? [{ transform: `translateX(${dir * 42}%)`, opacity: 0.2 }, { transform: 'none', opacity: 1 }] : [{ opacity: 0 }, { opacity: 1 }], { duration: 380, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
+  }
+}
+function bindPageSwipe(host) {
+  let s = null;
+  const pageOf = (t) => {
+    const art = t.closest('.page.hit, .page.visit');
+    return art && !art._web && art._v?.kind === 'results' ? art : null;
+  };
+  host.addEventListener('pointerdown', (e) => {
+    s = null;
+    if (prefs.pageNav !== 'swipe' || e.pointerType === 'mouse' || e.target.closest('button, a, input, .pdf-text span')) return;
+    const art = pageOf(e.target);
+    if (art) s = { art, x: e.clientX, y: e.clientY, t: performance.now(), on: false, id: e.pointerId };
+  }, { passive: true });
+  host.addEventListener('pointermove', (e) => {
+    if (!s || e.pointerId !== s.id) return;
+    const dx = e.clientX - s.x, dy = e.clientY - s.y;
+    if (!s.on) {
+      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) { s = null; return; } // scrolling
+      if (Math.abs(dx) < 12 || performance.now() - s.t > 600) return; // a long press is for selecting text
+      if (getSelection?.()?.toString()) { s = null; return; }
+      s.on = true;
+    }
+    s.art.lastElementChild.style.transform = `translateX(${dx * 0.55}px)`;
+    s.art.lastElementChild.style.opacity = String(1 - Math.min(0.35, Math.abs(dx) / 900));
+  }, { passive: true });
+  const end = (e, ok) => {
+    if (!s || e.pointerId !== s.id) return;
+    const { art, on } = s;
+    const dx = e.clientX - s.x;
+    const v = Math.abs(dx) / Math.max(1, performance.now() - s.t);
+    s = null;
+    if (!on) return;
+    const body = art.lastElementChild;
+    body.style.transform = '';
+    body.style.opacity = '';
+    art._swiped = performance.now();
+    if (!ok || (Math.abs(dx) < 70 && v < 0.5)) {
+      if (!reduceMotion()) body.animate([{ transform: `translateX(${dx * 0.55}px)` }, { transform: 'none' }], { duration: 220, easing: 'ease-out' });
+      return;
+    }
+    const dir = dx < 0 ? 1 : -1;
+    goVisit(art._home || art, Number(art.dataset.n) + dir, dir);
+  };
+  host.addEventListener('pointerup', (e) => end(e, true));
+  host.addEventListener('pointercancel', (e) => end(e, false));
+  // a swipe isn't a tap on the page
+  host.addEventListener('click', (e) => { const art = e.target.closest?.('.page'); if (art && performance.now() - (art._swiped || 0) < 450) { e.stopPropagation(); e.preventDefault(); } }, true);
+  // a trackpad's sideways swipe does the same
+  let acc = 0, quiet = 0, tmr;
+  host.addEventListener('wheel', (e) => {
+    if (prefs.pageNav !== 'swipe' || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+    const art = pageOf(e.target);
+    if (!art) return;
+    const body = art.lastElementChild;
+    if (body.scrollWidth > body.clientWidth + 4) return; // it scrolls sideways itself
+    e.preventDefault();
+    if (performance.now() < quiet) return;
+    acc += e.deltaX;
+    clearTimeout(tmr);
+    tmr = setTimeout(() => (acc = 0), 220);
+    if (Math.abs(acc) > 120) {
+      const dir = acc > 0 ? 1 : -1;
+      acc = 0;
+      quiet = performance.now() + 700;
+      goVisit(art._home || art, Number(art.dataset.n) + dir, dir);
+    }
+  }, { passive: false });
 }
 
 // ---------- gaps between hit pages ----------
@@ -1343,6 +1521,7 @@ async function goTo(v, k, { instant = false } = {}) {
   if (!loc) return;
   const art = artFor(v, loc.R.doc.id, loc.p.n);
   if (!art) return;
+  if (art._visit) await goVisit(art, Number(art.dataset.n), 0, false);
   await fill(art);
   if (v.cur !== k) return;
   if (art._web) {
@@ -1648,8 +1827,11 @@ function syncControls() {
   $('#cropBtn').setAttribute('aria-pressed', String(!!prefs.crop));
   $('#trimBtn').setAttribute('aria-pressed', String(!!prefs.trim));
   $('#cropSpan').hidden = !prefs.crop;
-  $('#cropLines').value = prefs.cropLines;
   $('#cropOut').textContent = `±${prefs.cropLines}`;
+  $('#cropMinus').disabled = prefs.cropLines <= 1;
+  $('#cropPlus').disabled = prefs.cropLines >= 15;
+  $('#navBtn').setAttribute('aria-pressed', String(prefs.pageNav === 'swipe'));
+  document.body.classList.toggle('nav-swipe', prefs.pageNav === 'swipe');
   q.placeholder = {
     any: 'Pages with any of these words…',
     all: 'Pages with all of these words…',
@@ -3793,7 +3975,10 @@ function bind() {
   $('#fitPage').addEventListener('click', () => setFit('page'));
   $('#cropBtn').addEventListener('click', () => setCrop(!prefs.crop));
   $('#trimBtn').addEventListener('click', () => setTrim(!prefs.trim));
-  $('#cropLines').addEventListener('input', (e) => setCropLines(e.target.value));
+  $('#cropMinus').addEventListener('click', () => setCropLines(prefs.cropLines - 1));
+  $('#cropPlus').addEventListener('click', () => setCropLines(prefs.cropLines + 1));
+  $('#navBtn').addEventListener('click', () => setPageNav(prefs.pageNav === 'swipe' ? 'tabs' : 'swipe'));
+  bindPageSwipe($('#results'));
   let resizeTimer;
   addEventListener('resize', () => {
     clearTimeout(resizeTimer);
@@ -4007,6 +4192,8 @@ function bind() {
     else if (act === 'web' && art) { override.set(pkey(art.dataset.doc, WEB), 'original'); openReader(art.dataset.doc, Number(art.dataset.n)); }
     else if (act === 'pmode' && art) togglePageMode(art);
     else if ((act === 'col-next' || act === 'col-prev') && art) shiftColumn(art, Number(b.dataset.piece), act === 'col-next' ? 1 : -1);
+    else if ((act === 'edge-top' || act === 'edge-bottom') && art) expandEdge(art, act === 'edge-top' ? 'top' : 'bottom');
+    else if (act === 'visit-back' && art?._home) goVisit(art._home, Number(art._home.dataset.n), Number(art.dataset.n) > Number(art._home.dataset.n) ? -1 : 1);
   };
   // a tap that only clears a text selection shouldn't also open the page's menu
   let hadSelection = false;
@@ -4612,6 +4799,10 @@ function moreItems() {
       (v) => (v === 'crop' ? setCrop(!prefs.crop) : setTrim(!prefs.trim))) });
     if (crop && prefs.crop) items.push({ node: cropSliderRow });
   }
+  if (active === results) {
+    items.push({ header: 'Next & previous page' }, { node: panelRow('seg-row', `<div class="seg">${[['tabs', 'Tabs'], ['swipe', 'Swipe']].map(([k, l]) => `<button data-v="${k}" ${on(prefs.pageNav === k)}>${l}</button>`).join('')}</div>`,
+      (v) => setPageNav(v)) });
+  }
   items.push({ header: 'Search' }, { node: panelRow('two', `<button class="pk-tog" data-v="case" ${on(prefs.matchCase)}><i>Aa</i>Match case</button><button class="pk-tog" data-v="word" ${on(prefs.wholeWord)}><i><u>ab</u></i>Whole words</button>`,
     (v) => { record(v === 'case' ? 'Match case' : 'Whole words'); if (v === 'case') prefs.matchCase = !prefs.matchCase; else prefs.wholeWord = !prefs.wholeWord; syncControls(); runSearch(); }) });
   if (active === results) {
@@ -4857,10 +5048,18 @@ async function savePage(art, { section, kind, name }) {
 
 // The "lines around the hits" slider, as a row in the phone's options menu.
 function cropSliderRow() {
-  const row = el('label', 'menu-range', `<span>Lines around hits</span><input type="range" min="1" max="15" step="1" value="${prefs.cropLines}" aria-label="Lines shown around the hits"><output>±${prefs.cropLines}</output>`);
-  const input = row.querySelector('input');
-  input.addEventListener('input', () => { setCropLines(input.value); row.querySelector('output').textContent = `±${prefs.cropLines}`; });
-  row.addEventListener('click', (e) => e.stopPropagation());
+  const row = el('div', 'menu-range', `<span>Lines around hits</span><span class="stepper"><button data-d="-1" aria-label="Fewer lines">${I.minus}</button><output>±${prefs.cropLines}</output><button data-d="1" aria-label="More lines">${I.plus}</button></span>`);
+  const sync = () => {
+    row.querySelector('output').textContent = `±${prefs.cropLines}`;
+    row.querySelector('[data-d="-1"]').disabled = prefs.cropLines <= 1;
+    row.querySelector('[data-d="1"]').disabled = prefs.cropLines >= 15;
+  };
+  sync();
+  row.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const b = e.target.closest('[data-d]');
+    if (b) { setCropLines(prefs.cropLines + Number(b.dataset.d)); sync(); }
+  });
   return row;
 }
 
