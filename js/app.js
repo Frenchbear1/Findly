@@ -1077,14 +1077,27 @@ function visitEl(home, n) {
   art.append(head, body);
   return art;
 }
-async function goVisit(home, n, dir, rec = true) {
+// Start drawing the page before/after off-screen (while your finger is still moving).
+function prepVisit(home, n) {
+  const shown = home._visit || home;
+  if (n === Number(home.dataset.n)) return null;
+  const next = visitEl(home, n);
+  next.classList.add('visit-stage');
+  next.style.width = shown.offsetWidth + 'px';
+  shown.after(next);
+  next._ready = Promise.race([fill(next), new Promise((r) => setTimeout(r, 2500))]);
+  return next;
+}
+async function goVisit(home, n, dir, rec = true, prepped = null) {
   const cur = home._visit || null;
   const shown = cur || home;
   const curN = Number(shown.dataset.n);
   const homeN = Number(home.dataset.n);
-  if (n === curN || !shown.isConnected || shown._busy) return;
+  const drop = () => { if (prepped && prepped !== home) { prepped._cleanup?.(); prepped.remove(); } };
+  if (n === curN || !shown.isConnected || shown._busy) return drop();
   const count = S.texts.get(home.dataset.doc)?.length || 0;
   if (n < 0 || n >= count) { // the document ends here: a little bump
+    drop();
     if (!reduceMotion()) shown.animate([{ transform: 'none' }, { transform: `translateX(${-dir * 18}px)` }, { transform: 'none' }], { duration: 260, easing: 'ease-out' });
     return;
   }
@@ -1092,75 +1105,122 @@ async function goVisit(home, n, dir, rec = true) {
   shown._busy = true;
   let next = home;
   if (n !== homeN) {
-    next = visitEl(home, n);
-    // drawn out of sight first, then swapped in all at once
-    next.classList.add('visit-stage');
-    next.style.width = shown.offsetWidth + 'px';
-    shown.after(next);
-    await Promise.race([fill(next), new Promise((r) => setTimeout(r, 2500))]);
+    next = prepped && Number(prepped.dataset.n) === n ? prepped : (drop(), prepVisit(home, n));
+    await next._ready;
+    if (!shown.isConnected) { next.remove(); shown._busy = false; return; }
     next.lastElementChild.style.minHeight = '';
     next.classList.remove('visit-stage');
     next.style.width = '';
-    if (!shown.isConnected) { next.remove(); return; }
-  }
+  } else drop();
+
+  // both pages at once: the one you're leaving lifts off and fades, the new one slides in under the veil
   const html = document.documentElement;
   html.style.overflowAnchor = 'none';
   const top = shown.getBoundingClientRect().top;
-  if (next === home) { home.hidden = false; cur?.after(home); }
-  if (cur) { cur._cleanup?.(); cur.remove(); }
-  else home.hidden = true;
+  const ghost = !reduceMotion() && dir;
+  if (ghost) {
+    const parent = shown.parentElement;
+    Object.assign(shown.style, { position: 'absolute', zIndex: '3', pointerEvents: 'none', top: shown.offsetTop + 'px', left: shown.offsetLeft + 'px', width: shown.offsetWidth + 'px', margin: '0' });
+    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+  }
+  if (next === home) home.hidden = false;
+  else if (next.previousElementSibling !== shown) shown.after(next);
+  if (!ghost) { if (cur) { cur._cleanup?.(); cur.remove(); } else home.hidden = true; }
   home._visit = next === home ? null : next;
-  shown._busy = false;
   const d = next.getBoundingClientRect().top - top;
   if (d) window.scrollBy({ top: d, behavior: 'instant' });
-  // starting a page after: from its top; when it's above the result, the top is where it was too
-  if (next.getBoundingClientRect().top < topOffset()) next.scrollIntoView({ block: 'start', behavior: 'instant' }), window.scrollBy({ top: -topOffset() - 8, behavior: 'instant' });
-  requestAnimationFrame(() => { html.style.overflowAnchor = ''; });
-  if (!reduceMotion()) {
-    next.animate(dir ? [{ transform: `translateX(${dir * 42}%)`, opacity: 0.2 }, { transform: 'none', opacity: 1 }] : [{ opacity: 0 }, { opacity: 1 }], { duration: 380, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
+  if (ghost) shown.style.top = next.offsetTop + 'px';
+  if (next.getBoundingClientRect().top < topOffset() - 40) { // start a page you've moved to at its top
+    window.scrollBy({ top: next.getBoundingClientRect().top - topOffset() - 8, behavior: 'instant' });
   }
+  requestAnimationFrame(() => { html.style.overflowAnchor = ''; });
+  const finish = () => {
+    if (cur) { cur._cleanup?.(); cur.remove(); }
+    else if (shown === home) home.hidden = true;
+    for (const k of ['position', 'zIndex', 'pointerEvents', 'top', 'left', 'width', 'margin', 'transform', 'opacity']) shown.style[k] = '';
+    shown._busy = false;
+    markStuck();
+  };
+  if (!ghost) { shown._busy = false; if (!reduceMotion()) next.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260 }); markStuck(); return; }
+  const from = shown._drag || 0; // where the finger left it
+  const ease = 'cubic-bezier(0.25, 0.9, 0.3, 1)';
+  shown.animate([{ transform: `translateX(${from}px)`, opacity: shown._dragO ?? 1 }, { transform: `translateX(${-dir * 38}%) scale(0.96)`, opacity: 0 }], { duration: 420, easing: ease, fill: 'forwards' }).onfinish = finish;
+  next.animate([{ transform: `translateX(${dir * 30}%)`, opacity: 0, filter: 'blur(3px)' }, { transform: 'none', opacity: 1, filter: 'none' }], { duration: 460, easing: ease });
+  shown._drag = 0;
+  shown._dragO = null;
 }
 function bindPageSwipe(host) {
   let s = null;
+  const peek = el('div', 'swipe-peek');
+  document.body.append(peek);
   const pageOf = (t) => {
-    const art = t.closest('.page.hit, .page.visit');
-    return art && !art._web && art._v?.kind === 'results' ? art : null;
+    const art = t.closest?.('.page.hit, .page.visit');
+    return art && !art._web && !art.hidden && art._v?.kind === 'results' ? art : null;
   };
+  const reset = (art) => {
+    for (const k of ['transform', 'opacity', 'transition']) art.style[k] = '';
+    peek.className = 'swipe-peek';
+  };
+  const unprep = () => { if (s?.prep) { s.prep._cleanup?.(); s.prep.remove(); s.prep = null; } };
   host.addEventListener('pointerdown', (e) => {
     s = null;
-    if (prefs.pageNav !== 'swipe' || e.pointerType === 'mouse' || e.target.closest('button, a, input, .pdf-text span')) return;
+    if (prefs.pageNav !== 'swipe' || e.pointerType === 'mouse' || e.target.closest('button, a, input, textarea, .menu')) return;
     const art = pageOf(e.target);
-    if (art) s = { art, x: e.clientX, y: e.clientY, t: performance.now(), on: false, id: e.pointerId };
+    if (art && !art._busy) s = { art, x: e.clientX, y: e.clientY, t: performance.now(), moved: 0, on: false, id: e.pointerId, dir: 0, prep: null };
   }, { passive: true });
   host.addEventListener('pointermove', (e) => {
     if (!s || e.pointerId !== s.id) return;
     const dx = e.clientX - s.x, dy = e.clientY - s.y;
     if (!s.on) {
-      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) { s = null; return; } // scrolling
-      if (Math.abs(dx) < 12 || performance.now() - s.t > 600) return; // a long press is for selecting text
-      if (getSelection?.()?.toString()) { s = null; return; }
+      if (!s.moved && Math.hypot(dx, dy) > 5) s.moved = performance.now();
+      if (!s.moved && performance.now() - s.t > 420) { s = null; return; } // held still: that's a long press for selecting
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { s = null; return; } // scrolling
+      if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+      if (String(getSelection?.() || '').trim()) { s = null; return; }
       s.on = true;
+      s.art.style.transition = 'none';
     }
-    s.art.lastElementChild.style.transform = `translateX(${dx * 0.55}px)`;
-    s.art.lastElementChild.style.opacity = String(1 - Math.min(0.35, Math.abs(dx) / 900));
+    const dir = dx < 0 ? 1 : -1;
+    const home = s.art._home || s.art;
+    const n = Number(s.art.dataset.n) + dir;
+    const count = S.texts.get(home.dataset.doc)?.length || 0;
+    const edge = n < 0 || n >= count;
+    if (dir !== s.dir) { // heading the other way: get that page ready instead
+      unprep();
+      s.dir = dir;
+      if (!edge && n !== Number(home.dataset.n)) s.prep = prepVisit(home, n);
+    }
+    const k = Math.min(1, Math.abs(dx) / 160);
+    const move = edge ? dx * 0.25 : dx * 0.85;
+    s.art.style.transform = `translateX(${move}px)`;
+    s.art.style.opacity = String(edge ? 1 : 1 - k * 0.55);
+    s.art._drag = move;
+    s.art._dragO = edge ? 1 : 1 - k * 0.55;
+    peek.innerHTML = edge ? '' : `${dir < 0 ? I.arrowLeft : ''}<span>Page ${n + 1}</span>${dir > 0 ? `<i>${I.arrowLeft}</i>` : ''}`;
+    peek.className = `swipe-peek ${dir > 0 ? 'r' : 'l'}${edge ? '' : ' on'}${k >= 0.44 ? ' go' : ''}`;
+    peek.style.opacity = edge ? '0' : String(Math.min(1, k * 1.6));
   }, { passive: true });
   const end = (e, ok) => {
     if (!s || e.pointerId !== s.id) return;
-    const { art, on } = s;
+    const { art, on, prep } = s;
     const dx = e.clientX - s.x;
-    const v = Math.abs(dx) / Math.max(1, performance.now() - s.t);
+    const v = Math.abs(dx) / Math.max(1, performance.now() - (s.moved || s.t));
+    s.prep = null;
     s = null;
-    if (!on) return;
-    const body = art.lastElementChild;
-    body.style.transform = '';
-    body.style.opacity = '';
+    if (!on) { if (prep) { prep._cleanup?.(); prep.remove(); } return; }
     art._swiped = performance.now();
-    if (!ok || (Math.abs(dx) < 70 && v < 0.5)) {
-      if (!reduceMotion()) body.animate([{ transform: `translateX(${dx * 0.55}px)` }, { transform: 'none' }], { duration: 220, easing: 'ease-out' });
+    peek.className = 'swipe-peek';
+    if (!ok || (Math.abs(dx) < 70 && v < 0.45)) {
+      if (prep) { prep._cleanup?.(); prep.remove(); }
+      const from = art.style.transform, o = art.style.opacity;
+      reset(art);
+      art._drag = 0;
+      if (!reduceMotion()) art.animate([{ transform: from, opacity: o }, { transform: 'none', opacity: 1 }], { duration: 240, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
       return;
     }
     const dir = dx < 0 ? 1 : -1;
-    goVisit(art._home || art, Number(art.dataset.n) + dir, dir);
+    reset(art);
+    goVisit(art._home || art, Number(art.dataset.n) + dir, dir, true, prep);
   };
   host.addEventListener('pointerup', (e) => end(e, true));
   host.addEventListener('pointercancel', (e) => end(e, false));
@@ -1172,8 +1232,6 @@ function bindPageSwipe(host) {
     if (prefs.pageNav !== 'swipe' || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
     const art = pageOf(e.target);
     if (!art) return;
-    const body = art.lastElementChild;
-    if (body.scrollWidth > body.clientWidth + 4) return; // it scrolls sideways itself
     e.preventDefault();
     if (performance.now() < quiet) return;
     acc += e.deltaX;
