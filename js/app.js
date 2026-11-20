@@ -5,7 +5,7 @@ import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION } from './pdf.js';
 import { renderHtmlPage, forgetHtml, renderedText } from './htmlview.js';
 import { remoteFetch, remoteInfo, remoteChanged, download, documentLinks, looksLikeDocument, fileNameFor, editionKey, linkKey, linkSimilarity, SAME_DOC_SCORE, helper, NeedsHelper } from './remote.js';
 import { comboFromEvent, comboLabel, worksWhileTyping, isMac } from './keys.js';
-import { applyReadingTheme, openThemeSheet, THEME_DEFAULTS } from './themes.js';
+import { applyReadingTheme, openThemeBar, themeBarOpen, THEME_DEFAULTS } from './themes.js';
 import { initBoards } from './boards.js';
 
 // ---------- small helpers ----------
@@ -300,7 +300,7 @@ const artFor = (v, docId, n) => v.pageEls.get(pkey(docId, n)) || v.pageEls.get(p
 function webR(v, doc) { return v.list.find((r) => r.doc.id === doc.id && !r.flat) || null; }
 function webHeadHtml(v, doc) {
   const R = webR(v, doc);
-  const badge = R ? `<span class="phits">${plural(R.hits, 'hit')}</span>` : '';
+  const badge = R ? `<span class="phits" title="${plural(R.hits, 'hit')}">${fmt(R.hits)}</span>` : '';
   return `<span class="pno">Web page</span>${badge}<span class="grow"></span><button class="chip-btn" data-act="pmode" title="Show the page’s text instead, split into pages">${I.text}Text</button>`;
 }
 function webEl(v, doc, R) {
@@ -366,9 +366,8 @@ const ioFar = new IntersectionObserver(
 function headHtml(v, doc, n, ctx, flat = false) {
   const info = v.info.get(pkey(doc.id, n));
   let badge = '';
-  if (info && ctx) badge = `<span class="phits none">${plural(info.ranges.length, 'hit')} · ranked on its own</span>`;
-  else if (info) badge = `<span class="phits">${plural(info.ranges.length, 'hit')}</span>`;
-  else if (v.kind === 'results') badge = '<span class="phits none">No hits</span>';
+  if (info && ctx) badge = `<span class="phits none" title="${plural(info.ranges.length, 'hit')} — this page is also ranked on its own">${fmt(info.ranges.length)}</span>`;
+  else if (info) badge = `<span class="phits" title="${plural(info.ranges.length, 'hit')}">${fmt(info.ranges.length)}</span>`;
   let rank = '';
   if (flat && !ctx) {
     const i = v.list.findIndex((r) => r.flat && r.doc.id === doc.id && r.pages[0].n === n);
@@ -483,6 +482,7 @@ function fill(art) {
 }
 
 function unfill(art) {
+  art._plan = null;
   const body = art.lastElementChild;
   body.style.height = body.offsetHeight + 'px';
   art._cropRO?.disconnect();
@@ -635,31 +635,96 @@ function expandCrop(art, how) {
 // lines around its hits and filling the width. "Show the whole page" zooms back out to the full page.
 const COL_NAMES = 'abcdefgh';
 const boxCenter = (b) => parseFloat(b.style.left) / 100 + parseFloat(b.style.width) / 200;
+// Columns around one spot on the page, from only the text in rows y0..y1 — so a picture or heading that
+// runs across the page somewhere else doesn't hide the columns where your hit is. Returns [left, right]
+// spans, or null when the text there is one column.
+function localColumns(lines, y0, y1) {
+  if (!lines?.length) return null;
+  const N = 240;
+  const cov = new Float32Array(N);
+  let rows = 0;
+  for (let i = 0; i < lines.length; i += 4) {
+    const ov = Math.min(lines[i + 3], y1) - Math.max(lines[i + 2], y0);
+    if (ov <= 0) continue;
+    rows++;
+    const i0 = Math.max(0, Math.floor(lines[i] * N)), i1 = Math.min(N - 1, Math.ceil(lines[i + 1] * N) - 1);
+    for (let k = i0; k <= i1; k++) cov[k] += ov;
+  }
+  if (rows < 3) return null;
+  let lo = 0, hi = N - 1;
+  while (lo < N && !cov[lo]) lo++;
+  while (hi > lo && !cov[hi]) hi--;
+  if (hi - lo < N * 0.4) return null;
+  let max = 0;
+  for (let k = lo; k <= hi; k++) max = Math.max(max, cov[k]);
+  const quiet = (k) => cov[k] < max * 0.2; // a line or two crossing the gutter (a heading) is fine
+  const cols = [];
+  let start = lo;
+  for (let k = lo + 1; k < hi; ) {
+    if (!quiet(k)) { k++; continue; }
+    let e = k;
+    while (e < hi && quiet(e)) e++;
+    if (e - k >= 3) { cols.push([start, k]); start = e; }
+    k = e + 1;
+  }
+  cols.push([start, hi + 1]);
+  const keep = cols.filter(([a, b]) => (b - a) / N >= 0.18).map(([a, b]) => [a / N, b / N]);
+  if (keep.length < 2) return null;
+  // each column reaches as far as its lines actually run, but never into the next column's text
+  const ends = keep.map(([, b]) => b);
+  for (let i = 0; i < lines.length; i += 4) {
+    if (Math.min(lines[i + 3], y1) - Math.max(lines[i + 2], y0) <= 0) continue;
+    const k = keep.findIndex(([a, b]) => lines[i] >= a - 0.005 && lines[i] < b);
+    if (k >= 0) ends[k] = Math.max(ends[k], Math.min(lines[i + 1], keep[k + 1]?.[0] ?? 1));
+  }
+  return keep.map(([a], k) => [
+    Math.max(0, a - 0.012, k > 0 ? ends[k - 1] + 0.003 : 0),
+    Math.min(1, ends[k] + 0.012, k < keep.length - 1 ? keep[k + 1][0] - 0.003 : 1),
+  ]);
+}
+// With columns on, each hit is shown in just its column (worked out around that hit), with the lines
+// around it. Hits next to each other in the same column share a piece; a hit in full-width text gets a
+// full-width piece. The side arrows can move a piece to the column beside it.
 function colPlan(art, content) {
   if (!prefs.columns || !content.classList.contains('pdf-frame') || !cropWanted(art)) return null;
   const open = cropOpen.get(pkey(art.dataset.doc, Number(art.dataset.n)));
   if (open?.top && open?.bottom) return null;
-  const cols = content.dataset.cols ? JSON.parse(content.dataset.cols) : null;
-  if (!cols) return null;
+  const lines = content._lines;
   const boxes = [...content.querySelectorAll('.box.m')];
-  if (!boxes.length) return null;
-  const colOf = (b) => cols.findIndex(([x0, x1]) => boxCenter(b) >= x0 && boxCenter(b) < x1);
-  if (boxes.some((b) => colOf(b) < 0)) return null; // a hit across the gutter (a heading, say): show the page as usual
+  if (!lines || !boxes.length) return null;
   const hs = boxes.map((b) => parseFloat(b.style.height) / 100).filter((h) => h > 0).sort((a, b) => a - b);
   const line = (hs[hs.length >> 1] || 0.015) * 1.15;
   const pad = line * (Number(prefs.cropLines) || 3);
   const ty = prefs.trim && content.dataset.ty ? content.dataset.ty.split(',').map(Number) : [0, 1];
-  const pieces = [];
-  cols.forEach((span, i) => {
-    const mine = boxes.filter((b) => colOf(b) === i);
-    if (!mine.length) return;
-    let a = Math.min(...mine.map((b) => parseFloat(b.style.top) / 100)) - pad;
-    let z = Math.max(...mine.map((b) => (parseFloat(b.style.top) + parseFloat(b.style.height)) / 100)) + pad;
+  const tx = content.dataset.tx ? content.dataset.tx.split(',').map(Number) : [0, 1];
+  // each hit: its band of rows, and the column it sits in there
+  const hits = boxes.map((b) => {
+    const top = parseFloat(b.style.top) / 100, bot = top + parseFloat(b.style.height) / 100;
+    const cols = localColumns(lines, top - pad, bot + pad);
+    const c = boxCenter(b);
+    const k = cols ? cols.findIndex(([x0, x1]) => c >= x0 && c < x1) : -1;
+    return { top, bot, cols: k >= 0 ? cols : null, k };
+  }).sort((a, b) => a.top - b.top);
+  if (!hits.some((h) => h.cols)) return null;
+  const same = (a, b) => (!a.cols && !b.cols) || (a.cols && b.cols && Math.abs(a.cols[a.k][0] - b.cols[b.k][0]) < 0.03 && Math.abs(a.cols[a.k][1] - b.cols[b.k][1]) < 0.03);
+  const groups = [];
+  for (const h of hits) {
+    const g = groups.find((x) => same(x, h) && h.top - pad <= x.bot + pad + line);
+    if (g) { g.bot = Math.max(g.bot, h.bot); g.top = Math.min(g.top, h.top); }
+    else groups.push({ ...h });
+  }
+  // reading order: down the left column, then the next one
+  groups.sort((a, b) => (a.cols ? a.cols[a.k][0] : 0) - (b.cols ? b.cols[b.k][0] : 0) || a.top - b.top);
+  const shift = art._colShift || {};
+  const pieces = groups.map((g) => {
+    let a = g.top - pad, z = g.bot + pad;
     if (open?.top || a < ty[0] + line * 1.5) a = ty[0];
     if (open?.bottom || z > ty[1] - line * 1.5) z = ty[1];
-    pieces.push({ col: i, span, band: [Math.max(0, a), Math.min(1, z)], cutA: a > ty[0] + 0.005, cutB: z < ty[1] - 0.005 });
+    const key = `${g.top.toFixed(3)}`;
+    const k = g.cols ? Math.max(0, Math.min(g.cols.length - 1, shift[key] ?? g.k)) : -1;
+    return { key, cols: g.cols, home: g.k, k, span: g.cols ? g.cols[k] : tx, band: [Math.max(0, a), Math.min(1, z)], cutA: a > ty[0] + 0.005, cutB: z < ty[1] - 0.005 };
   });
-  return pieces.length ? { cols, pieces } : null;
+  return { pieces };
 }
 function cloneFrame(frame) {
   const c = frame.cloneNode(true);
@@ -684,7 +749,7 @@ function unpiece(art, body, content) {
   art._regions = null;
 }
 function layoutPieces(art, body, content, plan) {
-  const sig = plan.pieces.map((p) => p.col).join(',');
+  const sig = plan.pieces.map((p) => `${p.key}:${p.span.map((x) => x.toFixed(3)).join('-')}`).join(',');
   if (body._pieceSig !== sig || !body.querySelector(':scope > .piece')) {
     unpiece(art, body, content);
     const frames = plan.pieces.map((_, k) => (k === 0 ? content : cloneFrame(content)));
@@ -704,7 +769,16 @@ function layoutPieces(art, body, content, plan) {
       const inner = el('div', 'crop-inner');
       inner.append(frame);
       clip.append(inner);
-      if (plan.cols.length > 1) clip.append(el('span', 'col-tag', COL_NAMES[pc.col]));
+      // arrows tucked into the sides when there's a column that way
+      const nav = (side, act, label) => {
+        const b = el('button', `col-nav ${side}`, I.chevron);
+        b.dataset.act = act;
+        b.dataset.piece = k;
+        b.setAttribute('aria-label', label);
+        clip.append(b);
+      };
+      if (pc.cols && pc.k > 0) nav('left', 'col-prev', 'Column to the left');
+      if (pc.cols && pc.k < pc.cols.length - 1) nav('right', 'col-next', 'Column to the right');
       body.append(clip);
     });
     body._pieceSig = sig;
@@ -736,6 +810,26 @@ function layoutPieces(art, body, content, plan) {
   body.classList.remove('cut-top', 'cut-bottom');
   art._band = null;
   art._regions = plan.pieces.map((p) => ({ x: p.span, y: p.band }));
+  art._plan = plan;
+}
+// Slide a piece over to the column beside it: the page glides sideways inside the piece.
+function shiftColumn(art, i, dir) {
+  const pc = art._plan?.pieces[i];
+  if (!pc?.cols) return;
+  const k = pc.k + dir;
+  if (k < 0 || k >= pc.cols.length) return;
+  record(dir > 0 ? 'Next column' : 'Previous column');
+  const body = art.lastElementChild;
+  const before = body.querySelectorAll(':scope > .piece')[i]?.querySelector('.pdf-page')?.getBoundingClientRect();
+  art._colShift = { ...art._colShift, [pc.key]: k };
+  applyCrop(art);
+  const clip = body.querySelectorAll(':scope > .piece')[i];
+  const sheet = clip?.querySelector('.pdf-page');
+  if (!before || !sheet || reduceMotion()) return;
+  const after = sheet.getBoundingClientRect();
+  const sc = before.width / after.width;
+  sheet.style.transformOrigin = '0 0';
+  sheet.animate([{ transform: `translate(${(before.left - after.left).toFixed(1)}px, ${(before.top - after.top).toFixed(1)}px) scale(${sc.toFixed(4)})` }, { transform: 'none' }], { duration: 480, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
 }
 // What part of the page is on screen right now (for the zoom-out): its rect, and where it sits on the page.
 function visibleRegion(art) {
@@ -859,7 +953,7 @@ function gapEl(doc, a, b, count, R) {
   const unfold = '<svg viewBox="0 0 24 24"><path d="M8 7l4-4 4 4M8 17l4 4 4-4"/></svg>';
   const down = a >= 0 ? `<button class="gap-tab down" data-act="after" title="Show page ${a + 2}">${I.down}Page ${a + 2}</button>` : '';
   const up = b < count && (hidden > 1 || a < 0) ? `<button class="gap-tab up" data-act="before" title="Show page ${b}">${I.up}Page ${b}</button>` : '';
-  const all = hidden > 1 && !R?.flat ? `<button class="gap-all" data-act="all" title="Show all ${fmt(hidden)} pages${a < 0 ? ' before' : b >= count ? ' after' : ' in between'}">${unfold}${plural(hidden, 'page')}</button>` : '';
+  const all = '';
   g.classList.toggle('has-down', !!down);
   g.classList.toggle('has-up', !!up);
   g.innerHTML = (down || (all && !up) ? `<div class="gap-row">${all}${down}</div>` : '') + (up ? `<div class="gap-row">${down ? '' : all}${up}</div>` : '');
@@ -956,13 +1050,11 @@ function docHeadHtml(v, doc, R) {
     const f = folderOf(doc);
     return `<span class="ftype ${doc.kind}">${KIND_LABEL[doc.kind] || 'TXT'}</span><h2 title="${esc(doc.name)}">${esc(doc.name)}</h2>${f ? `<span class="dfolder" title="Folder">${I.folder}${esc(f.name)}</span>` : ''}<span class="grow"></span>`;
   }
-  const stat = R && webMode(doc, R) ? `<b>${plural(R.hits, 'hit')}</b>`
+  const stat = R && webMode(doc, R) ? `<b class="dcount" title="${plural(R.hits, 'hit')}">${fmt(R.hits)}</b>`
     : R
-    ? `<b>${plural(R.hits, 'hit')}</b> on ${plural(R.pages.length, 'page')}<span class="dof"> of ${fmt(count)}</span>`
+    ? `<b class="dcount" title="${plural(R.hits, 'hit')}">${fmt(R.hits)}</b> in ${plural(R.pages.length, 'page')}<span class="dof"> of ${fmt(count)}</span>`
     : S.matcher ? `No hits · ${plural(count, 'page')}` : plural(count, 'page');
-  const btn = v.kind === 'results'
-    ? `<button class="chip-btn" data-act="read" title="Read the whole document">${I.book}Read whole</button>`
-    : '';
+  const btn = '';
   const f = folderOf(doc);
   const where = f ? `<span class="dfolder" title="Folder">${I.folder}${esc(f.name)}</span>` : '';
   return `<span class="ftype ${doc.kind}">${KIND_LABEL[doc.kind] || 'TXT'}</span><h2 title="${esc(doc.name)}">${esc(doc.name)}</h2>${where}<span class="dstat">${stat}</span><span class="grow"></span>${btn}`;
@@ -3424,7 +3516,7 @@ function showUndo(kind, note) {
   }
   document.body.classList.add('undo-on');
   clearTimeout(undoTimer);
-  undoTimer = setTimeout(() => document.body.classList.remove('undo-on'), note ? 2600 : 3600);
+  undoTimer = setTimeout(() => document.body.classList.remove('undo-on'), note ? 5000 : 8000);
   if (note) {
     const hint = $('#swipeHint');
     if (hint) { hint.textContent = note; hint.className = 'swipe-hint flash'; clearTimeout(hint._t); hint._t = setTimeout(() => (hint.className = 'swipe-hint'), 1400); }
@@ -3494,7 +3586,7 @@ function applyTheme() {
 }
 function openThemes() {
   closeMenu();
-  openThemeSheet(prefs, { save: savePrefs });
+  openThemeBar(prefs, { save: savePrefs });
 }
 
 // ---------- events ----------
@@ -3644,7 +3736,6 @@ function bind() {
     }, 150);
   });
   $('#panelBtn').addEventListener('click', () => setPanel(!document.body.classList.contains('panel')));
-  $('#panelClose').addEventListener('click', () => setPanel(false));
   $('#compactBtn').addEventListener('click', toggleCompact);
   bindSideResize();
   // phone reading bar
@@ -3845,6 +3936,7 @@ function bind() {
     else if (act === 'open' && art) openReader(art.dataset.doc, Number(art.dataset.n));
     else if (act === 'web' && art) { override.set(pkey(art.dataset.doc, WEB), 'original'); openReader(art.dataset.doc, Number(art.dataset.n)); }
     else if (act === 'pmode' && art) togglePageMode(art);
+    else if ((act === 'col-next' || act === 'col-prev') && art) shiftColumn(art, Number(b.dataset.piece), act === 'col-next' ? 1 : -1);
   };
   // a tap that only clears a text selection shouldn't also open the page's menu
   let hadSelection = false;
@@ -3898,6 +3990,7 @@ function bind() {
       }
     }
     if (e.key === 'Escape' && $('.pop-menu')) { closeMenu(); return; }
+    if (e.key === 'Escape' && themeBarOpen()) { openThemeBar(prefs, { save: savePrefs }); return; }
     if (boards.isOpen()) { if (e.key === 'Escape' && !$('dialog[open]')) boards.close(); return; }
     if (e.key === 'Escape' && document.body.classList.contains('panel')) { setPanel(false); return; }
     if ($('dialog[open]') || e.isComposing) return;
@@ -4495,8 +4588,16 @@ function pageItems(art) {
   if (v.kind === 'results' && !art._web) {
     const prev = art.previousElementSibling || art.closest('.doc-sec')?.previousElementSibling?.querySelector(':scope > .doc-pages')?.lastElementChild;
     const next = art.nextElementSibling;
-    if (prev?.classList.contains('gap') && Number(prev.dataset.b) === n) items.push({ label: `Show page ${n} above`, icon: I.up, run: () => onGap(prev, 'before') });
-    if (next?.classList.contains('gap') && Number(next.dataset.a) === n) items.push({ label: `Show page ${n + 2} below`, icon: I.down, run: () => onGap(next, 'after') });
+    const unfold = '<svg viewBox="0 0 24 24"><path d="M8 7l4-4 4 4M8 17l4 4 4-4"/></svg>';
+    const hiddenIn = (g) => Number(g.dataset.b) - Number(g.dataset.a) - 1;
+    if (prev?.classList.contains('gap') && Number(prev.dataset.b) === n) {
+      items.push({ label: `Show page ${n} above`, icon: I.up, run: () => onGap(prev, 'before') });
+      if (hiddenIn(prev) > 1 && !art._flat) items.push({ label: `Show all ${hiddenIn(prev)} pages above`, sub: `Pages ${Number(prev.dataset.a) + 2}–${n}`, icon: unfold, run: () => onGap(prev, 'all') });
+    }
+    if (next?.classList.contains('gap') && Number(next.dataset.a) === n) {
+      items.push({ label: `Show page ${n + 2} below`, icon: I.down, run: () => onGap(next, 'after') });
+      if (hiddenIn(next) > 1 && !art._flat) items.push({ label: `Show all ${hiddenIn(next)} pages below`, sub: `Pages ${n + 2}–${Number(next.dataset.b)}`, icon: unfold, run: () => onGap(next, 'all') });
+    }
     if (cropWanted(art)) {
       if (art.lastElementChild.classList.contains('cropped')) items.push({ label: 'Show the whole page', icon: I.expand, run: () => expandCrop(art, 'all') });
       else if (cropOpen.has(pkey(doc.id, n))) items.push({ label: 'Crop to the hits again', icon: I.crop, run: () => expandCrop(art, 'crop') });

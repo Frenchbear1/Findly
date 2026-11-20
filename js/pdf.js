@@ -121,6 +121,20 @@ function textBox(items, base) {
   };
 }
 
+// Every piece of (unrotated) text as [left, right, top, bottom] fractions of the page, packed in one array.
+function textLines(items, base) {
+  const out = [];
+  for (const it of items) {
+    if (!it.str || !it.str.trim()) continue;
+    const t = it.transform;
+    if (Math.abs(t[1]) > 0.01 || Math.abs(t[2]) > 0.01) continue;
+    const tx = pdfjsLib.Util.transform(base.transform, t);
+    const fh = Math.hypot(tx[2], tx[3]) || 10;
+    out.push(tx[4] / base.width, (tx[4] + (it.width || 0) * base.scale) / base.width, (tx[5] - fh) / base.height, (tx[5] + fh * 0.25) / base.height);
+  }
+  return new Float32Array(out);
+}
+
 // Columns (a, b, c…): where the text's vertical gutters split the page, as [left, right] fractions of its
 // width — or null for a page that's one column. A gutter is a strip that almost no text crosses (a heading
 // running across the page is fine); columns narrower than a fifth of the page don't count.
@@ -215,11 +229,10 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   const box = trim ? textBox(content.items, base) : { x: null, y: null };
   const span = box.x;
   const ts = span ? 1 / (span[1] - span[0]) : 1;
-  const cols = textColumns(content.items, base);
-  // in column view a column fills the width, so draw sharp enough for the narrowest one
-  const tsDraw = columns && cols ? Math.max(ts, ...cols.map(([a, b]) => 1 / (b - a))) : ts;
+  // in column view a column fills the width, so draw sharper (columns are found around each hit by the app)
+  const tsDraw = columns ? Math.max(ts, 2.1) : ts;
   const cssWidth = Math.max(width || 0, host.clientWidth || 700) * tsDraw;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const dpr = Math.min(window.devicePixelRatio || 1, columns ? 2 : 2.5);
   const scale = Math.min(cssWidth * dpr, 4096) / base.width;
   const vp = page.getViewport({ scale });
 
@@ -231,7 +244,7 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   sheet.style.aspectRatio = `${base.width} / ${base.height}`;
   if (span) { frame.style.setProperty('--ts', ts.toFixed(4)); frame.style.setProperty('--tx0', span[0].toFixed(4)); frame.dataset.tx = span.join(','); }
   if (box.y) frame.dataset.ty = box.y.join(','); // where the text starts and ends down the page
-  if (cols) frame.dataset.cols = JSON.stringify(cols.map(([a, b]) => [+a.toFixed(4), +b.toFixed(4)]));
+  frame._lines = textLines(content.items, base); // where each piece of text sits, for finding columns
   const canvas = document.createElement('canvas');
   canvas.width = Math.floor(vp.width);
   canvas.height = Math.floor(vp.height);

@@ -19,12 +19,16 @@
     // put the reading theme on before anything paints (no flash of the default colours)
     try {
       var r = document.documentElement, c = JSON.parse(localStorage.getItem('instant-search:theme') || 'null');
-      if (c && c.css) { r.setAttribute('style', c.css); r.dataset.theme = c.dark ? 'dark' : 'light'; }
-      else { var t = (JSON.parse(localStorage.getItem('instant-search:prefs')) || {}).theme; if (t === 'light' || t === 'dark') r.dataset.theme = t; }
-      if (!c || c.tint) {
+      if (c && c.css && c.dark !== null) {
+        r.setAttribute('style', c.css);
+        r.dataset.theme = c.dark ? 'dark' : 'light';
+        if (c.tint) { r.classList.add('doc-tint'); if (c.dark) r.classList.add('doc-dark'); }
+        if (c.paper) r.classList.add('paper');
+      } else {
+        var t = (JSON.parse(localStorage.getItem('instant-search:prefs')) || {}).theme;
+        if (t === 'light' || t === 'dark') r.dataset.theme = t;
         r.classList.add('doc-tint');
-        if (c && c.dark != null ? c.dark : matchMedia('(prefers-color-scheme: dark)').matches) r.classList.add('doc-dark');
-        if (c) r.style.setProperty('--tint', c.amt);
+        if (t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)) r.classList.add('doc-dark');
       }
     } catch (e) {}
   </script>
@@ -128,7 +132,6 @@
               <option value="hits">Documents with most hits</option>
               <option value="pages">Pages with most hits</option>
             </select></label>
-            <button class="icon-btn sm ol-close" id="panelClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
           </div>
           <div id="outlineList"></div>
         </nav>

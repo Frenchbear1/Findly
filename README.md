@@ -100,3 +100,7 @@ vendor/             pdf.js 3.11.174 and mammoth 1.13.0 (bundled so it works offl
 
 - Scanned PDFs have no text layer, so their words can't be searched (no OCR). They can still be read in Original view.
 - Old `.doc` (pre-2007 Word) files aren't supported; save them as `.docx` or PDF.
+
+## Credits
+
+Paper textures in `vendor/paper/` are from [Subtle Patterns](https://www.toptal.com/designers/subtlepatterns/) (Toptal), licensed CC BY-SA 3.0. They were converted to greyscale and evened out so they work as grain over any page colour; see `vendor/paper/LICENSE.txt`.
