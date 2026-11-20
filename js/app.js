@@ -711,10 +711,32 @@ function onGap(g, act) {
   if (act === 'after') set.add(a + 1);
   else if (act === 'before') set.add(b - 1);
   else for (let n = a + 1; n < b; n++) set.add(n);
+  // What you're looking at stays put: anything opened above you pushes nothing down — the page grows
+  // upward out of sight (scroll up to read it); anything opened below simply appears under you.
+  const html = document.documentElement;
+  html.style.overflowAnchor = 'none';
   const nodes = nodesBetween(v, doc, visiblePages(v, doc, R), a, b, R);
+  const ref = g.nextElementSibling || g.closest('.doc-sec')?.nextElementSibling; // the content below the opening
+  const refTop = ref?.getBoundingClientRect().top;
   g.replaceWith(...nodes);
+  if (ref && act !== 'after') {
+    window.scrollBy({ top: ref.getBoundingClientRect().top - refTop, behavior: 'instant' });
+    // the new pages fill in after being drawn and grow; keep what's below them still while they do
+    const sizes = new Map();
+    const ro = new ResizeObserver((entries) => {
+      let d = 0;
+      for (const en of entries) {
+        const h = en.target.offsetHeight;
+        if (sizes.has(en.target)) d += h - sizes.get(en.target);
+        sizes.set(en.target, h);
+      }
+      if (d) window.scrollBy({ top: d, behavior: 'instant' });
+    });
+    nodes.forEach((x) => ro.observe(x));
+    setTimeout(() => { ro.disconnect(); html.style.overflowAnchor = ''; }, 2500);
+  } else requestAnimationFrame(() => { html.style.overflowAnchor = ''; });
   const pages = nodes.filter((x) => x.classList.contains('page'));
-  (act === 'before' ? pages[pages.length - 1] : pages[0])?.classList.add('fresh');
+  for (const p of pages) p.classList.add(act === 'after' ? 'fresh-down' : 'fresh-up');
 }
 
 
@@ -3925,7 +3947,7 @@ function bindHoldMenu(el, getItems) {
   let st = null;
   const hot = (x, y) => {
     let found = null;
-    for (const it of $$('.pop-menu .menu-item')) {
+    for (const it of $$('.pop-menu :is(.menu-item, .mp-row [data-v])')) {
       const r = it.getBoundingClientRect();
       const on = !it.disabled && y >= r.top && y < r.bottom && x > r.left - 60 && x < r.right + 60;
       it.classList.toggle('hot', on);
@@ -3977,37 +3999,54 @@ function bindHoldMenu(el, getItems) {
   });
 }
 
+// A row of buttons in a menu panel. Each button has data-v; `act(v)` runs and the panel redraws in place.
+function panelRow(cls, html, act) {
+  return () => {
+    const r = el('div', `mp-row ${cls}`, html);
+    r.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-v]');
+      e.stopPropagation();
+      if (!b || b.disabled) return;
+      act(b.dataset.v);
+      redrawMenu();
+    });
+    return r;
+  };
+}
+function redrawMenu() {
+  const m = $('.pop-menu');
+  if (!m?._items) return;
+  fillMenu(m, m._items());
+  placeMenu(m);
+}
+const on = (b) => `aria-pressed="${!!b}"`;
 function moreItems() {
   const items = [];
   if (S.docs.some(hasOriginal)) {
-    items.push({ header: 'Pages' },
-      { label: 'Text', icon: I.text, checked: prefs.view === 'text', run: () => setView('text') },
-      { label: 'Original', icon: I.image, checked: prefs.view === 'original', run: () => setView('original') });
+    items.push({ header: 'Pages' }, { node: panelRow('seg-row', `<div class="seg"><button data-v="text" ${on(prefs.view === 'text')}>${I.text}Text</button><button data-v="original" ${on(prefs.view === 'original')}>${I.image}Original</button></div>`, (v) => setView(v)) });
   }
+  items.push({ header: 'Zoom' },
+    { node: panelRow('zoom-row', `<button class="pk-step" data-v="-1" aria-label="Zoom out">${I.minus}</button><button class="mp-zoom" data-v="1">${Math.round(zoomValue() * 100)}%</button><button class="pk-step" data-v="+1" aria-label="Zoom in">${I.plus}</button>`,
+      (v) => (v === '1' ? setZoom(1) : zoomBy(Number(v)))) },
+    { node: panelRow('two', `<button class="pk-tog" data-v="width" ${on(prefs.zoom === 'width')}>${I.fitW}Fit width</button><button class="pk-tog" data-v="page" ${on(prefs.zoom === 'page')}>${I.fitP}Fit page</button>`,
+      (v) => setZoom(prefs.zoom === v ? 1 : v)) });
+  const crop = active === results;
+  const trim = S.docs.some((d) => d.kind === 'pdf');
+  if (crop || trim) {
+    items.push({ header: 'Fit to the text' }, { node: panelRow('two', `${crop ? `<button class="pk-tog" data-v="crop" ${on(prefs.crop)}>${I.crop}Crop to hits</button>` : ''}${trim ? `<button class="pk-tog" data-v="trim" ${on(prefs.trim)}>${I.wide}Trim margins</button>` : ''}`,
+      (v) => (v === 'crop' ? setCrop(!prefs.crop) : setTrim(!prefs.trim))) });
+    if (crop && prefs.crop) items.push({ node: cropSliderRow });
+  }
+  items.push({ header: 'Search' }, { node: panelRow('two', `<button class="pk-tog" data-v="case" ${on(prefs.matchCase)}><i>Aa</i>Match case</button><button class="pk-tog" data-v="word" ${on(prefs.wholeWord)}><i><u>ab</u></i>Whole words</button>`,
+    (v) => { if (v === 'case') prefs.matchCase = !prefs.matchCase; else prefs.wholeWord = !prefs.wholeWord; syncControls(); runSearch(); }) });
   if (active === results) {
-    items.push({ header: 'Crop to hits' },
-      { label: 'Show just the hits', icon: I.crop, checked: !!prefs.crop, keep: true, run: () => setCrop(!prefs.crop) });
-    if (prefs.crop) items.push({ node: cropSliderRow });
+    items.push({ header: 'Sort by most hits' }, { node: panelRow('seg-row', `<div class="seg">${[['library', 'Library', 'Library order'], ['hits', 'Documents', 'Documents with most hits'], ['pages', 'Pages', 'Pages with most hits']].map(([k, label, title]) => `<button data-v="${k}" title="${title}" ${on(prefs.sort === k)}>${label}</button>`).join('')}</div>`,
+      (v) => { prefs.sort = v; runSearch(); }) });
   }
-  if (S.docs.some((d) => d.kind === 'pdf')) items.push({ label: 'Trim page margins', icon: I.wide, checked: !!prefs.trim, keep: true, run: () => setTrim(!prefs.trim) });
-  items.push({ header: `Zoom · ${Math.round(zoomValue() * 100)}%` },
-    { label: 'Zoom in', icon: I.plus, run: () => zoomBy(1) },
-    { label: 'Zoom out', icon: I.minus, run: () => zoomBy(-1) },
-    { label: 'Fit width', icon: I.fitW, checked: prefs.zoom === 'width', run: () => setZoom(prefs.zoom === 'width' ? 1 : 'width') },
-    { label: 'Fit page', icon: I.fitP, checked: prefs.zoom === 'page', run: () => setZoom(prefs.zoom === 'page' ? 1 : 'page') });
-  items.push({ header: 'Search' },
-    { label: 'Match case', checked: prefs.matchCase, run: () => { prefs.matchCase = !prefs.matchCase; runSearch(); } },
-    { label: 'Whole words only', checked: prefs.wholeWord, run: () => { prefs.wholeWord = !prefs.wholeWord; runSearch(); } });
-  if (active === results) {
-    items.push({ header: 'Sort' },
-      ...[['library', 'Library order'], ['hits', 'Documents with most hits'], ['pages', 'Pages with most hits']].map(([k, label]) => ({ label, checked: prefs.sort === k, run: () => { prefs.sort = k; runSearch(); } })));
-  }
-  items.push({ sep: true });
-  if (active === reader) items.push({ label: 'Back to results', icon: I.arrowLeft, run: () => closeReader() });
-  items.push({ label: 'Library', icon: I.folder, run: () => toggleLibrary() });
+  items.push({ sep: true }, { node: panelRow('two', `${active === reader ? `<button class="pk-tog" data-v="back">${I.arrowLeft}Results</button>` : ''}<button class="pk-tog" data-v="lib">${I.folder}Library</button>`,
+    (v) => { closeMenu(); if (v === 'back') closeReader(); else toggleLibrary(); }) });
   return items;
 }
-
 
 // Switch one page between its extracted text and the original.
 function togglePageMode(art) {

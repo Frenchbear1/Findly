@@ -926,3 +926,35 @@ button svg { pointer-events: none; }
 .doc-sec.ranked.same-doc > .doc-head { display: none; }
 .doc-sec.ranked.same-doc { margin-top: -8px; }
 .page-head .rank { margin-right: 2px; }
+
+/* Options panel from the floating bar: side-by-side controls */
+.pop-menu:has(.mp-row) { width: min(312px, calc(100vw - 16px)); max-width: none; padding: 8px; }
+.mp-row { display: flex; align-items: center; gap: 6px; padding: 2px 2px 6px; }
+.mp-row.two > * { flex: 1 1 0; min-width: 0; }
+.mp-row .pk-tog { height: 40px; }
+.mp-row .pk-tog svg { width: 15px; height: 15px; }
+.mp-row .seg { display: flex; width: 100%; }
+.mp-row .seg button { flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 34px; padding: 0 6px; font-size: 13px; }
+.mp-row .seg button svg { width: 14px; height: 14px; }
+.mp-row .seg button[aria-pressed="true"] { background: var(--seg-on); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.zoom-row .pk-step { width: 44px; height: 40px; flex: none; }
+.mp-zoom { flex: 1; height: 40px; border-radius: 10px; font-size: 14.5px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); background: color-mix(in srgb, var(--line) 45%, transparent); }
+.mp-row [data-v].hot { background: var(--accent) !important; color: var(--accent-ink) !important; border-color: var(--accent) !important; }
+.pop-menu .menu-range { padding-left: 6px; }
+
+/* A page's label stays in view while you read that page (under the document's name), so it's never hidden */
+.page-head {
+  position: sticky; top: calc(var(--top-h) + 48px); z-index: 1; margin-inline: -6px; padding-inline: 12px 10px;
+  background: color-mix(in srgb, var(--bg) 92%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  border-radius: 0 0 10px 10px; transition: top 0.25s ease;
+}
+#reader .page-head, .doc-sec.same-doc .page-head { top: var(--top-h); }
+body.bar-hidden .page-head { top: 48px; }
+body.bar-hidden #reader .page-head, body.bar-hidden .doc-sec.same-doc .page-head { top: 0; }
+.doc-head { height: 48px; min-height: 0; }
+
+/* pages opened above slide up into place; pages opened below slide down */
+.page.fresh-up { animation: freshUp 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.page.fresh-down { animation: freshDown 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes freshUp { from { clip-path: inset(100% 0 0 0); transform: translateY(18px); opacity: 0.4; } to { clip-path: inset(0 0 0 0); transform: none; opacity: 1; } }
+@keyframes freshDown { from { clip-path: inset(0 0 100% 0); transform: translateY(-18px); opacity: 0.4; } to { clip-path: inset(0 0 0 0); transform: none; opacity: 1; } }
