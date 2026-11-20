@@ -74,6 +74,7 @@ const I = {
   upload: '<svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>',
   crop: '<svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"/></svg>',
   expand: '<svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
+  save: '<svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
   copy: '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
   wide: '<svg viewBox="0 0 24 24"><path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4"/></svg>',
   up: '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>',
@@ -357,18 +358,12 @@ function headHtml(v, doc, n, ctx, flat = false) {
   if (info && ctx) badge = `<span class="phits none">${plural(info.ranges.length, 'hit')} · ranked on its own</span>`;
   else if (info) badge = `<span class="phits">${plural(info.ranges.length, 'hit')}</span>`;
   else if (v.kind === 'results') badge = '<span class="phits none">No hits</span>';
-  const mode = pageMode(doc, n);
-  const toggle = flat && doc.kind === 'html'
-    ? `<button class="chip-btn" data-act="web" title="Open the real web page at this hit">${I.image}Web page</button>`
-    : hasOriginal(doc)
-    ? `<button class="chip-btn" data-act="pmode" title="Switch between extracted text and the original page">${mode === 'original' ? I.text + 'Text' : I.image + 'Original'}</button>`
-    : '';
   let rank = '';
   if (flat && !ctx) {
     const i = v.list.findIndex((r) => r.flat && r.doc.id === doc.id && r.pages[0].n === n);
     if (i >= 0) rank = `<span class="rank" title="Ranked ${fmt(i + 1)} by hits">${fmt(i + 1)}</span>`;
   }
-  return `${rank}<span class="pno">Page ${n + 1}</span>${badge}<span class="grow"></span>${toggle}`;
+  return `${rank}<span class="pno">Page ${n + 1}</span>${badge}<span class="grow"></span>`;
 }
 
 function pageEl(v, doc, n, R) {
@@ -566,8 +561,14 @@ function applyCrop(art) {
   let clip = body.querySelector(':scope > .crop-clip');
   const content = clip ? clip.querySelector('.pdf-frame, .page-text') : body.querySelector(':scope > .pdf-frame, :scope > .page-text');
   if (!content) return;
-  const band = cropWanted(art) ? cropBand(art, content) : null;
-  if (!band) {
+  const hits = cropWanted(art) ? cropBand(art, content) : null; // the band around the hits, or null = whole page
+  // wide view also trims the blank top and bottom of a PDF page, wherever the page's top or bottom shows
+  const ty = prefs.trim && content.dataset.ty ? content.dataset.ty.split(',').map(Number) : null;
+  let band = hits || [0, 1];
+  if (ty) band = [Math.max(band[0], ty[0]), Math.min(band[1], ty[1])];
+  if (band[1] - band[0] < 0.02) band = hits || [0, 1];
+  art._band = band[0] > 0 || band[1] < 1 ? band : null;
+  if (!art._band) {
     if (clip) body.replaceChildren(content);
     body.classList.remove('cropped', 'cut-top', 'cut-bottom');
     art._cropRO?.disconnect();
@@ -579,7 +580,6 @@ function applyCrop(art) {
     clip.append(inner);
     body.replaceChildren(clip);
     inner.append(content);
-    body.classList.add('cropped');
     // zoom, width changes and text reflow resize the page: keep the band on the hits
     art._cropRO?.disconnect();
     let seen = 0;
@@ -592,8 +592,10 @@ function applyCrop(art) {
   const H = content.offsetHeight;
   clip.style.height = Math.max(24, Math.round((band[1] - band[0]) * H)) + 'px';
   clip.firstElementChild.style.marginTop = -Math.round(band[0] * H) + 'px';
-  body.classList.toggle('cut-top', band[0] > 0);
-  body.classList.toggle('cut-bottom', band[1] < 1);
+  // "cropped" = cut down to the hits (the trimmed margins alone don't count)
+  body.classList.toggle('cropped', !!hits);
+  body.classList.toggle('cut-top', !!hits && hits[0] > (ty?.[0] || 0) + 0.005);
+  body.classList.toggle('cut-bottom', !!hits && hits[1] < (ty?.[1] ?? 1) - 0.005);
 }
 // Open a cropped page out to the whole page ('all'), or crop it to the hits again ('crop'), keeping the
 // hits where they are on screen.
@@ -669,21 +671,15 @@ function gapEl(doc, a, b, count, R) {
   g._R = R;
   g.dataset.a = a;
   g.dataset.b = b;
-  // one row, no labels: the buttons say what's hidden
+  // Tabs on the right, like a notebook's: "next page" hangs off the bottom of the page above, "page before"
+  // sticks up from the top of the page below. (Pages past the end of the document have no tab.)
   const unfold = '<svg viewBox="0 0 24 24"><path d="M8 7l4-4 4 4M8 17l4 4 4-4"/></svg>';
-  let html = '';
-  if (hidden === 1) {
-    html = `<button class="gap-btn" data-act="all" title="Show page ${a + 2}">${unfold}Page ${a + 2}</button>`;
-  } else if (R?.flat) {
-    // a ranked page: just step to the page above or below it
-    html = a < 0 ? `<button class="gap-btn" data-act="before" title="Show the page right before">${I.up}Page ${b}</button>`
-      : `<button class="gap-btn" data-act="after" title="Show the page right after">${I.down}Page ${a + 2}</button>`;
-  } else {
-    if (a >= 0) html += `<button class="gap-btn" data-act="after" title="Show the page right after">${I.down}Page ${a + 2}</button>`;
-    html += `<button class="gap-btn subtle" data-act="all" title="Show all ${fmt(hidden)} pages${a < 0 ? ' before' : b >= count ? ' after' : ' in between'}">${unfold}${plural(hidden, 'page')}</button>`;
-    if (b < count) html += `<button class="gap-btn" data-act="before" title="Show the page right before">${I.up}Page ${b}</button>`;
-  }
-  g.innerHTML = `<div class="gap-inner">${html}</div>`;
+  const down = a >= 0 ? `<button class="gap-tab down" data-act="after" title="Show page ${a + 2}">${I.down}Page ${a + 2}</button>` : '';
+  const up = b < count && (hidden > 1 || a < 0) ? `<button class="gap-tab up" data-act="before" title="Show page ${b}">${I.up}Page ${b}</button>` : '';
+  const all = hidden > 1 && !R?.flat ? `<button class="gap-all" data-act="all" title="Show all ${fmt(hidden)} pages${a < 0 ? ' before' : b >= count ? ' after' : ' in between'}">${unfold}${plural(hidden, 'page')}</button>` : '';
+  g.classList.toggle('has-down', !!down);
+  g.classList.toggle('has-up', !!up);
+  g.innerHTML = (down || (all && !up) ? `<div class="gap-row">${all}${down}</div>` : '') + (up ? `<div class="gap-row">${down ? '' : all}${up}</div>` : '');
   return g;
 }
 
@@ -719,19 +715,8 @@ function onGap(g, act) {
   g.replaceWith(...nodes);
   const pages = nodes.filter((x) => x.classList.contains('page'));
   (act === 'before' ? pages[pages.length - 1] : pages[0])?.classList.add('fresh');
-  syncRankRows(v);
 }
 
-// Ranked pages from the same document, one after another: the "page below" of one and the "page above"
-// of the next share a single row.
-function syncRankRows(v) {
-  for (const sec of v.root.querySelectorAll('.doc-sec.ranked')) {
-    const prev = sec.previousElementSibling;
-    const a = prev?.querySelector(':scope > .doc-pages')?.lastElementChild;
-    const b = sec.querySelector(':scope > .doc-pages')?.firstElementChild;
-    sec.classList.toggle('merge-gap', sec.classList.contains('same-doc') && !!a?.classList.contains('gap') && !!b?.classList.contains('gap'));
-  }
-}
 
 // ---------- rendering views ----------
 function docHeadHtml(v, doc, R) {
@@ -764,7 +749,17 @@ function sectionEl(v, doc, R) {
   sec.append(el('div', 'doc-head', docHeadHtml(v, doc, R)));
   const pages = el('div', 'doc-pages');
   const count = S.texts.get(doc.id)?.length || 0;
-  pages.append(...nodesBetween(v, doc, visiblePages(v, doc, R), -1, count, R));
+  // Ranked pages from the same document that follow each other down the document share the pages between
+  // them: the upper one offers them, the lower one doesn't — so a page is never shown twice side by side.
+  let lo = -1, hi = count;
+  if (R?.flat) {
+    const i = v.list.indexOf(R);
+    const first = R.pages[0].n;
+    const prev = v.list[i - 1], next = v.list[i + 1];
+    if (prev?.flat && prev.doc.id === doc.id && prev.pages[0].n < first) lo = first - 1;
+    if (next?.flat && next.doc.id === doc.id && next.pages[0].n > first) hi = next.pages[0].n;
+  }
+  pages.append(...nodesBetween(v, doc, visiblePages(v, doc, R), lo, hi, R));
   sec.append(pages);
   return sec;
 }
@@ -832,7 +827,6 @@ function renderView(v, { keepScroll = true } = {}) {
   const frag = document.createDocumentFragment();
   for (const R of v.list) frag.append(sectionEl(v, R.doc, R));
   v.root.append(frag);
-  syncRankRows(v);
   if (!keepScroll) window.scrollTo({ top: 0, behavior: 'instant' });
   done();
 }
@@ -3397,7 +3391,7 @@ function bind() {
   // results + reader (delegated)
   const onMain = (e) => {
     const t = e.target;
-    const mark = t.closest('[data-h]');
+    const mark = t.closest('[data-h]') || (t.closest('.pdf-text') && document.elementsFromPoint(e.clientX, e.clientY).find((x) => x.matches?.('.box[data-h]')));
     if (mark && active.root.contains(mark)) {
       active.cur = Number(mark.dataset.h);
       active.navY = scrollY;
@@ -3408,7 +3402,7 @@ function bind() {
     if (gapBtn) { onGap(gapBtn.closest('.gap'), gapBtn.dataset.act); return; }
     // tap a page: its menu opens right where you tapped (tap again anywhere to dismiss)
     const tapped = t.closest('.page-body');
-    if (tapped && !t.closest('[data-act], button, a, input') && !String(getSelection?.() || '').trim()) {
+    if (tapped && !t.closest('[data-act], button, a, input') && !String(getSelection?.() || '').trim() && !hadSelection) {
       e.stopPropagation();
       if ($('.pop-menu')) { closeMenu(); return; }
       const art = tapped.closest('.page');
@@ -3437,6 +3431,11 @@ function bind() {
     else if (act === 'web' && art) { override.set(pkey(art.dataset.doc, WEB), 'original'); openReader(art.dataset.doc, Number(art.dataset.n)); }
     else if (act === 'pmode' && art) togglePageMode(art);
   };
+  // a tap that only clears a text selection shouldn't also open the page's menu
+  let hadSelection = false;
+  const noteSel = () => { hadSelection = !!String(getSelection?.() || '').trim(); };
+  $('#results').addEventListener('pointerdown', noteSel);
+  $('#reader').addEventListener('pointerdown', noteSel);
   $('#results').addEventListener('click', onMain);
   $('#reader').addEventListener('click', onMain);
 
@@ -4040,7 +4039,7 @@ function pageItems(art) {
   const n = Number(art.dataset.n);
   const items = [{ header: art._web ? doc.name : `Page ${n + 1}` }];
   if (v.kind === 'results' && !art._web) {
-    const prev = art.previousElementSibling;
+    const prev = art.previousElementSibling || art.closest('.doc-sec')?.previousElementSibling?.querySelector(':scope > .doc-pages')?.lastElementChild;
     const next = art.nextElementSibling;
     if (prev?.classList.contains('gap') && Number(prev.dataset.b) === n) items.push({ label: `Show page ${n} above`, icon: I.up, run: () => onGap(prev, 'before') });
     if (next?.classList.contains('gap') && Number(next.dataset.a) === n) items.push({ label: `Show page ${n + 2} below`, icon: I.down, run: () => onGap(next, 'after') });
@@ -4053,10 +4052,111 @@ function pageItems(art) {
     const orig = pageMode(doc, n) === 'original';
     items.push({ label: orig ? 'Show as text' : 'Show the original', icon: orig ? I.text : I.image, run: () => togglePageMode(art) });
   }
+  if (art._flat && doc.kind === 'html') items.push({ label: 'Open the web page', icon: I.globe, run: () => { override.set(pkey(doc.id, WEB), 'original'); openReader(doc.id, n); } });
   if (v.kind === 'results') items.push({ label: 'Read it in the document', icon: I.book, run: () => openReader(doc.id, art._web ? undefined : n) });
   const text = art._web ? '' : S.texts.get(doc.id)?.[n] || '';
   if (text.trim()) items.push({ label: 'Copy the page’s text', icon: I.copy, run: () => toast(copyText(doc.kind === 'pdf' ? reflow(text) : text) ? 'Page text copied' : 'Couldn’t copy', { ms: 1600 }) });
+  const save = art._web ? [] : saveItems(art);
+  if (save.length) items.push({ sep: true }, { label: 'Save as…', icon: I.save, submenu: () => save });
   return items;
+}
+
+// ---------- saving a page, or the part of it you're looking at ----------
+const fileStem = (name) => (name.replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 80) || 'page');
+function saveBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+}
+function saveItems(art) {
+  const doc = docById(art.dataset.doc);
+  const n = Number(art.dataset.n);
+  const stem = `${fileStem(doc.name)} p${n + 1}`;
+  const items = [];
+  if (doc.kind === 'pdf') {
+    const cut = !!art.querySelector('.pdf-frame') && art.lastElementChild.classList.contains('cropped');
+    const run = (section, kind) => () => savePage(art, { section, kind, name: `${stem}${section ? ' (section)' : ''}` });
+    if (cut) items.push({ header: 'This section' }, { label: 'Image (PNG)', icon: I.image, run: run(true, 'png') }, { label: 'PDF', icon: I.text, run: run(true, 'pdf') });
+    items.push({ header: 'Whole page' }, { label: 'Image (PNG)', icon: I.image, run: run(false, 'png') }, { label: 'PDF', icon: I.text, run: run(false, 'pdf') });
+  }
+  const text = S.texts.get(doc.id)?.[n] || '';
+  if (text.trim()) items.push(...(items.length ? [{ sep: true }] : []), { label: 'Text file', icon: I.text, run: () => saveBlob(new Blob([doc.kind === 'pdf' ? reflow(text) : text], { type: 'text/plain' }), `${stem}.txt`) });
+  return items;
+}
+// Draws the page sharply (with the highlights you see), cut to what's on screen when `section` is set.
+async function pageCanvas(art, section) {
+  const doc = docById(art.dataset.doc);
+  const n = Number(art.dataset.n);
+  const pdf = await getPdf(doc.id, () => store.file(doc.id));
+  const page = await pdf.getPage(n + 1);
+  const base = page.getViewport({ scale: 1 });
+  let x = [0, 1], y = [0, 1];
+  const frame = art.querySelector('.pdf-frame');
+  if (section) {
+    if (frame?.dataset.tx) x = frame.dataset.tx.split(',').map(Number);
+    if (art._band) y = art._band;
+  }
+  const scale = Math.min(2000 / (base.width * (x[1] - x[0])), 4096 / base.width, 4096 / base.height);
+  const vp = page.getViewport({ scale });
+  const full = document.createElement('canvas');
+  full.width = Math.floor(vp.width);
+  full.height = Math.floor(vp.height);
+  const ctx = full.getContext('2d', { alpha: false });
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  page.cleanup();
+  // the highlights, as shown
+  ctx.globalCompositeOperation = 'multiply';
+  for (const b of frame?.querySelectorAll('.pdf-hits .box') || []) {
+    const cs = getComputedStyle(b);
+    const L = (parseFloat(b.style.left) / 100) * full.width, T = (parseFloat(b.style.top) / 100) * full.height;
+    const W = (parseFloat(b.style.width) / 100) * full.width, H = (parseFloat(b.style.height) / 100) * full.height;
+    if (b.classList.contains('m')) { ctx.fillStyle = cs.backgroundColor; ctx.fillRect(L, T, W, H); }
+    else { ctx.fillStyle = cs.borderBottomColor; ctx.fillRect(L, T + H - 2 * scale, W, 2 * scale); }
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  const sx = Math.floor(x[0] * full.width), sy = Math.floor(y[0] * full.height);
+  const sw = Math.max(1, Math.round((x[1] - x[0]) * full.width)), sh = Math.max(1, Math.round((y[1] - y[0]) * full.height));
+  const out = document.createElement('canvas');
+  out.width = sw;
+  out.height = sh;
+  out.getContext('2d', { alpha: false }).drawImage(full, sx, sy, sw, sh, 0, 0, sw, sh);
+  full.width = full.height = 0;
+  return out;
+}
+// A one-page PDF holding a JPEG, sized to a letter-width page.
+function jpegPdf(jpeg, w, h) {
+  const enc = new TextEncoder();
+  const parts = [];
+  const at = [];
+  let len = 0;
+  const push = (x) => { const b = typeof x === 'string' ? enc.encode(x) : x; parts.push(b); len += b.length; };
+  const pw = 612, ph = +(612 * h / w).toFixed(2);
+  const draw = `q ${pw} 0 0 ${ph} 0 0 cm /Im0 Do Q`;
+  push(new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52, 10, 37, 226, 227, 207, 211, 10])); // %PDF-1.4 + binary marker
+  at[1] = len; push('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+  at[2] = len; push('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
+  at[3] = len; push(`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pw} ${ph}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`);
+  at[4] = len; push(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`); push(jpeg); push('\nendstream\nendobj\n');
+  at[5] = len; push(`5 0 obj\n<< /Length ${draw.length} >>\nstream\n${draw}\nendstream\nendobj\n`);
+  const xref = len;
+  push(`xref\n0 6\n0000000000 65535 f \n${[1, 2, 3, 4, 5].map((i) => `${String(at[i]).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return new Blob(parts, { type: 'application/pdf' });
+}
+async function savePage(art, { section, kind, name }) {
+  toast(kind === 'pdf' ? 'Making the PDF…' : 'Making the image…', { ms: 1500 });
+  try {
+    const c = await pageCanvas(art, section);
+    const blob = await new Promise((r) => c.toBlob(r, kind === 'pdf' ? 'image/jpeg' : 'image/png', 0.92));
+    if (!blob) throw new Error('the page was too big to draw');
+    if (kind === 'pdf') saveBlob(jpegPdf(new Uint8Array(await blob.arrayBuffer()), c.width, c.height), `${name}.pdf`);
+    else saveBlob(blob, `${name}.png`);
+    c.width = c.height = 0;
+  } catch (err) {
+    toast(`Couldn’t save it (${err.message})`);
+  }
 }
 
 // The "lines around the hits" slider, as a row in the phone's options menu.

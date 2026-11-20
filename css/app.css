@@ -543,28 +543,26 @@ mark.m.cur { background: var(--cur); color: var(--cur-ink); box-shadow: 0 0 0 2p
 .box.m.cur { background: rgba(255, 100, 0, 0.45); outline: 2px solid var(--cur); outline-offset: 1px; mix-blend-mode: normal; }
 
 /* Gaps between pages */
-.gap { position: relative; margin: -2px 0 12px; padding: 0; }
-.gap::before { content: ""; position: absolute; left: 12px; right: 12px; top: 50%; border-top: 1px dashed var(--line-2); }
-.gap-inner { position: relative; display: flex; align-items: center; justify-content: center; flex-wrap: nowrap; gap: 6px; }
-.gap-label { padding: 0 10px; font-size: 12.5px; color: var(--muted); background: var(--bg); white-space: nowrap; }
-.gap-btn {
-  display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 11px 0 8px; border-radius: 999px;
-  font-size: 12.5px; font-weight: 600; color: var(--ink-2); background: var(--card); border: 1px solid var(--line);
-  box-shadow: var(--shadow-sm); transition: all 0.15s;
+/* Between pages: notebook-style tabs on the right. "Next page" hangs off the bottom of the page above;
+   "page before" sticks up from the top of the page below, beside its label. */
+.gap { position: relative; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; margin: -14px 0 14px; padding: 0 18px; pointer-events: none; }
+.doc-pages > .gap:first-child { margin-top: 0; }
+.gap.has-up { margin-bottom: -30px; }
+.gap-row { display: flex; align-items: center; gap: 8px; }
+.gap-tab {
+  pointer-events: auto; position: relative; z-index: 2; display: inline-flex; align-items: center; gap: 4px;
+  height: 28px; padding: 0 12px 0 9px; background: var(--card); border: 1px solid var(--line);
+  font-size: 12.5px; font-weight: 600; color: var(--ink-2); white-space: nowrap; transition: color 0.15s;
 }
-.gap-btn svg { width: 14px; height: 14px; }
-.gap-btn:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); transform: translateY(-1px); }
-.gap-btn.subtle { color: var(--muted); }
-.gap-btn { flex: none; }
-.doc-sec.ranked.same-doc > .doc-head { display: none; }
-.doc-sec.ranked.same-doc { margin-top: -8px; }
-.gap { pointer-events: none; }
-.gap-btn { pointer-events: auto; position: relative; z-index: 1; }
-.doc-sec.merge-gap > .doc-pages > .gap:first-child::before { display: none; }
-.doc-sec.ranked.merge-gap { margin-top: -50px; }
-.doc-sec.merge-gap > .doc-pages > .gap:first-child .gap-inner { justify-content: flex-end; padding-right: 8%; }
-.doc-sec:has(+ .doc-sec.merge-gap) > .doc-pages > .gap:last-child .gap-inner { justify-content: flex-start; padding-left: 8%; }
-.page-head .rank { margin-right: 2px; }
+.gap-tab svg { width: 14px; height: 14px; stroke-width: 2.3; }
+.gap-tab.down { border-top-color: var(--card); border-radius: 0 0 12px 12px; transform: translateY(-1px); box-shadow: 0 7px 12px -9px rgba(30, 25, 15, 0.45); }
+.gap-tab.up { border-bottom-color: var(--card); border-radius: 12px 12px 0 0; transform: translateY(1px); box-shadow: 0 -5px 10px -9px rgba(30, 25, 15, 0.35); }
+.page.extra + .gap .gap-tab.down { background: var(--card-2); border-top-color: var(--card-2); }
+.gap-tab:hover { color: var(--accent); }
+.gap-all { pointer-events: auto; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.gap-all svg { width: 13px; height: 13px; }
+.gap-all:hover { color: var(--accent); background: var(--accent-soft); }
+.doc-sec.ranked:has(> .doc-pages > .gap.has-up:last-child) { margin-bottom: 0; }
 
 /* Outline */
 .outline {
@@ -919,3 +917,12 @@ button svg { pointer-events: none; }
 .menu-item .sub-arrow.split:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 .lib-acts { cursor: pointer; align-items: stretch; }
 .lib-acts .mini { height: 28px; }
+
+/* invisible text over original pages, so a long press selects words */
+.pdf-text { position: absolute; inset: 0; z-index: 2; overflow: hidden; line-height: 1; -webkit-text-size-adjust: none; text-size-adjust: none; }
+.pdf-text span, .pdf-text br { position: absolute; color: transparent; white-space: pre; transform-origin: 0 0; cursor: text; }
+.pdf-text ::selection { background: color-mix(in srgb, var(--accent) 32%, transparent); }
+.pdf-text br::selection { background: transparent; }
+.doc-sec.ranked.same-doc > .doc-head { display: none; }
+.doc-sec.ranked.same-doc { margin-top: -8px; }
+.page-head .rank { margin-right: 2px; }
