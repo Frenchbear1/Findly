@@ -348,18 +348,21 @@ function estimate(doc, n, mode = pageMode(doc, n)) {
   return Math.max(150, Math.round(chars * S.pxPerChar * z) + 80);
 }
 
+// A result that's sliding off sideways, or waiting behind a page you swiped to, keeps what it has drawn.
+const kept = (art) => art.hidden || !!art._visit || !!art._busy || art.style.position === 'absolute';
 const io = new IntersectionObserver(
   (entries) => {
     for (const e of entries) {
       const art = e.target;
       if (e.isIntersecting) fill(art);
-      else if (art._cleanup && Math.abs(e.boundingClientRect.top) > innerHeight * 4) unfill(art);
+      else if (art._cleanup && !kept(art) && Math.abs(e.boundingClientRect.top) > innerHeight * 4) unfill(art);
     }
   },
   { rootMargin: '1400px 0px' }
 );
 const ioFar = new IntersectionObserver(
-  (entries) => { for (const e of entries) if (!e.isIntersecting && e.target._cleanup) unfill(e.target); },
+  // (a result hidden behind the page you swiped to is kept as it is, ready to come back)
+  (entries) => { for (const e of entries) if (!e.isIntersecting && e.target._cleanup && !kept(e.target)) unfill(e.target); },
   { rootMargin: '5000px 0px' }
 );
 
@@ -484,7 +487,7 @@ function fill(art) {
 function unfill(art) {
   art._plan = null;
   const body = art.lastElementChild;
-  body.style.height = body.offsetHeight + 'px';
+  if (body.offsetHeight) body.style.height = body.offsetHeight + 'px';
   art._cropRO?.disconnect();
   body.classList.remove('cropped');
   art._cleanup?.();
@@ -1109,8 +1112,8 @@ async function goVisit(home, n, dir, rec = true, prepped = null) {
     await next._ready;
     if (!shown.isConnected) { next.remove(); shown._busy = false; return; }
     next.lastElementChild.style.minHeight = '';
-    next.classList.remove('visit-stage');
-    next.style.width = '';
+    next.classList.remove('visit-stage', 'peeking');
+    for (const k of ['width', 'top', 'left', 'transform']) next.style[k] = '';
   } else drop();
 
   // both pages at once: the one you're leaving lifts off and fades, the new one slides in under the veil
@@ -1123,16 +1126,17 @@ async function goVisit(home, n, dir, rec = true, prepped = null) {
     Object.assign(shown.style, { position: 'absolute', zIndex: '3', pointerEvents: 'none', top: shown.offsetTop + 'px', left: shown.offsetLeft + 'px', width: shown.offsetWidth + 'px', margin: '0' });
     if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
   }
-  if (next === home) home.hidden = false;
+  if (next === home) { home.hidden = false; if (!home.lastElementChild.style.height || home.lastElementChild.style.height === '0px') home.lastElementChild.style.height = ''; fill(home); }
   else if (next.previousElementSibling !== shown) shown.after(next);
   if (!ghost) { if (cur) { cur._cleanup?.(); cur.remove(); } else home.hidden = true; }
   home._visit = next === home ? null : next;
   const d = next.getBoundingClientRect().top - top;
   if (d) window.scrollBy({ top: d, behavior: 'instant' });
   if (ghost) shown.style.top = next.offsetTop + 'px';
-  if (next.getBoundingClientRect().top < topOffset() - 40) { // start a page you've moved to at its top
-    window.scrollBy({ top: next.getBoundingClientRect().top - topOffset() - 8, behavior: 'instant' });
-  }
+  const toTop = () => { // a page you've moved to starts at its top
+    const t = next.getBoundingClientRect().top;
+    if (t < topOffset() - 40) window.scrollBy({ top: t - topOffset() - 8, behavior: 'smooth' });
+  };
   requestAnimationFrame(() => { html.style.overflowAnchor = ''; });
   const finish = () => {
     if (cur) { cur._cleanup?.(); cur.remove(); }
@@ -1140,33 +1144,42 @@ async function goVisit(home, n, dir, rec = true, prepped = null) {
     for (const k of ['position', 'zIndex', 'pointerEvents', 'top', 'left', 'width', 'margin', 'transform', 'opacity']) shown.style[k] = '';
     shown._busy = false;
     markStuck();
+    toTop();
   };
-  if (!ghost) { shown._busy = false; if (!reduceMotion()) next.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260 }); markStuck(); return; }
+  if (!ghost) { shown._busy = false; if (!reduceMotion()) next.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260 }); markStuck(); toTop(); return; }
   const from = shown._drag || 0; // where the finger left it
   const ease = 'cubic-bezier(0.25, 0.9, 0.3, 1)';
-  shown.animate([{ transform: `translateX(${from}px)`, opacity: shown._dragO ?? 1 }, { transform: `translateX(${-dir * 38}%) scale(0.96)`, opacity: 0 }], { duration: 420, easing: ease, fill: 'forwards' }).onfinish = finish;
-  next.animate([{ transform: `translateX(${dir * 30}%)`, opacity: 0, filter: 'blur(3px)' }, { transform: 'none', opacity: 1, filter: 'none' }], { duration: 460, easing: ease });
+  if (next._peekX != null) {
+    // it was already peeking in from the side: carry on like a carousel, both pages moving together
+    const w = shown.offsetWidth + SWIPE_GAP;
+    const t = Math.max(240, Math.min(420, Math.abs(next._peekX) * 1.1));
+    shown.animate([{ transform: `translateX(${from}px)`, opacity: 1 }, { transform: `translateX(${-dir * w}px)`, opacity: 0.25 }], { duration: t, easing: ease, fill: 'forwards' }).onfinish = (ev) => { finish(); ev.target.cancel(); };
+    next.animate([{ transform: `translateX(${next._peekX}px)` }, { transform: 'none' }], { duration: t, easing: ease });
+    next._peekX = null;
+  } else {
+    shown.animate([{ transform: `translateX(${from}px)`, opacity: 1 }, { transform: `translateX(${-dir * 38}%) scale(0.96)`, opacity: 0 }], { duration: 420, easing: ease, fill: 'forwards' }).onfinish = (ev) => { finish(); ev.target.cancel(); };
+    next.animate([{ transform: `translateX(${dir * 30}%)`, opacity: 0, filter: 'blur(3px)' }, { transform: 'none', opacity: 1, filter: 'none' }], { duration: 460, easing: ease });
+  }
   shown._drag = 0;
-  shown._dragO = null;
 }
+const SWIPE_GAP = 14;
+const SWIPE_AT = 72; // how far to drag before letting go switches pages
 function bindPageSwipe(host) {
   let s = null;
-  const peek = el('div', 'swipe-peek');
+  // the marker that sits on the seam between the two pages: the page number in a ring that fills as you drag
+  const peek = el('div', 'swipe-peek', `<svg viewBox="0 0 56 56"><circle class="tr" cx="28" cy="28" r="25"/><circle class="pr" cx="28" cy="28" r="25" pathLength="100"/></svg><span class="sp-n"></span><span class="sp-a">${I.chevron}</span>`);
   document.body.append(peek);
   const pageOf = (t) => {
     const art = t.closest?.('.page.hit, .page.visit');
     return art && !art._web && !art.hidden && art._v?.kind === 'results' ? art : null;
   };
-  const reset = (art) => {
-    for (const k of ['transform', 'opacity', 'transition']) art.style[k] = '';
-    peek.className = 'swipe-peek';
-  };
   const unprep = () => { if (s?.prep) { s.prep._cleanup?.(); s.prep.remove(); s.prep = null; } };
+  const hidePeek = () => { peek.classList.remove('on', 'go'); };
   host.addEventListener('pointerdown', (e) => {
     s = null;
     if (prefs.pageNav !== 'swipe' || e.pointerType === 'mouse' || e.target.closest('button, a, input, textarea, .menu')) return;
     const art = pageOf(e.target);
-    if (art && !art._busy) s = { art, x: e.clientX, y: e.clientY, t: performance.now(), moved: 0, on: false, id: e.pointerId, dir: 0, prep: null };
+    if (art && !art._busy) s = { art, x: e.clientX, y: e.clientY, t: performance.now(), moved: 0, on: false, id: e.pointerId, dir: 0, prep: null, go: false };
   }, { passive: true });
   host.addEventListener('pointermove', (e) => {
     if (!s || e.pointerId !== s.id) return;
@@ -1178,7 +1191,7 @@ function bindPageSwipe(host) {
       if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
       if (String(getSelection?.() || '').trim()) { s = null; return; }
       s.on = true;
-      s.art.style.transition = 'none';
+      s.w = s.art.offsetWidth;
     }
     const dir = dx < 0 ? 1 : -1;
     const home = s.art._home || s.art;
@@ -1188,38 +1201,59 @@ function bindPageSwipe(host) {
     if (dir !== s.dir) { // heading the other way: get that page ready instead
       unprep();
       s.dir = dir;
-      if (!edge && n !== Number(home.dataset.n)) s.prep = prepVisit(home, n);
+      if (!edge) {
+        s.prep = n === Number(home.dataset.n) ? null : prepVisit(home, n);
+        if (s.prep) {
+          s.prep.classList.add('peeking');
+          Object.assign(s.prep.style, { top: s.art.offsetTop + 'px', left: s.art.offsetLeft + 'px', width: s.w + 'px' });
+        }
+      }
     }
-    const k = Math.min(1, Math.abs(dx) / 160);
-    const move = edge ? dx * 0.25 : dx * 0.85;
+    // the page follows your finger; the next one comes in from the side, right behind it
+    const move = edge ? Math.sign(dx) * Math.min(60, Math.abs(dx) * 0.3) : dx;
     s.art.style.transform = `translateX(${move}px)`;
-    s.art.style.opacity = String(edge ? 1 : 1 - k * 0.55);
     s.art._drag = move;
-    s.art._dragO = edge ? 1 : 1 - k * 0.55;
-    peek.innerHTML = edge ? '' : `${dir < 0 ? I.arrowLeft : ''}<span>Page ${n + 1}</span>${dir > 0 ? `<i>${I.arrowLeft}</i>` : ''}`;
-    peek.className = `swipe-peek ${dir > 0 ? 'r' : 'l'}${edge ? '' : ' on'}${k >= 0.44 ? ' go' : ''}`;
-    peek.style.opacity = edge ? '0' : String(Math.min(1, k * 1.6));
+    const peekX = dir * (s.w + SWIPE_GAP) + move;
+    if (s.prep) s.prep.style.transform = `translateX(${peekX}px)`;
+    // the seam marker, kept in the middle of what you can see of the page
+    if (edge) { hidePeek(); return; }
+    const r = s.art.getBoundingClientRect();
+    const top = Math.max(r.top, topOffset()), bot = Math.min(r.bottom, innerHeight - 96);
+    const p = Math.min(1, Math.abs(dx) / SWIPE_AT);
+    const seam = dir > 0 ? r.right + SWIPE_GAP / 2 : r.left - SWIPE_GAP / 2;
+    peek.style.left = Math.max(30, Math.min(innerWidth - 30, seam)) + 'px';
+    peek.style.top = (bot > top ? (top + bot) / 2 : innerHeight / 2) + 'px';
+    peek.style.setProperty('--p', String(p * 100));
+    peek.querySelector('.sp-n').textContent = n + 1;
+    peek.classList.toggle('back', dir < 0);
+    peek.classList.add('on');
+    const go = p >= 1;
+    if (go !== s.go) { s.go = go; peek.classList.toggle('go', go); if (go) navigator.vibrate?.(6); }
   }, { passive: true });
   const end = (e, ok) => {
     if (!s || e.pointerId !== s.id) return;
-    const { art, on, prep } = s;
+    const { art, on, prep, w, dir: sdir } = s;
     const dx = e.clientX - s.x;
     const v = Math.abs(dx) / Math.max(1, performance.now() - (s.moved || s.t));
     s.prep = null;
     s = null;
+    hidePeek();
     if (!on) { if (prep) { prep._cleanup?.(); prep.remove(); } return; }
     art._swiped = performance.now();
-    peek.className = 'swipe-peek';
-    if (!ok || (Math.abs(dx) < 70 && v < 0.45)) {
-      if (prep) { prep._cleanup?.(); prep.remove(); }
-      const from = art.style.transform, o = art.style.opacity;
-      reset(art);
+    const from = art.style.transform;
+    art.style.transform = '';
+    const dir = dx < 0 ? 1 : -1;
+    if (!ok || dir !== sdir || (Math.abs(dx) < SWIPE_AT && v < 0.45) || !prep && Number(art.dataset.n) + dir !== Number((art._home || art).dataset.n)) {
+      // not far enough: both pages settle back
       art._drag = 0;
-      if (!reduceMotion()) art.animate([{ transform: from, opacity: o }, { transform: 'none', opacity: 1 }], { duration: 240, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
+      if (!reduceMotion()) art.animate([{ transform: from }, { transform: 'none' }], { duration: 260, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
+      if (prep) {
+        const a = prep.animate([{ transform: prep.style.transform }, { transform: `translateX(${sdir * (w + SWIPE_GAP)}px)` }], { duration: 260, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
+        a.onfinish = () => { prep._cleanup?.(); prep.remove(); };
+      }
       return;
     }
-    const dir = dx < 0 ? 1 : -1;
-    reset(art);
+    if (prep) prep._peekX = dir * (w + SWIPE_GAP) + (art._drag || 0);
     goVisit(art._home || art, Number(art.dataset.n) + dir, dir, true, prep);
   };
   host.addEventListener('pointerup', (e) => end(e, true));

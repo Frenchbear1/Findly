@@ -1343,14 +1343,25 @@ body.nav-swipe #results .page.hit, body.nav-swipe #results .page.hit *, body.nav
    its border get cut off */
 body.nav-swipe #results .page.hit .crop-clip, body.nav-swipe #results .page.visit .crop-clip { overflow-x: hidden; }
 .page.hit, .page.visit { will-change: auto; }
-.swipe-peek { position: fixed; top: 50%; z-index: 60; display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 14px; border-radius: 999px;
-  background: color-mix(in srgb, var(--panel) 92%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border: 1px solid var(--line-2);
-  box-shadow: var(--shadow-lg); color: var(--ink-2); font-size: 14px; font-weight: 650; pointer-events: none; opacity: 0; transform: translateY(-50%); transition: background 0.15s, color 0.15s, transform 0.15s; }
-.swipe-peek:not(.on) { visibility: hidden; }
-.swipe-peek.r { right: 12px; } .swipe-peek.l { left: 12px; }
-.swipe-peek svg { width: 16px; height: 16px; stroke-width: 2.4; }
-.swipe-peek i { display: contents; } .swipe-peek i svg { transform: scaleX(-1); }
-.swipe-peek.go { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); transform: translateY(-50%) scale(1.06); }
+.page.visit-stage.peeking { visibility: visible; z-index: 2; }
+body.nav-swipe #results { overflow-x: clip; }
+/* the marker on the seam between the two pages: the page you're going to, in a ring that fills as you drag */
+.swipe-peek { position: fixed; z-index: 60; width: 56px; height: 56px; margin: -28px 0 0 -28px; display: grid; place-items: center; pointer-events: none;
+  border-radius: 50%; background: color-mix(in srgb, var(--panel) 88%, transparent); -webkit-backdrop-filter: blur(12px) saturate(160%); backdrop-filter: blur(12px) saturate(160%);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--line); color: var(--ink); opacity: 0; transform: scale(0.6);
+  transition: opacity 0.18s, transform 0.25s cubic-bezier(0.3, 1.6, 0.5, 1), background 0.18s, color 0.18s; }
+.swipe-peek.on { opacity: 1; transform: scale(1); }
+.swipe-peek svg:first-child { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.swipe-peek circle { fill: none; stroke-width: 3; }
+.swipe-peek .tr { stroke: color-mix(in srgb, var(--line-2) 80%, transparent); }
+.swipe-peek .pr { stroke: var(--accent); stroke-linecap: round; stroke-dasharray: calc(var(--p, 0) * 1) 100; transition: stroke-dasharray 0.06s linear; }
+.swipe-peek .sp-n { font-size: 17px; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1; margin-top: -6px; }
+.swipe-peek .sp-a { position: absolute; bottom: 7px; display: grid; color: var(--muted); }
+.swipe-peek .sp-a svg { width: 12px; height: 12px; stroke-width: 2.8; }
+.swipe-peek.back .sp-a svg { transform: scaleX(-1); }
+.swipe-peek.go { background: var(--accent); color: var(--accent-ink); transform: scale(1.12); box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 45%, transparent); }
+.swipe-peek.go .sp-a { color: var(--accent-ink); }
+.swipe-peek.go .pr { stroke: var(--accent-ink); }
 .page.visit-stage { position: absolute; visibility: hidden; pointer-events: none; left: -200vw; }
 .page.visit .page-body { background: var(--card); }
 .visit-back { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px 0 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12.5px; font-weight: 650; white-space: nowrap; }
