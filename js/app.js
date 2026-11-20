@@ -72,13 +72,16 @@ const I = {
   trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
   out: '<svg viewBox="0 0 24 24"><path d="M15 12H4M8 8l-4 4 4 4M14 5h5a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-5"/></svg>',
   upload: '<svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>',
+  crop: '<svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"/></svg>',
+  up: '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>',
+  down: '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>',
 };
 
 // ---------- preferences ----------
 const PREF_KEY = 'instant-search:prefs';
 const PREFS_V = 2;
 const prefs = Object.assign(
-  { mode: 'all', matchCase: false, wholeWord: false, near: 8, sort: 'library', view: 'original', theme: 'auto', q: '', zoom: 'width', compact: false, sideHidden: false, keys: {}, v: PREFS_V },
+  { mode: 'all', matchCase: false, wholeWord: false, near: 8, sort: 'library', view: 'original', theme: 'auto', q: '', zoom: 'width', compact: false, sideHidden: false, keys: {}, v: PREFS_V, crop: true, cropLines: 3 },
   (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch { return {}; } })()
 );
 // v2: pages open as the original and fit the width by default; Regex is gone
@@ -190,6 +193,7 @@ function runSearch({ keepScroll = false } = {}) {
     results.navY = before.navY;
   } else {
     results.revealed.clear();
+    cropOpen.clear();
     results.dirty = true;
     if (active === results) renderView(results, { keepScroll });
   }
@@ -373,7 +377,7 @@ function pageEl(v, doc, n, R) {
   art._flat = !!R?.flat;
   const head = el('header', 'page-head', headHtml(v, doc, n, ctx, !!R?.flat));
   const body = el('div', 'page-body');
-  body.style.height = (art._flat && doc.kind === 'html' ? estimate(doc, n, 'text') : estimate(doc, n)) + 'px';
+  body.style.height = bodyEstimate(art, doc, n) + 'px';
   art.append(head, body);
   v.pageEls.set(ctx ? `${pkey(doc.id, n)}@${groupKey(R, doc)}` : pkey(doc.id, n), art);
   io.observe(art);
@@ -457,6 +461,7 @@ function fill(art) {
       swapped();
     }
     body.style.height = '';
+    applyCrop(art);
     if (mode === 'text' && text.length > 600) {
       const ratio = (body.offsetHeight - 40) / text.length / zoomValue();
       if (ratio > 0.05 && ratio < 2) S.pxPerChar = S.pxPerChar * 0.8 + ratio * 0.2;
@@ -469,6 +474,8 @@ function fill(art) {
 function unfill(art) {
   const body = art.lastElementChild;
   body.style.height = body.offsetHeight + 'px';
+  art._cropRO?.disconnect();
+  body.classList.remove('cropped');
   art._cleanup?.();
   art._cleanup = null;
   art._prevCleanup?.();
@@ -500,8 +507,143 @@ function refill(art) {
     art._prevCleanup?.();
     art._prevCleanup = null;
     body.replaceChildren();
-    body.style.height = estimate(doc, n) + 'px';
+    body.classList.remove('cropped');
+    body.style.height = bodyEstimate(art, doc, n) + 'px';
   }
+}
+
+// ---------- cropping result pages to the hits ----------
+// A hit page in the results shows just the band of the page holding its hits, with a few lines above and
+// below (prefs.cropLines). "Top of page" / "Rest of page" open it out to the page's edges; the page
+// before or after still comes from the buttons between pages, as always.
+const cropOpen = new Map(); // pkey -> { top, bottom } opened out by hand (cleared when the search changes)
+function cropWanted(art) {
+  if (!prefs.crop || art._ctx || art._web || art._v?.kind !== 'results') return false;
+  return !!art._v.info.get(pkey(art.dataset.doc, Number(art.dataset.n)))?.ranges.length;
+}
+// The band to show, as fractions of the page's height: [a, b], or null for the whole page.
+function cropBand(art, content) {
+  const marks = [];
+  let line = 0;
+  if (content.classList.contains('pdf-frame')) {
+    const hs = [];
+    for (const b of content.querySelectorAll('.box.m')) {
+      const t = parseFloat(b.style.top) / 100;
+      const h = parseFloat(b.style.height) / 100;
+      if (!(h > 0)) continue;
+      marks.push([t, t + h]);
+      hs.push(h);
+    }
+    hs.sort((x, y) => x - y);
+    line = (hs[hs.length >> 1] || 0.015) * 1.15;
+  } else {
+    const H = content.offsetHeight;
+    if (!H) return null;
+    const top = content.getBoundingClientRect().top;
+    for (const m of content.querySelectorAll('mark.m')) {
+      const r = m.getBoundingClientRect();
+      marks.push([(r.top - top) / H, (r.bottom - top) / H]);
+    }
+    line = (parseFloat(getComputedStyle(content).lineHeight) || 26) / H;
+  }
+  if (!marks.length) return null;
+  const open = cropOpen.get(pkey(art.dataset.doc, Number(art.dataset.n))) || {};
+  const pad = line * (Number(prefs.cropLines) || 3);
+  let a = Math.min(...marks.map((m) => m[0])) - pad;
+  let b = Math.max(...marks.map((m) => m[1])) + pad;
+  if (open.top || a < line * 1.5) a = 0; // not worth hiding a line or two
+  if (open.bottom || b > 1 - line * 1.5) b = 1;
+  if (a <= 0 && b >= 1) return null;
+  return [Math.max(0, a), Math.min(1, b)];
+}
+const cropEdge = (side) => `<button class="crop-more ${side}" data-act="crop-${side}" title="${side === 'top' ? 'Show the top of this page' : 'Show the rest of this page'}">${side === 'top' ? I.up : I.down}<span>${side === 'top' ? 'Top of page' : 'Rest of page'}</span></button>`;
+function applyCrop(art) {
+  const body = art.lastElementChild;
+  let clip = body.querySelector(':scope > .crop-clip');
+  const content = clip ? clip.querySelector('.pdf-frame, .page-text') : body.querySelector(':scope > .pdf-frame, :scope > .page-text');
+  if (!content) return;
+  const band = cropWanted(art) ? cropBand(art, content) : null;
+  if (!band) {
+    if (clip) body.replaceChildren(content);
+    body.classList.remove('cropped');
+    art._cropRO?.disconnect();
+    return;
+  }
+  if (!clip) {
+    clip = el('div', 'crop-clip');
+    const inner = el('div', 'crop-inner');
+    clip.append(inner);
+    body.replaceChildren(clip);
+    inner.append(content);
+    body.classList.add('cropped');
+    // zoom, width changes and text reflow resize the page: keep the band on the hits
+    art._cropRO?.disconnect();
+    let seen = 0;
+    art._cropRO = new ResizeObserver(() => {
+      const h = content.offsetHeight;
+      if (Math.abs(h - seen) > 0.5) { seen = h; applyCrop(art); }
+    });
+    art._cropRO.observe(content);
+  }
+  const H = content.offsetHeight;
+  clip.style.height = Math.max(24, Math.round((band[1] - band[0]) * H)) + 'px';
+  clip.firstElementChild.style.marginTop = -Math.round(band[0] * H) + 'px';
+  const hasTop = band[0] > 0, hasBottom = band[1] < 1;
+  const top = body.querySelector(':scope > .crop-more.top');
+  const bottom = body.querySelector(':scope > .crop-more.bottom');
+  if (hasTop && !top) clip.insertAdjacentHTML('beforebegin', cropEdge('top'));
+  if (!hasTop) top?.remove();
+  if (hasBottom && !bottom) clip.insertAdjacentHTML('afterend', cropEdge('bottom'));
+  if (!hasBottom) bottom?.remove();
+  body.classList.toggle('cut-top', hasTop);
+  body.classList.toggle('cut-bottom', hasBottom);
+}
+function expandCrop(art, side) {
+  const key = pkey(art.dataset.doc, Number(art.dataset.n));
+  cropOpen.set(key, { ...cropOpen.get(key), [side]: true });
+  const content = art.querySelector('.pdf-frame, .page-text');
+  const before = content?.getBoundingClientRect().top;
+  applyCrop(art);
+  if (side !== 'top' || before == null) return;
+  // keep the hits where they were, then ease up a little so you can see what opened above
+  const after = content.getBoundingClientRect().top;
+  const opened = Math.max(0, after - before);
+  window.scrollBy({ top: after - before, behavior: 'instant' });
+  if (opened > 0) window.scrollBy({ top: -Math.min(opened, innerHeight * 0.35), behavior: reduceMotion() ? 'instant' : 'smooth' });
+}
+// What a page will roughly take before it's drawn (a cropped hit page is only a band of the page).
+function bodyEstimate(art, doc, n) {
+  const full = art._flat && doc.kind === 'html' ? estimate(doc, n, 'text') : estimate(doc, n);
+  if (!cropWanted(art)) return full;
+  const z = zoomValue();
+  const line = pageMode(doc, n) === 'original' ? (BASE_W * z * S.pageAspect) / 52 : 16.5 * 1.66 * z;
+  return Math.min(full, Math.round(line * (2 * (Number(prefs.cropLines) || 3) + 2) + 70));
+}
+let recropT = 0;
+function recropAll() {
+  cancelAnimationFrame(recropT);
+  recropT = requestAnimationFrame(() => {
+    const a = captureAnchor();
+    for (const art of results.pageEls.values()) {
+      const body = art.lastElementChild;
+      if (body.querySelector(':scope > .crop-clip, :scope > .pdf-frame, :scope > .page-text')) applyCrop(art);
+      else if (!art._filled) body.style.height = bodyEstimate(art, docById(art.dataset.doc), Number(art.dataset.n)) + 'px';
+    }
+    restoreAnchor(a);
+    trackPosition();
+  });
+}
+function setCrop(on) {
+  prefs.crop = !!on;
+  savePrefs();
+  syncControls();
+  recropAll();
+}
+function setCropLines(n) {
+  prefs.cropLines = Math.max(1, Math.min(15, Math.round(Number(n) || 3)));
+  savePrefs();
+  syncControls();
+  if (prefs.crop) recropAll();
 }
 
 // ---------- gaps between hit pages ----------
@@ -1082,6 +1224,10 @@ function syncControls() {
   $('#zoomVal').textContent = Math.round(zoomValue() * 100) + '%';
   $('#fitWidth').setAttribute('aria-pressed', String(prefs.zoom === 'width'));
   $('#fitPage').setAttribute('aria-pressed', String(prefs.zoom === 'page'));
+  $('#cropBtn').setAttribute('aria-pressed', String(!!prefs.crop));
+  $('#cropSpan').hidden = !prefs.crop;
+  $('#cropLines').value = prefs.cropLines;
+  $('#cropOut').textContent = `±${prefs.cropLines}`;
   q.placeholder = {
     any: 'Pages with any of these words…',
     all: 'Pages with all of these words…',
@@ -1476,6 +1622,7 @@ function fillMenu(m, items, { onBack } = {}) {
   for (const it of items) {
     if (it.sep) { m.append(el('div', 'menu-sep')); continue; }
     if (it.header) { m.append(el('div', 'menu-head', esc(it.header))); continue; }
+    if (it.node) { m.append(it.node()); continue; }
     const b = el('button', `menu-item${it.danger ? ' danger' : ''}${it.checked ? ' checked' : ''}${it.submenu ? ' has-sub' : ''}`,
       `${it.icon || '<span class="menu-gap"></span>'}<span>${esc(it.label)}</span>${it.checked ? I.check : ''}${it.submenu ? `<i class="sub-arrow${it.run ? ' split' : ''}" title="Show what’s inside">${I.chevron}</i>` : ''}`);
     b.setAttribute('role', 'menuitem');
@@ -1497,7 +1644,14 @@ function fillMenu(m, items, { onBack } = {}) {
     } else {
       // small delay so moving the mouse diagonally toward the side window doesn't close it
       b.addEventListener('mouseenter', () => { if (!compactMenus() && m._sub) { clearTimeout(m._closeT); m._closeT = setTimeout(() => closeSubmenu(m), 260); } });
-      b.addEventListener('click', (e) => { e.stopPropagation(); closeMenu(); it.run(); });
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!it.keep || !m._items) { closeMenu(); it.run(); return; }
+        // a switch that stays open: flip it and redraw the menu in place
+        it.run();
+        fillMenu(m, m._items(), { onBack });
+        placeMenu(m);
+      });
     }
     m.append(b);
   }
@@ -1545,6 +1699,7 @@ function openMenu(anchor, items) {
   const m = el('div', 'pop-menu');
   m.setAttribute('role', 'menu');
   m._anchor = anchor;
+  if (typeof items === 'function') { m._items = items; items = items(); } // can redraw itself in place
   fillMenu(m, items);
   document.body.append(m);
   anchor.classList.add('menu-open');
@@ -3011,6 +3166,8 @@ function bind() {
   $('#zoomVal').addEventListener('click', () => setZoom(1));
   $('#fitWidth').addEventListener('click', () => setZoom(prefs.zoom === 'width' ? 1 : 'width'));
   $('#fitPage').addEventListener('click', () => setZoom(prefs.zoom === 'page' ? 1 : 'page'));
+  $('#cropBtn').addEventListener('click', () => setCrop(!prefs.crop));
+  $('#cropLines').addEventListener('input', (e) => setCropLines(e.target.value));
   let resizeTimer;
   addEventListener('resize', () => {
     clearTimeout(resizeTimer);
@@ -3215,6 +3372,7 @@ function bind() {
     if (act === 'pick') $('#fileInput').click();
     else if (act === 'read') openReader(b.dataset.doc || sec?.dataset.doc);
     else if (act === 'open' && art) openReader(art.dataset.doc, Number(art.dataset.n));
+    else if ((act === 'crop-top' || act === 'crop-bottom') && art) expandCrop(art, act === 'crop-top' ? 'top' : 'bottom');
     else if (act === 'web' && art) { override.set(pkey(art.dataset.doc, WEB), 'original'); openReader(art.dataset.doc, Number(art.dataset.n)); }
     else if (act === 'pmode' && art) {
       const doc = docById(art.dataset.doc);
@@ -3481,6 +3639,7 @@ const ACTIONS = [
   { id: 'fitWidth', label: 'Fit width', keys: ['W'], run: () => setZoom('width') },
   { id: 'fitPage', label: 'Fit page', keys: ['F'], run: () => setZoom('page') },
   { id: 'toggleView', label: 'PDF pages: text / original', keys: ['O'], run: () => setView(prefs.view === 'text' ? 'original' : 'text') },
+  { id: 'toggleCrop', label: 'Crop result pages to the hits', keys: ['C'], run: () => setCrop(!prefs.crop) },
   { id: 'toggleCompact', label: 'Minimize / show the toolbar', keys: ['H'], run: () => toggleCompact() },
   { id: 'toggleLibrary', label: 'Hide / show the library', keys: ['L'], run: () => toggleLibrary() },
   { id: 'readDoc', label: 'Read the whole document you’re on', keys: ['R'], run: () => { const c = currentDocAndPage(); if (c && active === results) openReader(c.docId, c.n); } },
@@ -3735,7 +3894,7 @@ function bindHoldMenu(el, getItems) {
     st.open = true;
     clearTimeout(st.timer);
     closeMenu();
-    openMenu(el, getItems());
+    openMenu(el, getItems);
     el.classList.add('holding');
     navigator.vibrate?.(8);
   };
@@ -3763,14 +3922,14 @@ function bindHoldMenu(el, getItems) {
       else if (apply && e && Math.hypot(e.clientX - s.x, e.clientY - s.y) > 10) closeMenu(); // slid off: nothing picked
       // held still and let go: leave the menu open to tap
     } else if (apply) {
-      if (s.wasOpen) closeMenu(); else openMenu(el, getItems());
+      if (s.wasOpen) closeMenu(); else openMenu(el, getItems);
     }
   };
   el.addEventListener('pointerup', (e) => end(e, true));
   el.addEventListener('pointercancel', () => end(null, false));
   el.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (e.detail === 0) openMenu(el, getItems());
+    if (e.detail === 0) openMenu(el, getItems);
   });
 }
 
@@ -3780,6 +3939,11 @@ function moreItems() {
     items.push({ header: 'Pages' },
       { label: 'Text', icon: I.text, checked: prefs.view === 'text', run: () => setView('text') },
       { label: 'Original', icon: I.image, checked: prefs.view === 'original', run: () => setView('original') });
+  }
+  if (active === results) {
+    items.push({ header: 'Crop to hits' },
+      { label: 'Show just the hits', icon: I.crop, checked: !!prefs.crop, keep: true, run: () => setCrop(!prefs.crop) });
+    if (prefs.crop) items.push({ node: cropSliderRow });
   }
   items.push({ header: `Zoom · ${Math.round(zoomValue() * 100)}%` },
     { label: 'Zoom in', icon: I.plus, run: () => zoomBy(1) },
@@ -3797,6 +3961,15 @@ function moreItems() {
   if (active === reader) items.push({ label: 'Back to results', icon: I.arrowLeft, run: () => closeReader() });
   items.push({ label: 'Library', icon: I.folder, run: () => toggleLibrary() });
   return items;
+}
+
+// The "lines around the hits" slider, as a row in the phone's options menu.
+function cropSliderRow() {
+  const row = el('label', 'menu-range', `<span>Lines around hits</span><input type="range" min="1" max="15" step="1" value="${prefs.cropLines}" aria-label="Lines shown around the hits"><output>±${prefs.cropLines}</output>`);
+  const input = row.querySelector('input');
+  input.addEventListener('input', () => { setCropLines(input.value); row.querySelector('output').textContent = `±${prefs.cropLines}`; });
+  row.addEventListener('click', (e) => e.stopPropagation());
+  return row;
 }
 
 // Slide along the hit counter to scrub through hits one by one; tap it for the next hit.

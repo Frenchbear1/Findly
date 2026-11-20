@@ -137,6 +137,10 @@
           <button class="fit" id="fitWidth" title="Fit width (W)" aria-label="Fit width"><svg viewBox="0 0 24 24"><path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4"/></svg></button>
           <button class="fit" id="fitPage" title="Fit page (F)" aria-label="Fit page"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="1.5"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></button>
         </div>
+        <div class="crop-ctl" role="group" aria-label="Crop result pages to the hits">
+          <button class="fit" id="cropBtn" title="Show just the hits on each page (C)" aria-label="Crop pages to the hits"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"/></svg></button>
+          <label class="crop-span" id="cropSpan" title="Lines shown above and below the hits"><input type="range" id="cropLines" min="1" max="15" step="1" aria-label="Lines shown around the hits" /><output id="cropOut">±3</output></label>
+        </div>
       </div>
       <nav class="mbar" id="mbar" aria-label="Reading controls" hidden>
         <button class="mode-pill m-mode" id="mMode" type="button" title="Search type — tap, or hold and slide sideways"></button>
