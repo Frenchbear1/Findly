@@ -715,16 +715,65 @@ function colPlan(art, content) {
   }
   // reading order: down the left column, then the next one
   groups.sort((a, b) => (a.cols ? a.cols[a.k][0] : 0) - (b.cols ? b.cols[b.k][0] : 0) || a.top - b.top);
-  const shift = art._colShift || {};
-  const pieces = groups.map((g) => {
+  const opened = art._colOpen || {};
+  let pieces = groups.map((g) => {
     let a = g.top - pad, z = g.bot + pad;
     if (open?.top || a < ty[0] + line * 1.5) a = ty[0];
     if (open?.bottom || z > ty[1] - line * 1.5) z = ty[1];
     const key = `${g.top.toFixed(3)}`;
-    const k = g.cols ? Math.max(0, Math.min(g.cols.length - 1, shift[key] ?? g.k)) : -1;
-    return { key, cols: g.cols, home: g.k, k, span: g.cols ? g.cols[k] : tx, band: [Math.max(0, a), Math.min(1, z)], cutA: a > ty[0] + 0.005, cutB: z < ty[1] - 0.005 };
+    if (!g.cols) return { key, cols: null, k: -1, k2: -1, span: tx, band: [Math.max(0, a), Math.min(1, z)], cutA: a > ty[0] + 0.005, cutB: z < ty[1] - 0.005 };
+    const r = opened[key];
+    const k = r ? Math.max(0, r[0]) : g.k, k2 = r ? Math.min(g.cols.length - 1, r[1]) : g.k;
+    // with a neighbouring column revealed, show both columns from where they start to where they end
+    let span = [g.cols[k][0], g.cols[k2][1]];
+    if (k2 > k) {
+      [a, z] = columnRun(lines, g.cols, k, k2, g.top, g.bot, ty, line);
+      // reach the real ends of the lines in the run, however long they get
+      for (let i = 0; i < lines.length; i += 4) {
+        const c = (lines[i] + lines[i + 1]) / 2;
+        if (lines[i + 3] < a || lines[i + 2] > z || c < span[0] || c > span[1]) continue;
+        span = [Math.max(span[0] - 0.05, Math.min(span[0], lines[i] - 0.01)), Math.min(span[1] + 0.05, Math.max(span[1], lines[i + 1] + 0.01))];
+      }
+      span = [Math.max(0, span[0]), Math.min(1, span[1])];
+    }
+    return { key, cols: g.cols, k, k2, wide: k2 > k, span, band: [Math.max(0, a), Math.min(1, z)], cutA: a > ty[0] + 0.005, cutB: z < ty[1] - 0.005 };
   });
+  // an opened-up piece takes in any other piece that now sits inside it
+  pieces = pieces.filter((p) => !pieces.some((q) => q !== p && q.wide && q.span[0] <= (p.span[0] + p.span[1]) / 2 && (p.span[0] + p.span[1]) / 2 <= q.span[1] && q.band[0] <= p.band[0] + 0.01 && p.band[1] <= q.band[1] + 0.01));
   return { pieces };
+}
+// How far up and down the page a run of columns goes: until a line runs across the gap between them
+// (a full-width heading, figure caption or paragraph), or the page ends.
+function columnRun(lines, cols, k, k2, top, bot, ty, line) {
+  let a = ty[0], z = ty[1];
+  for (let g = k; g < k2; g++) {
+    const g0 = cols[g][1], g1 = cols[g + 1][0];
+    for (let i = 0; i < lines.length; i += 4) {
+      if (!(lines[i] < g0 - 0.004 && lines[i + 1] > g1 + 0.004)) continue;
+      if (lines[i + 3] <= top) a = Math.max(a, lines[i + 3] + 0.004);
+      else if (lines[i + 2] >= bot) z = Math.min(z, lines[i + 2] - 0.004);
+    }
+  }
+  // …or a stretch with no text in the columns at all (a picture, a big break)
+  const x0 = cols[k][0], x1 = cols[k2][1], gap = line * 3.2;
+  const ls = [];
+  for (let i = 0; i < lines.length; i += 4) {
+    const c = (lines[i] + lines[i + 1]) / 2;
+    // column text starts at a column's left edge; labels scattered over a picture don't
+    const flush = cols.slice(k, k2 + 1).some(([l]) => Math.abs(lines[i] - l - 0.012) < 0.03);
+    if (flush && c >= x0 && c <= x1 && lines[i + 2] >= a - 0.002 && lines[i + 3] <= z + 0.002) ls.push([lines[i + 2], lines[i + 3]]);
+  }
+  let up = top;
+  for (const [t, b] of ls.filter(([, b]) => b <= top + 0.002).sort((p, q) => q[1] - p[1])) {
+    if (up - b > gap) break;
+    up = Math.min(up, t);
+  }
+  let down = bot;
+  for (const [t, b] of ls.filter(([t]) => t >= bot - 0.002).sort((p, q) => p[0] - q[0])) {
+    if (t - down > gap) break;
+    down = Math.max(down, b);
+  }
+  return [Math.max(a, up - line * 0.4), Math.min(z, down + line * 0.4)];
 }
 function cloneFrame(frame) {
   const c = frame.cloneNode(true);
@@ -771,14 +820,14 @@ function layoutPieces(art, body, content, plan) {
       clip.append(inner);
       // arrows tucked into the sides when there's a column that way
       const nav = (side, act, label) => {
-        const b = el('button', `col-nav ${side}`, I.chevron);
+        const b = el('button', `col-nav ${side}`, `<svg class="cn-eye" viewBox="0 0 20 76" preserveAspectRatio="none"><path class="f" d="${EYE}Z"/><path d="${EYE}"/></svg>${I.chevron}`);
         b.dataset.act = act;
         b.dataset.piece = k;
         b.setAttribute('aria-label', label);
-        clip.append(b);
+        body.append(b);
       };
-      if (pc.cols && pc.k > 0) nav('left', 'col-prev', 'Column to the left');
-      if (pc.cols && pc.k < pc.cols.length - 1) nav('right', 'col-next', 'Column to the right');
+      if (pc.cols && pc.k > 0) nav('left', 'col-prev', 'Show the column to the left too');
+      if (pc.cols && pc.k2 < pc.cols.length - 1) nav('right', 'col-next', 'Show the column to the right too');
       body.append(clip);
     });
     body._pieceSig = sig;
@@ -805,6 +854,12 @@ function layoutPieces(art, body, content, plan) {
     clip.firstElementChild.style.marginTop = -Math.round(pc.band[0] * H) + 'px';
     clip.classList.toggle('cut-a', pc.cutA);
     clip.classList.toggle('cut-b', pc.cutB);
+    // the side arrows sit on the card's border, level with the middle of their piece
+    for (const nav of body.querySelectorAll(`:scope > .col-nav[data-piece="${k}"]`)) {
+      const h = clip.offsetHeight;
+      nav.style.height = Math.max(30, Math.min(76, h - 12)) + 'px';
+      nav.style.top = clip.offsetTop + h / 2 + 'px';
+    }
   });
   body.classList.add('cropped', 'pieces');
   body.classList.remove('cut-top', 'cut-bottom');
@@ -812,24 +867,38 @@ function layoutPieces(art, body, content, plan) {
   art._regions = plan.pieces.map((p) => ({ x: p.span, y: p.band }));
   art._plan = plan;
 }
+// The border splits around a side arrow and closes again after it, like a venturi run backwards.
+const EYE = 'M10 0C10 13 1.5 16 1.5 27L1.5 49C1.5 60 10 63 10 76C10 63 18.5 60 18.5 49L18.5 27C18.5 16 10 13 10 0';
 // Slide a piece over to the column beside it: the page glides sideways inside the piece.
 function shiftColumn(art, i, dir) {
   const pc = art._plan?.pieces[i];
   if (!pc?.cols) return;
-  const k = pc.k + dir;
-  if (k < 0 || k >= pc.cols.length) return;
-  record(dir > 0 ? 'Next column' : 'Previous column');
+  const k = dir < 0 ? pc.k - 1 : pc.k, k2 = dir > 0 ? pc.k2 + 1 : pc.k2;
+  if (k < 0 || k2 >= pc.cols.length) return;
+  const was = art._colOpen, now = { ...art._colOpen, [pc.key]: [k, k2] };
+  const set = (v) => { art._colOpen = v; if (art.isConnected) applyCrop(art); };
+  recordCustom(dir > 0 ? 'Column to the right' : 'Column to the left', () => set(was), () => set(now));
   const body = art.lastElementChild;
-  const before = body.querySelectorAll(':scope > .piece')[i]?.querySelector('.pdf-page')?.getBoundingClientRect();
-  art._colShift = { ...art._colShift, [pc.key]: k };
+  const oldClip = body.querySelectorAll(':scope > .piece')[i];
+  const before = oldClip?.querySelector('.pdf-page')?.getBoundingClientRect();
+  const oldR = oldClip?.getBoundingClientRect();
+  art._colOpen = now;
   applyCrop(art);
-  const clip = body.querySelectorAll(':scope > .piece')[i];
+  const clip = [...body.querySelectorAll(':scope > .piece')].find((c, n) => art._plan.pieces[n]?.key === pc.key);
   const sheet = clip?.querySelector('.pdf-page');
   if (!before || !sheet || reduceMotion()) return;
+  // the page shrinks to fit both columns and the piece opens up and down around where you were
   const after = sheet.getBoundingClientRect();
   const sc = before.width / after.width;
+  const ease = 'cubic-bezier(0.22, 1, 0.36, 1)';
   sheet.style.transformOrigin = '0 0';
-  sheet.animate([{ transform: `translate(${(before.left - after.left).toFixed(1)}px, ${(before.top - after.top).toFixed(1)}px) scale(${sc.toFixed(4)})` }, { transform: 'none' }], { duration: 480, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+  sheet.animate([{ transform: `translate(${(before.left - after.left).toFixed(1)}px, ${(before.top - after.top).toFixed(1)}px) scale(${sc.toFixed(4)})` }, { transform: 'none' }], { duration: 520, easing: ease });
+  const r = clip.getBoundingClientRect();
+  if (oldR && r.height > oldR.height + 1) {
+    const top = Math.max(0, Math.min(r.height - oldR.height, oldR.top - r.top));
+    const bottom = Math.max(0, r.height - oldR.height - top);
+    clip.animate([{ clipPath: `inset(${top.toFixed(1)}px 0 ${bottom.toFixed(1)}px 0)` }, { clipPath: 'inset(0 0 0 0)' }], { duration: 520, easing: ease });
+  }
 }
 // What part of the page is on screen right now (for the zoom-out): its rect, and where it sits on the page.
 function visibleRegion(art) {
@@ -3796,6 +3865,7 @@ function bind() {
   }, true);
   $('#themeBtn').addEventListener('click', openThemes);
   $('#boardsBtn').addEventListener('click', openBoards);
+  $('#libBoardsBtn').addEventListener('click', openBoards);
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
   $('#helpBtn').addEventListener('click', () => $('#help').showModal());
   $('#help').addEventListener('click', (e) => { if (e.target === e.currentTarget || e.target.closest('[data-close]')) $('#help').close(); });

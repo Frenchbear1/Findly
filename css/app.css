@@ -1009,7 +1009,7 @@ body.compact .search-box:focus-within #clearBtn:not([hidden]) { display: inline-
 /* Column view: each column piece of a page, labelled a, b, c… */
 .page-body.pieces { overflow: hidden; }
 .crop-clip.piece { position: relative; }
-.crop-clip.piece + .crop-clip.piece { border-top: 1.5px dashed var(--line-2); }
+.crop-clip.piece ~ .crop-clip.piece { border-top: 1.5px dashed var(--line-2); }
 .box.off { display: none; }
 .page.zooming { position: relative; z-index: 3; }
 .page.zooming .page-body { will-change: transform, clip-path; }
@@ -1168,18 +1168,24 @@ html.doc-tint.doc-dark .bv-media img, html.doc-tint.doc-dark .bi-img img, html.d
 .bi-acts .pk-tog svg { width: 15px; height: 15px; }
 .pk-tog.danger { color: var(--danger); }
 
-/* side arrows on a column piece: tucked into the card's edge, only where there's a column that way */
+/* side arrows on a column piece: the card's border splits into two lines around the arrow and joins again */
+.page-body.pieces { overflow: visible; }
+.page-body.pieces > .piece:first-of-type { border-radius: 13px 13px 0 0; }
+.page-body.pieces > .piece:last-of-type { border-bottom-left-radius: 13px; border-bottom-right-radius: 13px; }
+.page-body.pieces > .piece:only-of-type { border-radius: 13px; }
 .col-nav {
-  position: absolute; top: 50%; z-index: 3; display: grid; place-items: center; width: 24px; height: 58px; max-height: calc(100% - 12px);
-  transform: translateY(-50%); background: color-mix(in srgb, var(--card) 90%, transparent); border: 1px solid var(--line-2);
-  color: var(--ink-2); box-shadow: var(--shadow-sm); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); transition: color 0.15s, width 0.15s;
+  position: absolute; z-index: 3; display: grid; place-items: center; width: 20px; height: 76px; padding: 0;
+  transform: translateY(-50%); background: none; color: var(--ink-2); transition: color 0.15s;
 }
-.col-nav svg { width: 15px; height: 15px; stroke-width: 2.4; }
-.col-nav.left { left: -1px; border-radius: 0 14px 14px 0; }
-.col-nav.left svg { transform: scaleX(-1); }
-.col-nav.right { right: -1px; border-radius: 14px 0 0 14px; }
-.col-nav:hover { color: var(--accent); width: 28px; }
-.col-nav::before { content: ""; position: absolute; inset: -10px -14px; } /* bigger tap target */
+.col-nav.left { left: -10.5px; }
+.col-nav.right { right: -10.5px; }
+.col-nav .cn-eye { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.col-nav .cn-eye path { fill: none; stroke: var(--line-2); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.col-nav .cn-eye path.f { fill: var(--bg); stroke: none; }
+.col-nav > svg:not(.cn-eye) { position: relative; width: 13px; height: 13px; stroke-width: 2.6; }
+.col-nav.left > svg:not(.cn-eye) { transform: scaleX(-1); }
+.col-nav:hover, .col-nav:active { color: var(--accent); }
+.col-nav::before { content: ""; position: absolute; inset: -6px -14px; } /* bigger tap target */
 .phits { min-width: 22px; text-align: center; padding: 2px 7px; font-variant-numeric: tabular-nums; }
 .dcount { font-variant-numeric: tabular-nums; }
 
@@ -1226,3 +1232,22 @@ html.paper.doc-dark .pdf-page::after, html.paper[data-theme="dark"] .page-body:h
 .link-btn { font-size: 12.5px; font-weight: 600; color: var(--accent); padding: 4px 6px; }
 .tbar-hint { display: flex; justify-content: space-between; margin: -6px 0 0 120px; font-size: 11px; color: var(--muted); }
 .tbar-credit { margin: 2px 16px 0; font-size: 11px; color: var(--muted); }
+
+/* a cropped card is exactly as tall as what it shows (no strip of card below a short crop) */
+.page-body.cropped { min-height: 0; }
+
+/* Boards, from the library panel */
+.brand-boards { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 11px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); color: var(--ink-2); font-size: 12.5px; font-weight: 600; letter-spacing: 0; }
+.brand-boards svg { width: 15px; height: 15px; }
+.brand-boards:hover { color: var(--accent); border-color: var(--line-2); }
+
+/* theme cards: arrows at the ends for a mouse */
+.tbar-scroll { position: relative; }
+.tbar-arrow { position: absolute; top: 2px; bottom: 8px; z-index: 2; width: 40px; display: none; place-items: center; color: var(--ink-2); }
+.tbar-arrow.l { left: 0; background: linear-gradient(90deg, var(--panel) 30%, transparent); }
+.tbar-arrow.r { right: 0; background: linear-gradient(270deg, var(--panel) 30%, transparent); }
+.tbar-arrow svg { width: 18px; height: 18px; stroke-width: 2.4; }
+.tbar-arrow.l svg { transform: scaleX(-1); }
+@media (hover: hover) and (pointer: fine) { .tbar-arrow:not([hidden]) { display: grid; } }
+.tbar-row.dragging { cursor: grabbing; scroll-snap-type: none; }
+.tbar-row.dragging .tcard { pointer-events: none; }

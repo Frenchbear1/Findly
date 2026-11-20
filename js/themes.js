@@ -174,13 +174,13 @@ export function openThemeBar(prefs, { save }) {
     const c = prefs.custom || THEME_DEFAULTS.custom;
     let body = '';
     if (tab === 'colours') {
-      body = `<div class="tbar-row">${THEMES.map((x) => themeCard(x, (prefs.rtheme || 'auto') === x.id)).join('')}</div>
+      body = `<div class="tbar-scroll"><button class="tbar-arrow l" data-scroll="-1" aria-label="Scroll left" hidden>${CHEV}</button><div class="tbar-row">${THEMES.map((x) => themeCard(x, (prefs.rtheme || 'auto') === x.id)).join('')}</div><button class="tbar-arrow r" data-scroll="1" aria-label="Scroll right" hidden>${CHEV}</button></div>
         ${prefs.rtheme === 'custom' ? `<div class="tbar-sliders">
           <label class="th-slider"><span>Hue</span><input type="range" min="0" max="360" value="${c.h}" data-k="h" class="hue" style="--sat:${Math.max(20, c.s * 1.4)}%"></label>
           <label class="th-slider"><span>Colour</span><input type="range" min="0" max="60" value="${c.s}" data-k="s"></label>
           <label class="th-slider"><span>Brightness</span><input type="range" min="0" max="100" value="${c.b}" data-k="b" class="bright"></label></div>` : ''}`;
     } else if (tab === 'paper') {
-      body = `<div class="tbar-row">${PAPERS.map((pp) => paperCard(pp, (prefs.paper || 'theme') === pp.id, t)).join('')}</div>
+      body = `<div class="tbar-scroll"><button class="tbar-arrow l" data-scroll="-1" aria-label="Scroll left" hidden>${CHEV}</button><div class="tbar-row">${PAPERS.map((pp) => paperCard(pp, (prefs.paper || 'theme') === pp.id, t)).join('')}</div><button class="tbar-arrow r" data-scroll="1" aria-label="Scroll right" hidden>${CHEV}</button></div>
         <div class="tbar-sliders"><label class="th-slider"><span>Grain</span><input type="range" min="0" max="100" value="${prefs.grain ?? 50}" data-grain></label></div>
         <p class="tbar-credit">Paper textures: Subtle Patterns, CC BY-SA 3.0</p>`;
     } else {
@@ -196,8 +196,11 @@ export function openThemeBar(prefs, { save }) {
         <button class="icon-btn sm" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
       </div><div class="tbar-body">${body}</div>`;
     if (centre) bar.querySelector('.tcard.on')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    scrollable(bar.querySelector('.tbar-row'));
   };
   bar.onclick = (e) => {
+    const sc = e.target.closest('[data-scroll]');
+    if (sc) { const r = bar.querySelector('.tbar-row'); r.scrollBy({ left: Number(sc.dataset.scroll) * r.clientWidth * 0.8, behavior: 'smooth' }); return; }
     const tb = e.target.closest('[data-tab]');
     if (tb) { tab = bar._tab = tb.dataset.tab; render(true); return; }
     if (e.target.closest('[data-close]')) { closeBar(bar, save); return; }
@@ -222,6 +225,50 @@ export function openThemeBar(prefs, { save }) {
   bar.hidden = false;
   document.body.classList.add('tbar-open');
   bar.animate([{ transform: 'translateY(105%)' }, { transform: 'none' }], { duration: 300, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
+}
+const CHEV = '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
+// A row of cards you can move with the mouse wheel, by dragging, or with the arrows at its ends.
+function scrollable(row) {
+  if (!row) return;
+  const wrap = row.parentElement;
+  const sync = () => {
+    const max = row.scrollWidth - row.clientWidth;
+    wrap.querySelector('.l').hidden = row.scrollLeft < 4;
+    wrap.querySelector('.r').hidden = row.scrollLeft > max - 4;
+  };
+  row.addEventListener('scroll', sync, { passive: true });
+  requestAnimationFrame(sync);
+  row.addEventListener('wheel', (e) => {
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return; // a trackpad already scrolls sideways
+    const max = row.scrollWidth - row.clientWidth;
+    if (max <= 0) return;
+    e.preventDefault();
+    row.scrollLeft += e.deltaMode === 1 ? e.deltaY * 32 : e.deltaY;
+  }, { passive: false });
+  let drag = null;
+  row.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'mouse' || e.button !== 0) return;
+    drag = { x: e.clientX, left: row.scrollLeft, moved: false };
+  });
+  row.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    if (!drag.moved && Math.abs(dx) < 5) return;
+    if (!drag.moved) { drag.moved = true; row.setPointerCapture(e.pointerId); row.classList.add('dragging'); }
+    row.scrollLeft = drag.left - dx;
+  });
+  const end = () => {
+    if (drag?.moved) {
+      row.classList.remove('dragging');
+      // the drag isn't a tap on the card under the mouse
+      const eat = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+      row.addEventListener('click', eat, { capture: true, once: true });
+      setTimeout(() => row.removeEventListener('click', eat, { capture: true }), 60);
+    }
+    drag = null;
+  };
+  row.addEventListener('pointerup', end);
+  row.addEventListener('pointercancel', end);
 }
 function closeBar(bar, save) {
   save();
