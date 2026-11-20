@@ -10,7 +10,6 @@ export const MODES = {
   phrase: { label: 'Exact phrase', hint: 'The words together, in this order' },
   near: { label: 'Near', hint: 'All words within a few words of each other' },
   boolean: { label: 'Boolean', hint: 'AND, OR, NOT and (parentheses)' },
-  regex: { label: 'Regex', hint: 'A JavaScript regular expression' },
 };
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -216,10 +215,7 @@ export function compile(rawQuery, opts) {
   let ast = null;
 
   try {
-    if (mode === 'regex') {
-      const re = new RegExp(query, 'gu' + (opts.matchCase ? '' : 'i'));
-      terms = [{ label: query, re, neg: false }];
-    } else if (mode === 'phrase') {
+    if (mode === 'phrase') {
       const src = termSource(query.replace(/"/g, ''), opts.wholeWord);
       if (!src) return null;
       terms = [makeTerm(query.replace(/"/g, ''), src, opts)];
@@ -262,7 +258,7 @@ export function compile(rawQuery, opts) {
       if (!evalAst(ast, present)) return null;
     } else {
       for (const i of negIdx) if (get(i).length) return null;
-      if (mode === 'any' || mode === 'phrase' || mode === 'regex') {
+      if (mode === 'any' || mode === 'phrase') {
         if (!posIdx.some((i) => get(i).length)) return null;
       } else {
         for (const i of posIdx) if (!get(i).length) return null; // all + near

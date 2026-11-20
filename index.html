@@ -76,6 +76,9 @@
               <button class="icon-btn sm" id="nextBtn" aria-label="Next hit (Enter)" title="Next hit (Enter)"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
             </span>
           </div>
+          <button class="icon-btn" id="panelBtn" aria-label="Pages with hits" title="Pages with hits and sorting" hidden>
+            <svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15M17 9h1M17 12h1M17 15h1"/></svg>
+          </button>
           <button class="icon-btn" id="compactBtn" aria-label="Minimize the toolbar" title="Minimize the toolbar (H)">
             <svg class="c-less" viewBox="0 0 24 24"><path d="M7 15l5-5 5 5"/></svg>
             <svg class="c-more" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg>
@@ -105,22 +108,18 @@
 
       <div class="content">
         <div class="col">
-          <div class="results-head" id="resultsHead" hidden>
-            <label class="sort"><span>Sort</span><select id="sortSel" aria-label="Sort results">
-              <option value="library">Library order</option>
-              <option value="hits">Documents with most hits</option>
-              <option value="pages">Pages with most hits</option>
-            </select></label>
-          </div>
           <div class="view" id="results"></div>
           <div class="view" id="reader"></div>
         </div>
         <nav class="outline" id="outline" aria-label="Pages with hits" hidden>
-          <label class="ol-sort" id="olSort"><span>Sort</span><select id="sortSel2" aria-label="Sort results">
-            <option value="library">Library order</option>
-            <option value="hits">Documents with most hits</option>
-            <option value="pages">Pages with most hits</option>
-          </select></label>
+          <div class="ol-top">
+            <label class="ol-sort" id="olSort"><span>Sort</span><select id="sortSel2" aria-label="Sort results">
+              <option value="library">Library order</option>
+              <option value="hits">Documents with most hits</option>
+              <option value="pages">Pages with most hits</option>
+            </select></label>
+            <button class="icon-btn sm ol-close" id="panelClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          </div>
           <div id="outlineList"></div>
         </nav>
       </div>
@@ -231,7 +230,6 @@
         <dt>Exact phrase</dt><dd>The words side by side, in order. Line breaks don’t matter.</dd>
         <dt>Near</dt><dd>All words within a set number of words of each other.</dd>
         <dt>Boolean</dt><dd><code>AND</code> <code>OR</code> <code>NOT</code> and <code>( )</code>, e.g. <code>(stall OR spin) AND recovery NOT training</code></dd>
-        <dt>Regex</dt><dd>A JavaScript regular expression, e.g. <code>\b\d{3}-\d{4}\b</code></dd>
       </dl>
       <h4>Works in every type</h4>
       <dl>

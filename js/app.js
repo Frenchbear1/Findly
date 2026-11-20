@@ -76,10 +76,14 @@ const I = {
 
 // ---------- preferences ----------
 const PREF_KEY = 'instant-search:prefs';
+const PREFS_V = 2;
 const prefs = Object.assign(
-  { mode: 'all', matchCase: false, wholeWord: false, near: 8, sort: 'library', view: 'text', theme: 'auto', q: '', zoom: 1, compact: false, sideHidden: false, keys: {} },
+  { mode: 'all', matchCase: false, wholeWord: false, near: 8, sort: 'library', view: 'original', theme: 'auto', q: '', zoom: 'width', compact: false, sideHidden: false, keys: {}, v: PREFS_V },
   (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch { return {}; } })()
 );
+// v2: pages open as the original and fit the width by default; Regex is gone
+if ((prefs.v || 1) < 2) { prefs.view = 'original'; prefs.zoom = 'width'; prefs.v = PREFS_V; }
+if (!MODES[prefs.mode]) prefs.mode = 'all';
 const savePrefs = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch {} };
 
 // ---------- state ----------
@@ -342,7 +346,6 @@ const ioFar = new IntersectionObserver(
 
 function headHtml(v, doc, n, ctx, flat = false) {
   const info = v.info.get(pkey(doc.id, n));
-  const count = S.texts.get(doc.id)?.length || 0;
   let badge = '';
   if (info && ctx) badge = `<span class="phits none">${plural(info.ranges.length, 'hit')} · ranked on its own</span>`;
   else if (info) badge = `<span class="phits">${plural(info.ranges.length, 'hit')}</span>`;
@@ -356,7 +359,7 @@ function headHtml(v, doc, n, ctx, flat = false) {
   const open = v.kind === 'results'
     ? `<button class="chip-btn" data-act="open" title="Read the whole document from this page">${I.book}Open</button>`
     : '';
-  return `<span class="pno">Page ${n + 1}<span class="of"> / ${count}</span></span>${badge}<span class="grow"></span>${toggle}${open}`;
+  return `<span class="pno">Page ${n + 1}</span>${badge}<span class="grow"></span>${toggle}${open}`;
 }
 
 function pageEl(v, doc, n, R) {
@@ -759,6 +762,9 @@ function topOffset() {
 }
 const isPhone = () => matchMedia('(max-width: 900px)').matches;
 
+// While the app scrolls by itself (jumping to a hit or page) the phone's top bar holds still, so the
+// spot it aims for doesn't move under the bar halfway through.
+let autoScrollUntil = 0;
 function scrollToEl(target, block = 'center', force) {
   const r = target.getBoundingClientRect();
   const top = topOffset();
@@ -766,7 +772,9 @@ function scrollToEl(target, block = 'center', force) {
     ? scrollY + r.top - (top + (innerHeight - top) / 2) + r.height / 2
     : scrollY + r.top - top - ($('.doc-head')?.offsetHeight || 0) - 6;
   const far = Math.abs(y - scrollY) > innerHeight * 2.5;
-  window.scrollTo({ top: Math.max(0, y), behavior: force || (far || reduceMotion() ? 'instant' : 'smooth') });
+  const behavior = force || (far || reduceMotion() ? 'instant' : 'smooth');
+  autoScrollUntil = performance.now() + (behavior === 'smooth' ? 900 : 300);
+  window.scrollTo({ top: Math.max(0, y), behavior });
   return Math.max(0, y);
 }
 const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -886,6 +894,8 @@ async function openReader(docId, n) {
   const doc = docById(docId);
   if (!doc || doc.status) return;
   if (active === results) results.scrollY = scrollY;
+  curPageN = n ?? 0;
+  curArt = null;
   reader.docId = docId;
   assign(reader, computeHits([doc]));
   active = reader;
@@ -929,16 +939,14 @@ function updateSummary() {
   if (v.kind === 'reader') {
     const doc = docById(v.docId);
     const count = S.texts.get(v.docId)?.length || 0;
-    html += `<button class="back-btn" data-act="back">${I.arrowLeft}<span>Results</span></button>
-      <span class="reader-title"><span class="ftype ${doc?.kind}">${KIND_LABEL[doc?.kind] || ''}</span><b>${esc(doc?.name || '')}</b></span>
-      <label class="jump">Page <input id="jumpInput" type="number" min="1" max="${count}" value="1" inputmode="numeric"> <span>of ${fmt(count)}</span></label>`;
+    html += `<button class="back-btn" data-act="back" title="Back to results">${I.arrowLeft}<span>Results</span></button>
+      <span class="reader-title" title="${esc(doc?.name || '')}"><span class="ftype ${doc?.kind}">${KIND_LABEL[doc?.kind] || ''}</span><b>${esc(doc?.name || '')}</b></span>
+      <label class="jump" title="Go to page"><span class="jl">Page</span><input id="jumpInput" type="number" min="1" max="${count}" value="${curPageN + 1}" inputmode="numeric" aria-label="Page number"><span>/ ${fmt(count)}</span></label>`;
   }
   setHTML(box, html);
   box.hidden = !html;
 
-  const head = $('#resultsHead');
   const showHead = v.kind === 'results' && S.matcher && v.list.length;
-  head.hidden = !showHead;
   const dock = $('#dock');
   dock.hidden = !(v.kind === 'reader' || showHead);
   $('#mbar').hidden = dock.hidden;
@@ -949,8 +957,9 @@ function updateOutline() {
   const v = active;
   const nav = $('#outline');
   const box = $('#outlineList');
-  if (!S.matcher || !v.list.length) { setHTML(box, ''); nav.hidden = true; return; }
+  if (!S.matcher || !v.list.length) { setHTML(box, ''); nav.hidden = true; $('#panelBtn').hidden = true; setPanel(false); return; }
   nav.hidden = false;
+  $('#panelBtn').hidden = false;
   $('#olSort').hidden = v.kind !== 'results';
   if (v.list[0]?.flat) {
     const rows = v.list.slice(0, 400).map((R, i) => {
@@ -1060,16 +1069,14 @@ function syncControls() {
   $('#nearN').value = prefs.near;
   $('#caseBtn').setAttribute('aria-pressed', String(prefs.matchCase));
   $('#wordBtn').setAttribute('aria-pressed', String(prefs.wholeWord));
-  $('#wordBtn').disabled = prefs.mode === 'regex';
-  $('#sortSel').value = prefs.sort;
   $('#sortSel2').value = prefs.sort;
   $$('#viewSeg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === prefs.view)));
   $('#viewSeg').hidden = !S.docs.some(hasOriginal);
-  document.body.classList.toggle('compact', !!prefs.compact);
+  document.body.classList.toggle('compact', !!prefs.compact || isPhone()); // phones always use the slim search bar
   document.body.classList.toggle('side-hidden', !!prefs.sideHidden);
   $('#compactBtn').title = prefs.compact ? `Show the full toolbar (${keyHint('toggleCompact')})` : `Minimize the toolbar (${keyHint('toggleCompact')})`;
-  const flags = [prefs.matchCase ? 'Aa' : '', prefs.wholeWord && prefs.mode !== 'regex' ? '<u>ab</u>' : '', prefs.mode === 'near' ? `≤${prefs.near}` : ''].filter(Boolean);
-  const pill = `<span class="full">${MODE_SHORT[prefs.mode]}</span><span class="short">${MODE_TINY[prefs.mode]}</span>${flags.map((f) => `<em>${f}</em>`).join('')}<svg viewBox="0 0 24 24"><path d="M8 10l4 4 4-4"/></svg>`;
+  const flags = [prefs.matchCase ? 'Aa' : '', prefs.wholeWord ? '<u>ab</u>' : '', prefs.mode === 'near' ? `≤${prefs.near}` : ''].filter(Boolean);
+  const pill = `<span class="full">${MODE_SHORT[prefs.mode]}</span><span class="short">${MODE_TINY[prefs.mode]}</span>${flags.map((f) => `<em>${f}</em>`).join('')}<svg class="pill-arrow" viewBox="0 0 24 24"><path d="M8 10l4 4 4-4"/></svg>`;
   setHTML($('#modePill'), pill);
   setHTML($('#mMode'), pill);
   $('#zoomVal').textContent = Math.round(zoomValue() * 100) + '%';
@@ -1081,9 +1088,7 @@ function syncControls() {
     phrase: 'An exact phrase…',
     near: 'Words close together…',
     boolean: 'e.g. (stall OR spin) AND recovery NOT training',
-    regex: 'A regular expression, e.g. \\b[A-Z]{3}\\d+\\b',
   }[prefs.mode];
-  q.classList.toggle('mono', prefs.mode === 'regex');
   $('#themeBtn').dataset.theme = prefs.theme;
 }
 
@@ -1095,29 +1100,73 @@ function updateChrome() {
   syncControls();
 }
 
+// The page you're on is the one filling the most of the screen between the bars — not a sliver at the top.
+let curArt = null;
+let curPageN = 0;
+function readingArea() {
+  const tb = $('.topbar').getBoundingClientRect();
+  let top = Math.max(0, tb.bottom);
+  const dh = active.root.querySelector('.doc-head');
+  if (dh && dh.offsetHeight) top += dh.offsetHeight; // the sticky document title covers the top of the pages
+  const mb = $('#mbar');
+  const mr = mb.hidden ? null : mb.getBoundingClientRect();
+  const bottom = mr && mr.height ? mr.top : innerHeight;
+  return { top, bottom: Math.max(top + 1, bottom) };
+}
+function currentArt() {
+  const arts = active.root.getElementsByClassName('page'); // in page order
+  const n = arts.length;
+  if (!n) return null;
+  const { top, bottom } = readingArea();
+  let lo = 0, hi = n - 1, first = n;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (arts[mid].getBoundingClientRect().bottom > top) { first = mid; hi = mid - 1; } else lo = mid + 1;
+  }
+  let best = null, bestVis = 0, curVis = -1;
+  for (let i = first; i < n; i++) {
+    const r = arts[i].getBoundingClientRect();
+    if (r.top >= bottom) break;
+    const vis = Math.min(r.bottom, bottom) - Math.max(r.top, top);
+    if (arts[i] === curArt) curVis = vis;
+    if (vis > bestVis) { bestVis = vis; best = arts[i]; }
+  }
+  // at an even split, stay on the page you were on so the number doesn't flicker
+  if (best && curArt && best !== curArt && curVis >= 0 && bestVis - curVis < 16) best = curArt;
+  return best;
+}
+
 // Highlight where the reader currently is (outline chip + reader page box).
 let trackRaf = 0;
 function trackPosition() {
   if (trackRaf) return;
   trackRaf = requestAnimationFrame(() => {
     trackRaf = 0;
-    const v = active;
-    const x = v.root.getBoundingClientRect().left + 30;
-    const hit = document.elementFromPoint(x, topOffset() + ($('.doc-head')?.offsetHeight || 0) + 24);
-    const art = hit?.closest?.('.page') || null;
+    const art = currentArt();
+    const changed = art !== curArt;
+    curArt = art;
+    if (!art) { $$('#outline .on').forEach((b) => b.classList.remove('on')); return; }
+    if (active === reader) curPageN = Number(art.dataset.n);
+    const jump = $('#jumpInput');
+    if (jump && !jump._editing && active === reader) jump.value = curPageN + 1;
+    if (!changed && $('#outline .on')) return;
     $$('#outline .on').forEach((b) => b.classList.remove('on'));
-    if (!art) return;
     const chip = $(`#outline :is(.ol-p, .ol-row)[data-doc="${art.dataset.doc}"][data-n="${art.dataset.n}"]`);
     if (chip) {
       chip.classList.add('on');
       const box = $('#outlineList');
       const cr = chip.getBoundingClientRect();
       const br = box.getBoundingClientRect();
-      if (cr.top < br.top + 30 || cr.bottom > br.bottom - 10) box.scrollTop += cr.top - br.top - br.height / 2;
+      if (br.height && (cr.top < br.top + 30 || cr.bottom > br.bottom - 10)) box.scrollTop += cr.top - br.top - br.height / 2;
     }
-    const jump = $('#jumpInput');
-    if (jump && document.activeElement !== jump && active === reader) jump.value = Number(art.dataset.n) + 1;
   });
+}
+
+// The pages panel: a column on wide screens, a sheet from the right on smaller ones.
+function setPanel(open) {
+  document.body.classList.toggle('panel', !!open);
+  $('#panelBtn')?.setAttribute('aria-pressed', String(!!open));
+  if (open) { curArt = null; trackPosition(); }
 }
 
 // ---------- library actions ----------
@@ -2952,7 +3001,6 @@ function bind() {
   $('#nearN').addEventListener('input', (e) => { prefs.near = Math.max(1, Math.min(200, Number(e.target.value) || 8)); scheduleSearch(); });
   $('#caseBtn').addEventListener('click', () => { prefs.matchCase = !prefs.matchCase; runSearch(); });
   $('#wordBtn').addEventListener('click', () => { prefs.wholeWord = !prefs.wholeWord; runSearch(); });
-  $('#sortSel').addEventListener('change', (e) => { prefs.sort = e.target.value; runSearch(); });
   $('#sortSel2').addEventListener('change', (e) => { prefs.sort = e.target.value; runSearch(); });
   $('#viewSeg').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-view]');
@@ -2964,11 +3012,21 @@ function bind() {
   $('#fitWidth').addEventListener('click', () => setZoom(prefs.zoom === 'width' ? 1 : 'width'));
   $('#fitPage').addEventListener('click', () => setZoom(prefs.zoom === 'page' ? 1 : 'page'));
   let resizeTimer;
-  addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (typeof prefs.zoom === 'string') applyZoom(); }, 150); });
+  addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      syncControls(); // phones always get the slim search bar
+      if (innerWidth > 1240) setPanel(false);
+      if (typeof prefs.zoom === 'string') applyZoom();
+      trackPosition();
+    }, 150);
+  });
+  $('#panelBtn').addEventListener('click', () => setPanel(!document.body.classList.contains('panel')));
+  $('#panelClose').addEventListener('click', () => setPanel(false));
   $('#compactBtn').addEventListener('click', toggleCompact);
   bindSideResize();
   // phone reading bar
-  bindModeScrub($('#mMode'), { startIndex: () => Object.keys(MODES).indexOf(prefs.mode), onTap: () => modeMenu($('#mMode')) });
+  bindModePicker($('#mMode'));
   bindHoldMenu($('#mMore'), moreItems);
   bindJog($('#mCount'));
   $('#mPrev').addEventListener('click', () => step(-1));
@@ -2979,15 +3037,8 @@ function bind() {
   q.addEventListener('focus', () => setBarHidden(false));
   $('#keysBtn').addEventListener('click', openKeys);
 
-  // search type pill (compact toolbar) and the full segmented control both support press-and-drag
-  bindModeScrub($('#modePill'), {
-    startIndex: () => Object.keys(MODES).indexOf(prefs.mode),
-    onTap: () => modeMenu($('#modePill')),
-  });
-  bindModeScrub($('#modes'), {
-    startIndex: (e) => { const b = e.target.closest?.('button[data-mode]'); return b ? Object.keys(MODES).indexOf(b.dataset.mode) : -1; },
-    onTap: (s) => setMode(Object.keys(MODES)[s.idx]),
-  });
+  // search type pill: tap to open the list, or press, slide onto a type and let go
+  bindModePicker($('#modePill'));
   let wheelAt = 0;
   $('#modePill').addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -3201,15 +3252,19 @@ function bind() {
     scrollToPage(reader, reader.docId, n - 1);
   });
   $('#summary').addEventListener('keydown', (e) => { if (e.target.id === 'jumpInput' && e.key === 'Enter') e.target.blur(); });
+  // while you type a page number it isn't overwritten; once you're done it follows the scroll again
+  $('#summary').addEventListener('input', (e) => { if (e.target.id === 'jumpInput') e.target._editing = true; });
+  $('#summary').addEventListener('focusout', (e) => { if (e.target.id === 'jumpInput') { e.target._editing = false; trackPosition(); } });
   $('#outline').addEventListener('click', (e) => {
     const b = e.target.closest('[data-n]');
     if (!b) return;
     const v = active;
     const info = v.info.get(pkey(b.dataset.doc, Number(b.dataset.n)));
-    if (!info || !info.ranges.length) { scrollToPage(v, b.dataset.doc, Number(b.dataset.n)); return; }
+    if (!info || !info.ranges.length) { if (innerWidth <= 1240) setPanel(false); scrollToPage(v, b.dataset.doc, Number(b.dataset.n)); return; }
     // First click lands on the page's first hit; clicking the same page again steps through its hits.
     const onPage = v.cur >= info.h0 && v.cur < info.h0 + info.ranges.length;
     const k = onPage && b.matches('.ol-p, .ol-row') ? info.h0 + ((v.cur - info.h0 + 1) % info.ranges.length) : info.h0;
+    if (innerWidth <= 1240) setPanel(false); // the panel covers the page on smaller screens: get out of the way
     goTo(v, k);
   });
 
@@ -3218,6 +3273,7 @@ function bind() {
   // keyboard
   addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $('.pop-menu')) { closeMenu(); return; }
+    if (e.key === 'Escape' && document.body.classList.contains('panel')) { setPanel(false); return; }
     if ($('dialog[open]') || e.isComposing) return;
     const combo = comboFromEvent(e);
     if (!combo) return;
@@ -3248,14 +3304,21 @@ function bind() {
 
   // mobile drawer
   $('#menuBtn').addEventListener('click', toggleLibrary);
-  $('#scrim').addEventListener('click', closeDrawer);
+  $('#scrim').addEventListener('click', () => { closeDrawer(); setPanel(false); });
 
   // keep the floating zoom bar centred on the pages themselves (not the whole window)
   const placeDock = () => {
     const r = $('.col').getBoundingClientRect();
     if (r.width) $('#dock').style.left = `${Math.round(r.left + r.width / 2)}px`;
   };
-  new ResizeObserver(placeDock).observe($('.col'));
+  // the column changes width when the library or the pages panel comes and goes: keep "fit" fitting
+  let colW = 0;
+  new ResizeObserver(() => {
+    placeDock();
+    const w = $('.col').clientWidth;
+    if (w && colW && Math.abs(w - colW) > 1 && typeof prefs.zoom === 'string') applyZoom();
+    colW = w;
+  }).observe($('.col'));
   addEventListener('resize', placeDock);
   placeDock();
 
@@ -3267,8 +3330,8 @@ function bind() {
 const closeDrawer = () => document.body.classList.remove('drawer');
 let resetDrag = () => {};
 
-const MODE_SHORT = { any: 'Any word', all: 'All words', phrase: 'Phrase', near: 'Near', boolean: 'Boolean', regex: 'Regex' };
-const MODE_TINY = { any: 'Any', all: 'All', phrase: '“ ”', near: 'Near', boolean: 'Bool', regex: '.*' };
+const MODE_SHORT = { any: 'Any word', all: 'All words', phrase: 'Phrase', near: 'Near', boolean: 'Boolean' };
+const MODE_TINY = { any: 'Any', all: 'All', phrase: '“ ”', near: 'Near', boolean: 'Bool' };
 
 // ---------- zoom ----------
 const BASE_W = 840; // page width at 100%
@@ -3551,76 +3614,105 @@ function setView(view) {
   if (active === reader) results.dirty = true;
 }
 
-// ---------- search type pill: tap for options, press and drag sideways to switch ----------
-function modeMenu(anchor) {
-  const items = Object.keys(MODES).map((m, i) => ({ label: MODES[m].label, checked: prefs.mode === m, run: () => setMode(m) }));
-  items.push({ sep: true });
-  items.push({ label: 'Match case', checked: prefs.matchCase, run: () => { prefs.matchCase = !prefs.matchCase; runSearch(); } });
-  items.push({ label: 'Whole words only', checked: prefs.wholeWord, disabled: prefs.mode === 'regex', run: () => { prefs.wholeWord = !prefs.wholeWord; runSearch(); } });
-  if (prefs.mode === 'near') {
-    items.push({ header: 'Near: words apart' });
-    for (const n of [3, 5, 8, 12, 20, 40]) items.push({ label: `Within ${n} words`, checked: Number(prefs.near) === n, run: () => { prefs.near = n; runSearch(); } });
-  }
-  items.push({ sep: true }, { label: 'Show the full toolbar', run: () => toggleCompact() });
-  openMenu(anchor, items);
+// ---------- search type picker ----------
+// One list for both ways of using it: tap the pill to open it and tap a type, or press the pill,
+// slide onto a type and let go. Only the row under your finger when you let go is picked — letting go
+// anywhere else changes nothing.
+const NEAR_STEPS = [2, 3, 5, 8, 12, 20, 40, 80];
+const PICK_HINT = { any: 'Any of the words', all: 'Every word, anywhere on the page', phrase: 'The words together, in order', near: 'All the words close together', boolean: 'AND, OR, NOT and ( )' };
+function pickerHtml() {
+  const opts = Object.keys(MODES).map((m) => `<button class="pk-opt${prefs.mode === m ? ' on' : ''}" data-mode="${m}" role="option" aria-selected="${prefs.mode === m}"><span class="pk-txt"><b>${MODES[m].label}</b><span>${PICK_HINT[m] || MODES[m].hint}</span></span>${I.check}</button>`).join('');
+  const near = prefs.mode === 'near'
+    ? `<div class="pk-near"><span>Within</span><button class="pk-step" data-near="-1" aria-label="Fewer words apart">${I.minus}</button><b>${fmt(Number(prefs.near) || 8)}</b><button class="pk-step" data-near="1" aria-label="More words apart">${I.plus}</button><span>words</span></div>`
+    : '';
+  return `<div class="pk-opts" role="listbox" aria-label="Search type">${opts}</div>${near}<div class="pk-togs"><button class="pk-tog" data-tog="case" aria-pressed="${prefs.matchCase}"><i>Aa</i>Match case</button><button class="pk-tog" data-tog="word" aria-pressed="${prefs.wholeWord}"><i><u>ab</u></i>Whole words</button></div>`;
 }
-
-function bindModeScrub(el, { onTap, startIndex }) {
-  const modes = Object.keys(MODES);
+const pickerFor = (anchor) => { const m = $('.picker'); return m && m._anchor === anchor ? m : null; };
+function openPicker(anchor) {
+  closeMenu();
+  const m = el('div', 'pop-menu picker', pickerHtml());
+  m._anchor = anchor;
+  m.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const o = e.target.closest('.pk-opt');
+    if (o) { closeMenu(); setMode(o.dataset.mode); return; }
+    const t = e.target.closest('[data-tog]');
+    if (t) {
+      if (t.dataset.tog === 'case') prefs.matchCase = !prefs.matchCase;
+      else prefs.wholeWord = !prefs.wholeWord;
+    }
+    const n = e.target.closest('[data-near]');
+    if (n) {
+      const cur = Number(prefs.near) || 8;
+      prefs.near = Number(n.dataset.near) > 0 ? (NEAR_STEPS.find((x) => x > cur) ?? cur) : ([...NEAR_STEPS].reverse().find((x) => x < cur) ?? cur);
+    }
+    if (!t && !n) return;
+    syncControls();
+    runSearch();
+    m.innerHTML = pickerHtml();
+    placeMenu(m);
+  });
+  document.body.append(m);
+  anchor.classList.add('menu-open');
+  placeMenu(m);
+  return m;
+}
+function bindModePicker(anchor) {
   let st = null;
-  const show = () => {
-    st.scrub = true;
-    clearTimeout(st.timer);
-    closeMenu();
-    const bar = el.ownerDocument.createElement('div');
-    bar.className = 'scrubber';
-    const names = innerWidth < 600 ? MODE_TINY : MODE_SHORT;
-    bar.innerHTML = modes.map((m) => `<span data-mode="${m}">${names[m]}</span>`).join('');
-    document.body.append(bar);
-    const r = el.getBoundingClientRect();
-    const item = bar.children[st.idx];
-    const center = item.offsetLeft + item.offsetWidth / 2;
-    let left = st.x - center;
-    left = Math.max(8, Math.min(innerWidth - bar.offsetWidth - 8, left));
-    bar.style.left = left + 'px';
-    bar.style.top = (r.bottom + 8 + bar.offsetHeight > innerHeight - 8 ? r.top - bar.offsetHeight - 10 : r.bottom + 8) + 'px';
-    st.bar = bar;
-    mark();
-    el.classList.add('scrubbing');
+  const rowAt = (x, y) => {
+    const m = pickerFor(anchor);
+    if (!m) return null;
+    for (const o of m.querySelectorAll('.pk-opt')) {
+      const r = o.getBoundingClientRect();
+      if (y >= r.top && y < r.bottom && x >= r.left - 48 && x <= r.right + 48) return o;
+    }
+    return null;
   };
-  const mark = () => [...st.bar.children].forEach((c, i) => c.classList.toggle('on', i === st.idx));
-  el.addEventListener('pointerdown', (e) => {
+  const light = (o) => {
+    if (o === st.hot) return;
+    st.hot?.classList.remove('hot');
+    o?.classList.add('hot');
+    st.hot = o;
+    if (o) navigator.vibrate?.(4);
+  };
+  anchor.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
-    st = { x: e.clientX, idx: startIndex(e), scrub: false, id: e.pointerId };
-    if (st.idx < 0) { st = null; return; }
-    el.setPointerCapture(e.pointerId);
-    st.timer = setTimeout(show, 260);
+    e.preventDefault(); // no text selection or focus jump on a long press
+    const wasOpen = !!pickerFor(anchor);
+    if (!wasOpen) openPicker(anchor);
+    st = { x: e.clientX, y: e.clientY, moved: false, wasOpen, hot: null };
+    anchor.setPointerCapture(e.pointerId);
+    anchor.classList.add('pressing');
   });
-  el.addEventListener('pointermove', (e) => {
+  anchor.addEventListener('pointermove', (e) => {
     if (!st) return;
-    if (!st.scrub && Math.abs(e.clientX - st.x) > 8) show();
-    if (!st.scrub) return;
-    const kids = [...st.bar.children];
-    let i = kids.findIndex((c) => { const r = c.getBoundingClientRect(); return e.clientX >= r.left && e.clientX < r.right; });
-    if (i < 0) i = e.clientX < kids[0].getBoundingClientRect().left ? 0 : kids.length - 1;
-    if (i !== st.idx) { st.idx = i; mark(); navigator.vibrate?.(4); }
+    if (!st.moved && Math.hypot(e.clientX - st.x, e.clientY - st.y) > 10) st.moved = true;
+    if (st.moved) light(rowAt(e.clientX, e.clientY));
   });
-  const end = (apply) => {
+  const end = (e, ok) => {
     if (!st) return;
-    clearTimeout(st.timer);
     const s = st;
     st = null;
-    el.classList.remove('scrubbing');
-    if (s.bar) { s.bar.classList.add('out'); setTimeout(() => s.bar.remove(), 150); }
-    if (s.scrub) { if (apply) setMode(modes[s.idx]); }
-    else if (apply) onTap(s);
+    anchor.classList.remove('pressing');
+    s.hot?.classList.remove('hot');
+    if (!ok) return;
+    if (s.moved) {
+      const o = rowAt(e.clientX, e.clientY);
+      const r = anchor.getBoundingClientRect();
+      const onPill = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+      if (o) { closeMenu(); setMode(o.dataset.mode); navigator.vibrate?.(8); }
+      else if (!onPill) closeMenu(); // slid off the list: nothing changes
+      return;
+    }
+    if (s.wasOpen) closeMenu(); // tapping the pill again closes the list
   };
-  el.addEventListener('pointerup', () => end(true));
-  el.addEventListener('pointercancel', () => end(false));
-  el.addEventListener('lostpointercapture', () => end(false));
-  el.addEventListener('click', (e) => {
-    e.stopPropagation(); // the pointer handlers already acted; don't let the page close a menu we just opened
-    if (e.detail === 0) onTap({ idx: startIndex(e) }); // keyboard activation
+  anchor.addEventListener('pointerup', (e) => end(e, true));
+  anchor.addEventListener('pointercancel', (e) => end(e, false));
+  anchor.addEventListener('click', (e) => {
+    e.stopPropagation(); // the pointer handlers already acted; don't let the page close the list we just opened
+    if (e.detail !== 0) return;
+    if (pickerFor(anchor)) closeMenu(); // keyboard: Enter / Space toggles it
+    else openPicker(anchor).querySelector('.pk-opt.on')?.focus({ preventScroll: true });
   });
 }
 
@@ -3696,7 +3788,7 @@ function moreItems() {
     { label: 'Fit page', icon: I.fitP, checked: prefs.zoom === 'page', run: () => setZoom(prefs.zoom === 'page' ? 1 : 'page') });
   items.push({ header: 'Search' },
     { label: 'Match case', checked: prefs.matchCase, run: () => { prefs.matchCase = !prefs.matchCase; runSearch(); } },
-    { label: 'Whole words only', checked: prefs.wholeWord, disabled: prefs.mode === 'regex', run: () => { prefs.wholeWord = !prefs.wholeWord; runSearch(); } });
+    { label: 'Whole words only', checked: prefs.wholeWord, run: () => { prefs.wholeWord = !prefs.wholeWord; runSearch(); } });
   if (active === results) {
     items.push({ header: 'Sort' },
       ...[['library', 'Library order'], ['hits', 'Documents with most hits'], ['pages', 'Pages with most hits']].map(([k, label]) => ({ label, checked: prefs.sort === k, run: () => { prefs.sort = k; runSearch(); } })));
@@ -3747,6 +3839,7 @@ function onScrollBars() {
   const y = scrollY;
   const dy = y - lastScrollY;
   lastScrollY = y;
+  if (performance.now() < autoScrollUntil) { scrollAcc = 0; return; }
   if (!isPhone() || y < 60 || document.activeElement === q || document.body.classList.contains('drawer') || $('.pop-menu')) {
     setBarHidden(false);
     scrollAcc = 0;
