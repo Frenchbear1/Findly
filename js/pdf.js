@@ -94,29 +94,59 @@ export function closePdf(docId) {
  * Render page n (0-based) for `host`. ranges: [[start,end,color,hitIndex|null]]
  * Returns { show, cleanup }: call show() to swap the finished page in (nothing changes on screen before that).
  */
-export async function renderPdfPage(pdf, n, host, ranges, width) {
+// Where the text sits across the page, as fractions of its width [left, right] — or null when the margins
+// are too small to bother trimming (or there isn't enough text to tell). Rotated text is ignored.
+function textSpan(items, base) {
+  let x0 = Infinity, x1 = -Infinity, count = 0;
+  for (const it of items) {
+    if (!it.str || !it.str.trim()) continue;
+    const t = it.transform;
+    if (Math.abs(t[1]) > 0.01 || Math.abs(t[2]) > 0.01) continue;
+    const tx = pdfjsLib.Util.transform(base.transform, t);
+    const w = (it.width || 0) * base.scale;
+    x0 = Math.min(x0, tx[4]);
+    x1 = Math.max(x1, tx[4] + w);
+    count++;
+  }
+  if (count < 3) return null;
+  const a = Math.max(0, x0 / base.width - 0.025);
+  const b = Math.min(1, x1 / base.width + 0.025);
+  if (a + (1 - b) < 0.08 || b - a < 0.35) return null;
+  return [a, b];
+}
+
+export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false } = {}) {
   const page = await pdf.getPage(n + 1);
   const base = page.getViewport({ scale: 1 });
-  const cssWidth = Math.max(width || 0, host.clientWidth || 700);
+  const needText = ranges.length || trim;
+  const content = needText ? await page.getTextContent() : null;
+  // "wide view": cut the side margins so the text fills the width
+  const span = trim ? textSpan(content.items, base) : null;
+  const ts = span ? 1 / (span[1] - span[0]) : 1;
+  const cssWidth = Math.max(width || 0, host.clientWidth || 700) * ts;
   const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   const scale = Math.min(cssWidth * dpr, 4096) / base.width;
   const vp = page.getViewport({ scale });
 
+  // .pdf-frame is the visible box; .pdf-page inside it is the whole page, scaled and shifted when trimmed
   const frame = document.createElement('div');
-  frame.className = 'pdf-frame';
-  frame.style.aspectRatio = `${base.width} / ${base.height}`;
+  frame.className = span ? 'pdf-frame trimmed' : 'pdf-frame';
+  const sheet = document.createElement('div');
+  sheet.className = 'pdf-page';
+  sheet.style.aspectRatio = `${base.width} / ${base.height}`;
+  if (span) { frame.style.setProperty('--ts', ts.toFixed(4)); frame.style.setProperty('--tx0', span[0].toFixed(4)); }
   const canvas = document.createElement('canvas');
   canvas.width = Math.floor(vp.width);
   canvas.height = Math.floor(vp.height);
   const layer = document.createElement('div');
   layer.className = 'pdf-hits';
-  frame.append(canvas, layer);
+  sheet.append(canvas, layer);
+  frame.append(sheet);
   // Draw off-screen first; whatever is showing now (the old render, or text) stays until this is ready.
 
   const task = page.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport: vp });
 
   if (ranges.length) {
-    const content = await page.getTextContent();
     const { map } = textFromItems(content.items);
     const items = content.items;
     const starts = map.map((m) => m[0]);
@@ -161,5 +191,5 @@ export async function renderPdfPage(pdf, n, host, ranges, width) {
   try { await task.promise; } catch (e) { if (e?.name !== 'RenderingCancelledException') throw e; cancelled = true; }
   page.cleanup();
   const cleanup = () => { task.cancel(); canvas.width = canvas.height = 0; frame.remove(); };
-  return { cleanup, show: () => { if (!cancelled) host.replaceChildren(frame); } };
+  return { cleanup, trimmed: !!span, show: () => { if (!cancelled) host.replaceChildren(frame); } };
 }

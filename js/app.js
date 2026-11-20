@@ -73,6 +73,9 @@ const I = {
   out: '<svg viewBox="0 0 24 24"><path d="M15 12H4M8 8l-4 4 4 4M14 5h5a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-5"/></svg>',
   upload: '<svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>',
   crop: '<svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"/></svg>',
+  expand: '<svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
+  copy: '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
+  wide: '<svg viewBox="0 0 24 24"><path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4"/></svg>',
   up: '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>',
   down: '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>',
 };
@@ -81,7 +84,7 @@ const I = {
 const PREF_KEY = 'instant-search:prefs';
 const PREFS_V = 2;
 const prefs = Object.assign(
-  { mode: 'all', matchCase: false, wholeWord: false, near: 8, sort: 'library', view: 'original', theme: 'auto', q: '', zoom: 'width', compact: false, sideHidden: false, keys: {}, v: PREFS_V, crop: true, cropLines: 3 },
+  { mode: 'all', matchCase: false, wholeWord: false, near: 8, sort: 'library', view: 'original', theme: 'auto', q: '', zoom: 'width', compact: false, sideHidden: false, keys: {}, v: PREFS_V, crop: true, cropLines: 3, trim: true },
   (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch { return {}; } })()
 );
 // v2: pages open as the original and fit the width by default; Regex is gone
@@ -360,15 +363,12 @@ function headHtml(v, doc, n, ctx, flat = false) {
     : hasOriginal(doc)
     ? `<button class="chip-btn" data-act="pmode" title="Switch between extracted text and the original page">${mode === 'original' ? I.text + 'Text' : I.image + 'Original'}</button>`
     : '';
-  const open = v.kind === 'results'
-    ? `<button class="chip-btn" data-act="open" title="Read the whole document from this page">${I.book}Open</button>`
-    : '';
   let rank = '';
   if (flat && !ctx) {
     const i = v.list.findIndex((r) => r.flat && r.doc.id === doc.id && r.pages[0].n === n);
     if (i >= 0) rank = `<span class="rank" title="Ranked ${fmt(i + 1)} by hits">${fmt(i + 1)}</span>`;
   }
-  return `${rank}<span class="pno">Page ${n + 1}</span>${badge}<span class="grow"></span>${toggle}${open}`;
+  return `${rank}<span class="pno">Page ${n + 1}</span>${badge}<span class="grow"></span>${toggle}`;
 }
 
 function pageEl(v, doc, n, R) {
@@ -445,13 +445,13 @@ function fill(art) {
       try {
         const pdf = await getPdf(doc.id, () => store.file(doc.id));
         if (token !== art._token) return;
-        const r = await renderPdfPage(pdf, n, body, ranges, BASE_W * zoomValue());
+        const r = await renderPdfPage(pdf, n, body, ranges, BASE_W * zoomValue(), { trim: !!prefs.trim });
         if (token !== art._token) { r.cleanup(); return; }
         r.show();
         art._cleanup = r.cleanup;
         swapped();
-        const fr = body.querySelector('.pdf-frame');
-        if (fr) S.pageAspect = fr.offsetHeight / fr.offsetWidth || S.pageAspect;
+        const fr = body.querySelector('.pdf-page');
+        if (fr && !r.trimmed) S.pageAspect = fr.offsetHeight / fr.offsetWidth || S.pageAspect;
       } catch (err) {
         if (token !== art._token) return;
         body.innerHTML = `<p class="empty-page">${I.warn}<span>Couldn’t show the original page (${esc(err.message)}).</span></p>`;
@@ -561,7 +561,6 @@ function cropBand(art, content) {
   if (a <= 0 && b >= 1) return null;
   return [Math.max(0, a), Math.min(1, b)];
 }
-const cropEdge = (side) => `<button class="crop-more ${side}" data-act="crop-${side}" title="${side === 'top' ? 'Show the top of this page' : 'Show the rest of this page'}"><span>${side === 'top' ? I.up : I.down}${side === 'top' ? 'Top' : 'More'}</span></button>`;
 function applyCrop(art) {
   const body = art.lastElementChild;
   let clip = body.querySelector(':scope > .crop-clip');
@@ -570,7 +569,7 @@ function applyCrop(art) {
   const band = cropWanted(art) ? cropBand(art, content) : null;
   if (!band) {
     if (clip) body.replaceChildren(content);
-    body.classList.remove('cropped');
+    body.classList.remove('cropped', 'cut-top', 'cut-bottom');
     art._cropRO?.disconnect();
     return;
   }
@@ -593,28 +592,21 @@ function applyCrop(art) {
   const H = content.offsetHeight;
   clip.style.height = Math.max(24, Math.round((band[1] - band[0]) * H)) + 'px';
   clip.firstElementChild.style.marginTop = -Math.round(band[0] * H) + 'px';
-  const hasTop = band[0] > 0, hasBottom = band[1] < 1;
-  const top = body.querySelector(':scope > .crop-more.top');
-  const bottom = body.querySelector(':scope > .crop-more.bottom');
-  if (hasTop && !top) clip.insertAdjacentHTML('beforebegin', cropEdge('top'));
-  if (!hasTop) top?.remove();
-  if (hasBottom && !bottom) clip.insertAdjacentHTML('afterend', cropEdge('bottom'));
-  if (!hasBottom) bottom?.remove();
-  body.classList.toggle('cut-top', hasTop);
-  body.classList.toggle('cut-bottom', hasBottom);
+  body.classList.toggle('cut-top', band[0] > 0);
+  body.classList.toggle('cut-bottom', band[1] < 1);
 }
-function expandCrop(art, side) {
+// Open a cropped page out to the whole page ('all'), or crop it to the hits again ('crop'), keeping the
+// hits where they are on screen.
+function expandCrop(art, how) {
   const key = pkey(art.dataset.doc, Number(art.dataset.n));
-  cropOpen.set(key, { ...cropOpen.get(key), [side]: true });
+  if (how === 'crop') cropOpen.delete(key);
+  else cropOpen.set(key, { top: true, bottom: true });
   const content = art.querySelector('.pdf-frame, .page-text');
   const before = content?.getBoundingClientRect().top;
   applyCrop(art);
-  if (side !== 'top' || before == null) return;
-  // keep the hits where they were, then ease up a little so you can see what opened above
+  if (before == null) return;
   const after = content.getBoundingClientRect().top;
-  const opened = Math.max(0, after - before);
-  window.scrollBy({ top: after - before, behavior: 'instant' });
-  if (opened > 0) window.scrollBy({ top: -Math.min(opened, innerHeight * 0.35), behavior: reduceMotion() ? 'instant' : 'smooth' });
+  if (after !== before) window.scrollBy({ top: after - before, behavior: 'instant' });
 }
 // What a page will roughly take before it's drawn (a cropped hit page is only a band of the page).
 function bodyEstimate(art, doc, n) {
@@ -643,6 +635,15 @@ function setCrop(on) {
   savePrefs();
   syncControls();
   recropAll();
+}
+function setTrim(on) {
+  prefs.trim = !!on;
+  savePrefs();
+  syncControls();
+  for (const v of [results, reader]) {
+    if (v !== active) { v.dirty = true; continue; }
+    for (const art of v.pageEls.values()) if (art._cleanup && art.querySelector('.pdf-frame')) refill(art);
+  }
 }
 function setCropLines(n) {
   prefs.cropLines = Math.max(1, Math.min(15, Math.round(Number(n) || 3)));
@@ -1251,6 +1252,7 @@ function syncControls() {
   $('#fitWidth').setAttribute('aria-pressed', String(prefs.zoom === 'width'));
   $('#fitPage').setAttribute('aria-pressed', String(prefs.zoom === 'page'));
   $('#cropBtn').setAttribute('aria-pressed', String(!!prefs.crop));
+  $('#trimBtn').setAttribute('aria-pressed', String(!!prefs.trim));
   $('#cropSpan').hidden = !prefs.crop;
   $('#cropLines').value = prefs.cropLines;
   $('#cropOut').textContent = `±${prefs.cropLines}`;
@@ -1682,7 +1684,31 @@ function fillMenu(m, items, { onBack } = {}) {
     m.append(b);
   }
 }
+// A menu opened at a tap: kept on screen, clear of the top bar and the bottom bar.
+function openMenuAt(x, y, items) {
+  closeMenu();
+  const m = el('div', 'pop-menu at-point');
+  m.setAttribute('role', 'menu');
+  m._at = { x, y, scrollY };
+  fillMenu(m, items);
+  document.body.append(m);
+  placeMenu(m);
+}
 function placeMenu(m) {
+  if (m._at) {
+    const w = m.offsetWidth, h = m.offsetHeight;
+    const tb = $('.topbar').getBoundingClientRect();
+    const mb = $('#mbar');
+    const lo = Math.max(8, tb.bottom + 6);
+    const hi = (!mb.hidden && mb.getBoundingClientRect().height ? mb.getBoundingClientRect().top : innerHeight) - 8;
+    const { x, y } = m._at;
+    let top = y + 14;
+    if (top + h > hi) top = y - 14 - h;
+    top = Math.max(lo, Math.min(top, hi - h));
+    m.style.left = Math.max(8, Math.min(x - w / 2, innerWidth - w - 8)) + 'px';
+    m.style.top = Math.max(8, top) + 'px';
+    return;
+  }
   const r = m._anchor.getBoundingClientRect();
   const w = m.offsetWidth;
   const h = m.offsetHeight;
@@ -3193,6 +3219,7 @@ function bind() {
   $('#fitWidth').addEventListener('click', () => setZoom(prefs.zoom === 'width' ? 1 : 'width'));
   $('#fitPage').addEventListener('click', () => setZoom(prefs.zoom === 'page' ? 1 : 'page'));
   $('#cropBtn').addEventListener('click', () => setCrop(!prefs.crop));
+  $('#trimBtn').addEventListener('click', () => setTrim(!prefs.trim));
   $('#cropLines').addEventListener('input', (e) => setCropLines(e.target.value));
   let resizeTimer;
   addEventListener('resize', () => {
@@ -3379,6 +3406,15 @@ function bind() {
     }
     const gapBtn = t.closest('.gap [data-act]');
     if (gapBtn) { onGap(gapBtn.closest('.gap'), gapBtn.dataset.act); return; }
+    // tap a page: its menu opens right where you tapped (tap again anywhere to dismiss)
+    const tapped = t.closest('.page-body');
+    if (tapped && !t.closest('[data-act], button, a, input') && !String(getSelection?.() || '').trim()) {
+      e.stopPropagation();
+      if ($('.pop-menu')) { closeMenu(); return; }
+      const art = tapped.closest('.page');
+      if (art) openMenuAt(e.clientX, e.clientY, pageItems(art));
+      return;
+    }
     const b = t.closest('[data-act]');
     if (!b) {
       const m = t.closest('[data-mode]');
@@ -3398,27 +3434,8 @@ function bind() {
     if (act === 'pick') $('#fileInput').click();
     else if (act === 'read') openReader(b.dataset.doc || sec?.dataset.doc);
     else if (act === 'open' && art) openReader(art.dataset.doc, Number(art.dataset.n));
-    else if ((act === 'crop-top' || act === 'crop-bottom') && art) expandCrop(art, act === 'crop-top' ? 'top' : 'bottom');
     else if (act === 'web' && art) { override.set(pkey(art.dataset.doc, WEB), 'original'); openReader(art.dataset.doc, Number(art.dataset.n)); }
-    else if (act === 'pmode' && art) {
-      const doc = docById(art.dataset.doc);
-      const n = Number(art.dataset.n);
-      if (doc.kind === 'html') {
-        override.set(pkey(doc.id, WEB), pageMode(doc, n) === 'original' ? 'text' : 'original');
-        const v = art._v;
-        if (sec && !sec.classList.contains('ranked')) {
-          for (const [key, a] of [...v.pageEls]) if (a.dataset.doc === doc.id && sec.contains(a)) { io.unobserve(a); ioFar.unobserve(a); a._prevCleanup?.(); a._cleanup?.(); v.pageEls.delete(key); }
-          const R = v.kind === 'reader' ? v.list[0] : v.byKey?.get(sec.dataset.key);
-          const fresh = sectionEl(v, doc, R);
-          sec.replaceWith(fresh);
-          for (const a of v.pageEls.values()) if (fresh.contains(a)) { const r = a.getBoundingClientRect(); if (r.bottom > -innerHeight && r.top < innerHeight * 2) fill(a); }
-          if (pageMode(doc, n) === 'original') scrollToEl(fresh, 'start', 'instant');
-        } else refill(art);
-        return;
-      }
-      override.set(pkey(doc.id, n), pageMode(doc, n) === 'original' ? 'text' : 'original');
-      refill(art);
-    }
+    else if (act === 'pmode' && art) togglePageMode(art);
   };
   $('#results').addEventListener('click', onMain);
   $('#reader').addEventListener('click', onMain);
@@ -3453,6 +3470,7 @@ function bind() {
   });
 
   addEventListener('scroll', trackPosition, { passive: true });
+  addEventListener('scroll', () => { const m = $('.pop-menu.at-point'); if (m && Math.abs(scrollY - m._at.scrollY) > 24) closeMenu(); }, { passive: true });
 
   // keyboard
   addEventListener('keydown', (e) => {
@@ -3666,6 +3684,7 @@ const ACTIONS = [
   { id: 'fitPage', label: 'Fit page', keys: ['F'], run: () => setZoom('page') },
   { id: 'toggleView', label: 'PDF pages: text / original', keys: ['O'], run: () => setView(prefs.view === 'text' ? 'original' : 'text') },
   { id: 'toggleCrop', label: 'Crop result pages to the hits', keys: ['C'], run: () => setCrop(!prefs.crop) },
+  { id: 'toggleTrim', label: 'Trim page margins (wide view)', keys: ['M'], run: () => setTrim(!prefs.trim) },
   { id: 'toggleCompact', label: 'Minimize / show the toolbar', keys: ['H'], run: () => toggleCompact() },
   { id: 'toggleLibrary', label: 'Hide / show the library', keys: ['L'], run: () => toggleLibrary() },
   { id: 'readDoc', label: 'Read the whole document you’re on', keys: ['R'], run: () => { const c = currentDocAndPage(); if (c && active === results) openReader(c.docId, c.n); } },
@@ -3971,6 +3990,7 @@ function moreItems() {
       { label: 'Show just the hits', icon: I.crop, checked: !!prefs.crop, keep: true, run: () => setCrop(!prefs.crop) });
     if (prefs.crop) items.push({ node: cropSliderRow });
   }
+  if (S.docs.some((d) => d.kind === 'pdf')) items.push({ label: 'Trim page margins', icon: I.wide, checked: !!prefs.trim, keep: true, run: () => setTrim(!prefs.trim) });
   items.push({ header: `Zoom · ${Math.round(zoomValue() * 100)}%` },
     { label: 'Zoom in', icon: I.plus, run: () => zoomBy(1) },
     { label: 'Zoom out', icon: I.minus, run: () => zoomBy(-1) },
@@ -3986,6 +4006,56 @@ function moreItems() {
   items.push({ sep: true });
   if (active === reader) items.push({ label: 'Back to results', icon: I.arrowLeft, run: () => closeReader() });
   items.push({ label: 'Library', icon: I.folder, run: () => toggleLibrary() });
+  return items;
+}
+
+
+// Switch one page between its extracted text and the original.
+function togglePageMode(art) {
+  const sec = art.closest('.doc-sec');
+  const doc = docById(art.dataset.doc);
+  const n = Number(art.dataset.n);
+  if (doc.kind === 'html') {
+    override.set(pkey(doc.id, WEB), pageMode(doc, n) === 'original' ? 'text' : 'original');
+    const v = art._v;
+    if (sec && !sec.classList.contains('ranked')) {
+      for (const [key, a] of [...v.pageEls]) if (a.dataset.doc === doc.id && sec.contains(a)) { io.unobserve(a); ioFar.unobserve(a); a._prevCleanup?.(); a._cleanup?.(); v.pageEls.delete(key); }
+      const R = v.kind === 'reader' ? v.list[0] : v.byKey?.get(sec.dataset.key);
+      const fresh = sectionEl(v, doc, R);
+      sec.replaceWith(fresh);
+      for (const a of v.pageEls.values()) if (fresh.contains(a)) { const r = a.getBoundingClientRect(); if (r.bottom > -innerHeight && r.top < innerHeight * 2) fill(a); }
+      if (pageMode(doc, n) === 'original') scrollToEl(fresh, 'start', 'instant');
+    } else refill(art);
+    return;
+  }
+  override.set(pkey(doc.id, n), pageMode(doc, n) === 'original' ? 'text' : 'original');
+  refill(art);
+}
+
+// ---------- page popup ----------
+// Everything you can do with a page, from a tap on it.
+function pageItems(art) {
+  const v = art._v;
+  const doc = docById(art.dataset.doc);
+  const n = Number(art.dataset.n);
+  const items = [{ header: art._web ? doc.name : `Page ${n + 1}` }];
+  if (v.kind === 'results' && !art._web) {
+    const prev = art.previousElementSibling;
+    const next = art.nextElementSibling;
+    if (prev?.classList.contains('gap') && Number(prev.dataset.b) === n) items.push({ label: `Show page ${n} above`, icon: I.up, run: () => onGap(prev, 'before') });
+    if (next?.classList.contains('gap') && Number(next.dataset.a) === n) items.push({ label: `Show page ${n + 2} below`, icon: I.down, run: () => onGap(next, 'after') });
+    if (cropWanted(art)) {
+      if (art.lastElementChild.classList.contains('cropped')) items.push({ label: 'Show the whole page', icon: I.expand, run: () => expandCrop(art, 'all') });
+      else if (cropOpen.has(pkey(doc.id, n))) items.push({ label: 'Crop to the hits again', icon: I.crop, run: () => expandCrop(art, 'crop') });
+    }
+  }
+  if (hasOriginal(doc) && !(art._flat && doc.kind === 'html')) {
+    const orig = pageMode(doc, n) === 'original';
+    items.push({ label: orig ? 'Show as text' : 'Show the original', icon: orig ? I.text : I.image, run: () => togglePageMode(art) });
+  }
+  if (v.kind === 'results') items.push({ label: 'Read it in the document', icon: I.book, run: () => openReader(doc.id, art._web ? undefined : n) });
+  const text = art._web ? '' : S.texts.get(doc.id)?.[n] || '';
+  if (text.trim()) items.push({ label: 'Copy the page’s text', icon: I.copy, run: () => toast(copyText(doc.kind === 'pdf' ? reflow(text) : text) ? 'Page text copied' : 'Couldn’t copy', { ms: 1600 }) });
   return items;
 }
 

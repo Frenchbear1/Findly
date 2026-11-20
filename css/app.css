@@ -426,29 +426,20 @@ body[data-view="reader"] .crop-ctl { display: none; }
 /* Result pages cropped to the hits */
 .crop-clip { position: relative; overflow: hidden; }
 .crop-inner { will-change: margin-top; }
-/* the cut edges are a dashed line with a small button sitting on it — no extra rows */
-.page-body.cropped { position: relative; }
-.page-body.cropped:has(.page-text) { padding-top: 16px; padding-bottom: 16px; }
+/* cut edges fade out softly; tap the page for more of it */
+.page-body.cropped { position: relative; overflow: hidden; }
+.page-body.cropped:has(.page-text) { padding-top: 10px; padding-bottom: 10px; }
 .page-body.cropped:not(.cut-top):has(.page-text) { padding-top: calc(26px * var(--z)); }
 .page-body.cropped:not(.cut-bottom):has(.page-text) { padding-bottom: calc(34px * var(--z)); }
-.page-body.cropped:has(.pdf-frame) { overflow: visible; }
-.page-body.cut-bottom:has(.pdf-frame) { padding-bottom: 15px; }
-.crop-clip:has(.pdf-frame) { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
-.cut-top > .crop-clip { border-top: 1.5px dashed var(--line-2); }
-.cut-top:has(.pdf-frame) > .crop-clip { border-top: 0; }
-.page:has(> .page-body.cut-top .pdf-frame) > .page-head { border-bottom: 1.5px dashed var(--line-2); }
-.cut-bottom > .crop-clip { border-bottom: 1.5px dashed var(--line-2); }
-.page-body:has(.page-text) > .crop-clip { margin-inline: calc(-1 * var(--px)); padding-inline: var(--px); }
-.crop-more { position: relative; z-index: 3; display: flex; justify-content: center; width: 100%; height: 0; }
-.crop-more span {
-  display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 10px 0 7px; transform: translateY(-50%);
-  border-radius: 999px; background: var(--card); border: 1px solid var(--line-2); box-shadow: var(--shadow-sm);
-  font-size: 11.5px; font-weight: 650; color: var(--ink-2); white-space: nowrap; transition: color 0.15s, border-color 0.15s;
+.crop-clip { --fade: var(--card); }
+.crop-clip:has(.pdf-frame) { --fade: #fff; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
+.cut-top > .crop-clip::before, .cut-bottom > .crop-clip::after {
+  content: ""; position: absolute; left: 0; right: 0; z-index: 2; height: 16px; pointer-events: none;
 }
-.crop-more.top span { transform: translateY(-50%) translateY(1px); }
-.crop-more svg { width: 13px; height: 13px; stroke-width: 2.4; }
-.crop-more:hover span { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
-.crop-more::before { content: ""; position: absolute; left: 50%; top: -20px; width: 120px; height: 40px; transform: translateX(-50%); } /* a bigger tap target */
+.cut-top > .crop-clip::before { top: 0; background: linear-gradient(var(--fade), transparent); }
+.cut-bottom > .crop-clip::after { bottom: 0; background: linear-gradient(transparent, var(--fade)); }
+.page.extra .crop-clip { --fade: var(--card-2); }
+
 .menu-range { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px 0 34px; font-size: 13px; color: var(--ink-2); }
 .menu-range span { flex: 1; white-space: nowrap; }
 .menu-range input { width: 88px; }
@@ -493,27 +484,29 @@ body[data-view="results"] #reader, body[data-view="reader"] #results { display: 
 
 /* Page cards */
 .page {
-  width: min(100%, calc(840px * var(--z))); margin: 0 auto 14px; border-radius: 14px; background: var(--card); border: 1px solid var(--line);
-  box-shadow: var(--shadow); overflow: hidden; scroll-margin-top: calc(var(--top-h) + 56px);
+  width: min(100%, calc(840px * var(--z))); margin: 0 auto 14px; scroll-margin-top: calc(var(--top-h) + 56px);
 }
-.page.extra { background: var(--card-2); }
+/* the page's label sits just above it; the card is only the page itself */
+.page-body { background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; cursor: pointer; }
+.page.extra .page-body { background: var(--card-2); }
+.page-body:has(.page-text) { cursor: auto; }
 .page.fresh { animation: fresh 0.45s ease-out; }
 @keyframes fresh { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 .page-head {
-  display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 6px 10px 6px 18px;
-  border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted);
+  display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 4px 6px 6px;
+  font-size: 12.5px; color: var(--muted);
 }
 .pno { font-weight: 650; color: var(--ink); font-variant-numeric: tabular-nums; }
 .pno .of { font-weight: 500; color: var(--muted); }
 .phits { padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: 11.5px; }
 .phits.none { background: transparent; color: var(--muted); padding: 0; font-weight: 500; }
-.page-head .chip-btn { height: 26px; padding: 0 8px; }
+.page-head .chip-btn { height: 26px; padding: 0 8px; color: var(--muted); }
 .page-body { --px: clamp(16px, calc(44px * var(--z)), 96px); padding: calc(26px * var(--z)) var(--px) calc(34px * var(--z)); min-height: 60px; }
 .page-body:has(.pdf-frame) { padding: 0; overflow-x: auto; overscroll-behavior-x: contain; }
 .page-body:has(.html-frame) { padding: 0; position: relative; }
 .html-frame.pending { position: absolute; top: 0; left: 0; visibility: hidden; pointer-events: none; }
-.html-frame { display: block; width: 100%; height: min(78vh, 1000px); border: 0; background: #fff; border-radius: 0 0 13px 13px; }
-.page-body.loading { background: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--line) 50%, transparent) 50%, transparent 80%) 0 0 / 300% 100%; animation: shimmer 1.4s linear infinite; }
+.html-frame { display: block; width: 100%; height: min(78vh, 1000px); border: 0; background: #fff; border-radius: 13px; }
+.page-body.loading { background: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--line) 50%, transparent) 50%, transparent 80%) 0 0 / 300% 100%, var(--card); animation: shimmer 1.4s linear infinite; }
 @keyframes shimmer { to { background-position: -150% 0; } }
 .page-text {
   font: calc(16.5px * var(--z))/1.66 var(--read); color: var(--ink);
@@ -537,7 +530,9 @@ mark.m.cur { background: var(--cur); color: var(--cur-ink); box-shadow: 0 0 0 2p
 @keyframes pulse { 0% { box-shadow: 0 0 0 2px var(--cur), 0 0 0 0 color-mix(in srgb, var(--cur) 60%, transparent); } 100% { box-shadow: 0 0 0 2px var(--cur), 0 0 0 12px transparent; } }
 
 /* Original PDF page */
-.pdf-frame { position: relative; width: max(100%, calc(840px * var(--z) - 2px)); background: #fff; }
+.pdf-frame { position: relative; width: max(100%, calc(840px * var(--z) - 2px)); background: #fff; overflow: hidden; }
+/* the whole page; when the margins are trimmed it's drawn larger and shifted so the text fills the box */
+.pdf-page { position: relative; width: calc(100% * var(--ts, 1)); margin-left: calc(-100% * var(--ts, 1) * var(--tx0, 0)); }
 .pdf-frame canvas { display: block; width: 100%; height: 100%; }
 .pdf-hits { position: absolute; inset: 0; }
 .box { position: absolute; border-radius: 2px; mix-blend-mode: var(--box-blend); }
@@ -734,9 +729,9 @@ dialog[open] { animation: dlg 0.2s ease-out; }
   .search-box { padding-right: 4px; }
   .toolbar { margin-top: 10px; gap: 8px; margin-right: -12px; padding-right: 12px; }
   .hero-steps, .tips { grid-template-columns: 1fr; }
-  .page-head { padding-left: 14px; }
-  .page-head .chip-btn { font-size: 0; gap: 0; padding: 0 7px; }
-  .page-head .chip-btn svg { width: 15px; height: 15px; }
+  .page-head { padding-left: 4px; }
+  .page-head .chip-btn { font-size: 12px; padding: 0 6px; }
+  .page-head .chip-btn svg { width: 14px; height: 14px; }
   .doc-head .chip-btn { font-size: 0; gap: 0; }
   .dstat { font-size: 11.5px; }
   .dstat .dof { display: none; }
