@@ -25,6 +25,12 @@ Open `index.html` from any static host (it's a plain static site, no build step)
 - **On phones**: the top bar slides away while you read and comes back when you scroll up. A bottom bar holds the reading controls: search type (tap, or hold and slide sideways), previous/next page with hits, previous/next hit, the hit counter (tap for next, or hold and slide along it to scrub through hits), and a view menu (tap, or hold, slide to an option and let go) for Text/Original, zoom, fit, match case, whole words and sort.
 - Light and dark themes.
 
+## Backup (move everything to another device)
+
+**Backup** at the bottom of the library → **Export everything** makes one `.isbackup` file with all your documents (original files and their text), folders, linked pages and update watching, boards, reading themes, settings, keyboard shortcuts and the download helper. On a phone the share sheet opens, so you can pick **Save to Files**; on a computer it downloads.
+
+On the other device: **Backup → Import a backup…**, pick the file, and confirm. It replaces everything in Instant Search there, then reloads.
+
 ## Links to a search
 
 Tap a page and choose **Copy link to this page**. The link reopens the app with the same words, search type (and Near distance, match case, whole words), searching only that document, scrolled to that page. Paste it in your notes (Notion, etc.) for one-tap jumps to a reference.

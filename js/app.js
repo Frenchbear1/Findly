@@ -7,6 +7,7 @@ import { remoteFetch, remoteInfo, remoteChanged, download, documentLinks, looksL
 import { comboFromEvent, comboLabel, worksWhileTyping, isMac } from './keys.js';
 import { applyReadingTheme, openThemeBar, themeBarOpen, THEME_DEFAULTS } from './themes.js';
 import { initBoards } from './boards.js';
+import { makeBackup, readBackup } from './backup.js';
 
 // ---------- small helpers ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -3691,6 +3692,58 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
 }
 
 // ---------- removing things: pick folders, documents or everything, then confirm ----------
+// ---------- backup ----------
+// One file with everything (documents, folders, linked pages, boards, themes, settings, shortcuts, helper),
+// to save to Files and import on another device.
+function backupMenu(anchor) {
+  openMenu(anchor, [
+    { header: 'Backup' },
+    { label: 'Export everything', sub: 'Documents, folders, links, boards, themes and settings in one file', icon: I.save, run: exportAll },
+    { label: 'Import a backup…', sub: 'Replaces everything on this device', icon: I.upload, run: () => $('#backupInput').click() },
+  ]);
+}
+async function exportAll() {
+  const busy = toast('Making the backup…', { ms: Infinity });
+  try {
+    const blob = await makeBackup();
+    const d = new Date();
+    const name = `Instant Search backup ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.isbackup`;
+    busy._hide();
+    const file = new File([blob], name, { type: 'application/octet-stream' });
+    // phones: the share sheet has Save to Files; computers: a normal download
+    if (matchMedia('(pointer: coarse)').matches && navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: name }); return; } catch (e) { if (e?.name === 'AbortError') return; }
+    }
+    saveBlob(file, name);
+    toast(`Backup saved (${fmtSize(blob.size)})`);
+  } catch (err) {
+    busy._hide();
+    toast(`Couldn’t make the backup: ${err?.message || err}`, { ms: 6000 });
+  }
+}
+async function importBackup(file) {
+  let b;
+  try { b = await readBackup(file); } catch (err) { toast(`Couldn’t open “${file.name}”: ${err?.message || err}`, { ms: 6000 }); return; }
+  const s = b.summary;
+  const what = [plural(s.docs, 'document'), s.folders && plural(s.folders, 'folder'), s.boards && plural(s.boards, 'board')].filter(Boolean).join(', ');
+  const sure = await review({
+    title: 'Import this backup?',
+    intro: `${esc(what)} plus themes and settings, made ${esc(new Date(s.made).toLocaleString())} (${fmtSize(s.size)}). This replaces everything in Instant Search on this device.`,
+    rows: [],
+    apply: 'Replace and import',
+    danger: true,
+  });
+  if (!sure) return;
+  const busy = toast('Importing…', { ms: Infinity });
+  try {
+    await b.restore();
+    location.reload();
+  } catch (err) {
+    busy._hide();
+    toast(`Import stopped: ${err?.message || err}. Try again, or free up space on this device.`, { ms: 8000 });
+  }
+}
+
 async function openClear() {
   if (!S.docs.length && !S.folders.length) { toast('Your library is already empty'); return; }
   const docCount = (fid) => S.docs.filter((d) => d.folderId === fid).length;
@@ -4320,6 +4373,8 @@ function bind() {
   });
   $('#toggleAll').addEventListener('click', toggleAll);
   $('#clearLib').addEventListener('click', openClear);
+  $('#backupBtn').addEventListener('click', (e) => { e.stopPropagation(); backupMenu(e.currentTarget); });
+  $('#backupInput').addEventListener('change', (e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importBackup(f); });
 
   // results + reader (delegated)
   const onMain = (e) => {
