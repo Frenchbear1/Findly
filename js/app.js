@@ -152,6 +152,9 @@ const pkey = (docId, n) => `${docId}:${n}`;
 // A group is one section: a whole document, or (when ranking pages) a single hit page and the pages opened around it.
 const groupKey = (R, doc) => (R?.flat ? pkey(doc.id, R.pages[0].n) : doc.id);
 const searchable = (d) => !d.status;
+// a link can narrow the search to one document (see "links to a search"); otherwise the ticked documents
+let linkOnly = null;
+const inScope = (d) => searchable(d) && (linkOnly ? d.id === linkOnly : d.enabled);
 
 // ---------- searching ----------
 function computeHits(docs) {
@@ -202,7 +205,7 @@ function runSearch({ keepScroll = false } = {}) {
   S.terms = S.matcher ? S.matcher.terms : [];
 
   const before = { sig: resultsSig(), cur: results.cur, navY: results.navY, dirty: results.dirty, state: resultsState() };
-  assign(results, computeHits(orderedDocs().filter((d) => d.enabled && searchable(d))));
+  assign(results, computeHits(orderedDocs().filter(inScope)));
   if (keepScroll && !before.dirty && before.sig === resultsSig() && before.state === resultsState() && results.list.length) {
     results.cur = before.cur; // same results: keep the page as it is, including opened pages and the current hit
     results.navY = before.navY;
@@ -227,7 +230,7 @@ function resultsSig() {
 }
 // what the results area shows when there are no results lists (library empty, idle, error…)
 function resultsState() {
-  return [S.docs.length, !!S.error, !!S.matcher, S.docs.filter((d) => d.enabled && searchable(d)).length].join(',');
+  return [S.docs.length, !!S.error, !!S.matcher, S.docs.filter(inScope).length, linkOnly || ''].join(',');
 }
 
 let searchTimer;
@@ -1794,6 +1797,9 @@ function updateSummary() {
     html += `<button class="back-btn" data-act="back" title="Back to results">${I.arrowLeft}<span>Results</span></button>
       <span class="reader-title" title="${esc(doc?.name || '')}"><span class="ftype ${doc?.kind}">${KIND_LABEL[doc?.kind] || ''}</span><b>${esc(doc?.name || '')}</b></span>
       <label class="jump" title="Go to page"><span class="jl">Page</span><input id="jumpInput" type="number" min="1" max="${count}" value="${curPageN + 1}" inputmode="numeric" aria-label="Page number"><span>/ ${fmt(count)}</span></label>`;
+  }
+  else if (linkOnly && docById(linkOnly)) {
+    html += `<span class="link-scope">${I.link}<span>Only <b>${esc(docById(linkOnly).name)}</b></span><button type="button" data-act="unscope">Search all</button></span>`;
   }
   setHTML(box, html);
   box.hidden = !html;
@@ -5039,6 +5045,7 @@ function pageItems(art) {
   const text = art._web ? '' : S.texts.get(doc.id)?.[n] || '';
   if (text.trim()) items.push({ label: 'Copy the page’s text', icon: I.copy, run: () => toast(copyText(doc.kind === 'pdf' ? reflow(text) : text) ? 'Page text copied' : 'Couldn’t copy', { ms: 1600 }) });
   const save = art._web ? [] : saveItems(art);
+  items.push({ label: 'Copy link to this page', sub: 'Same search, document and page', icon: I.link, run: () => toast(copyText(searchLink(doc, art._web ? null : n)) ? 'Link copied' : 'Couldn’t copy', { ms: 1600 }) });
   items.push({ sep: true });
   if (!art._web) items.push({ label: 'Add to board', icon: I.board, submenu: () => boards.menuItems(() => boardSeed(art)) });
   if (save.length) items.push({ label: 'Save as…', icon: I.save, submenu: () => save });
@@ -5341,6 +5348,69 @@ function setMode(mode) {
   runSearch();
 }
 
+// ---------- links to a search ----------
+// A link like …/#find?q=dihedral&t=near&n=8&doc=07_phak_ch5.pdf&p=19&src=https://… opens the app with that
+// search, in that one document, at that page. "Copy link to this page" in a page's tap menu makes one, so you
+// can drop it in your notes. If the document isn't in this library yet, src lets the app download it first.
+function searchLink(doc, n) {
+  const p = new URLSearchParams();
+  if (q.value.trim()) p.set('q', q.value.trim());
+  p.set('t', prefs.mode);
+  if (prefs.mode === 'near') p.set('n', String(prefs.near));
+  if (prefs.matchCase) p.set('case', '1');
+  if (prefs.wholeWord) p.set('word', '1');
+  p.set('doc', doc.name);
+  if (n != null) p.set('p', String(n + 1));
+  if (doc.source?.url) p.set('src', doc.source.url);
+  return `${location.origin}${location.pathname}#find?${p}`;
+}
+const bareName = (s) => String(s || '').toLowerCase().replace(/\.[a-z0-9]{2,5}$/, '').trim();
+function findLinkedDoc(name, src) {
+  const ready = S.docs.filter(searchable);
+  const file = src ? bareName(fileNameFor(src)) : '';
+  return (src && ready.find((d) => d.source?.url === src))
+    || (name && ready.find((d) => d.name.toLowerCase() === name.toLowerCase()))
+    || (name && ready.find((d) => bareName(d.name) === bareName(name)))
+    || (file && ready.find((d) => bareName(d.name) === file || bareName(fileNameFor(d.source?.url || '')) === file))
+    || null;
+}
+function setLinkOnly(id) {
+  linkOnly = id;
+  runSearch();
+}
+async function openSearchLink() {
+  const m = location.hash.match(/^#find\?(.*)$/);
+  if (!m) return;
+  const p = new URLSearchParams(m[1]);
+  history.replaceState(null, '', location.pathname + location.search); // a reload shouldn't replay it
+  const name = p.get('doc') || '', src = p.get('src') || '';
+  if (p.has('t') && MODES[p.get('t')]) prefs.mode = p.get('t');
+  if (p.has('n')) prefs.near = Math.max(1, Math.min(200, Number(p.get('n')) || 8));
+  prefs.matchCase = p.get('case') === '1';
+  prefs.wholeWord = p.get('word') === '1';
+  if (p.has('q')) q.value = p.get('q');
+  savePrefs();
+  syncControls();
+  let doc = (name || src) ? findLinkedDoc(name, src) : null;
+  if (!doc && src) {
+    toast(`Adding “${name || fileNameFor(src)}” to your library…`, { ms: 3000 });
+    addRemote(src, {});
+    await queue;
+    doc = findLinkedDoc(name, src);
+  }
+  if ((name || src) && !doc) {
+    toast(`“${name || src}” isn’t in your library${src ? ' and couldn’t be downloaded' : ''}, so this searches everything.`, { ms: 6000 });
+  }
+  if (active === reader) closeReader();
+  linkOnly = doc ? doc.id : null;
+  runSearch();
+  const page = Number(p.get('p')) - 1;
+  if (!doc || !(page >= 0)) return;
+  await new Promise((r) => requestAnimationFrame(r));
+  if (results.info.has(pkey(doc.id, page))) await goTo(results, results.info.get(pkey(doc.id, page)).h0, { instant: true });
+  else openReader(doc.id, Math.min(page, (S.texts.get(doc.id)?.length || 1) - 1));
+}
+
 // ---------- start ----------
 async function start() {
   applyTheme();
@@ -5371,6 +5441,9 @@ async function start() {
   }
   document.body.classList.add('ready');
   H.ready = true;
+  $('#summary').addEventListener('click', (e) => { if (e.target.closest('[data-act="unscope"]')) setLinkOnly(null); });
+  window.addEventListener('hashchange', openSearchLink);
+  await openSearchLink();
   navigator.storage?.persist?.().catch(() => {});
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
   if (!matchMedia('(pointer: coarse)').matches && S.docs.length) q.focus();

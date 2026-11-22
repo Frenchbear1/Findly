@@ -318,6 +318,10 @@ body.side-hidden .sidebar { display: none; }
 .term.c3 i { background: var(--l3); } .term.c4 i { background: var(--l4); } .term.c5 i { background: var(--l5); }
 .back-btn { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 30px; padding: 0 12px 0 6px; border-radius: 9px; font-weight: 600; color: var(--accent); background: var(--accent-soft); }
 .back-btn:hover { filter: brightness(1.05); }
+.link-scope { display: inline-flex; align-items: center; gap: 8px; min-width: 0; height: 30px; padding: 0 4px 0 10px; border-radius: 9px; background: var(--accent-soft); color: var(--ink); }
+.link-scope svg { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; }
+.link-scope > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-scope button { flex: none; height: 24px; padding: 0 10px; border-radius: 7px; font-weight: 600; color: var(--accent); background: var(--card); }
 .summary:has(.back-btn) { flex-wrap: nowrap; }
 .reader-title { display: inline-flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
 .reader-title b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }

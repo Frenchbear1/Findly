@@ -25,6 +25,15 @@ Open `index.html` from any static host (it's a plain static site, no build step)
 - **On phones**: the top bar slides away while you read and comes back when you scroll up. A bottom bar holds the reading controls: search type (tap, or hold and slide sideways), previous/next page with hits, previous/next hit, the hit counter (tap for next, or hold and slide along it to scrub through hits), and a view menu (tap, or hold, slide to an option and let go) for Text/Original, zoom, fit, match case, whole words and sort.
 - Light and dark themes.
 
+## Links to a search
+
+Tap a page and choose **Copy link to this page**. The link reopens the app with the same words, search type (and Near distance, match case, whole words), searching only that document, scrolled to that page. Paste it in your notes (Notion, etc.) for one-tap jumps to a reference.
+
+- While a link has narrowed the search, a bar under the search box says **Only *document*** with **Search all** to go back to your ticked documents (your ticks are never changed).
+- If the page has no hits, the document opens at that page instead.
+- Documents are matched by their web link, then by name. If the document isn't in this library yet and it came from a web link, the app downloads it first (through the download helper if the site needs it).
+- Format, if you want to write one by hand: `…/#find?q=dihedral&t=near&n=8&doc=07_phak_ch5.pdf&p=19&src=https://…` (`t` is `any`, `all`, `phrase`, `near` or `boolean`; `p` is the PDF page number).
+
 ## Linking documents from websites
 
 You can add a document straight from a link, or link a whole page that lists documents (like an FAA handbook page), and later check for updates.
