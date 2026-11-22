@@ -49,7 +49,9 @@ async function unpack(v, bins, count) {
     if ('__bin' in v) {
       const b = bins[v.__bin];
       if (count) count.bytes += b.size;
-      if (b.kind === 'blob') return b.name ? new File([b.data], b.name, { type: b.type || '' }) : new Blob([b.data], { type: b.type || '' });
+      // copy the bytes out of the picked file first: Safari can't store a piece of a file you picked
+      // (it fails with "an internal error in the Indexed Database server")
+      if (b.kind === 'blob') { const bytes = await b.data.arrayBuffer(); return b.name ? new File([bytes], b.name, { type: b.type || '' }) : new Blob([bytes], { type: b.type || '' }); }
       const buf = await b.data.arrayBuffer();
       if (b.kind === 'ab') return buf;
       const T = globalThis[b.kind];
@@ -142,10 +144,20 @@ export async function readBackup(file) {
         // size never has to fit in memory at once
         let batch = [];
         const count = { bytes: 0 };
-        const flush = async () => { if (!batch.length) return; const b = batch; batch = []; count.bytes = 0; await tx(db, s, (os) => { for (const r of b) os.put(r); }); };
+        const flush = async () => {
+          if (!batch.length) return;
+          const b = batch; batch = []; count.bytes = 0;
+          try { await tx(db, s, (os) => { for (const r of b) os.put(r); }); }
+          catch (e) {
+            // Safari's database sometimes drops a big write: reopen it and save these one at a time
+            try { db.close(); } catch {}
+            db = await openDb(name);
+            for (const r of b) await tx(db, s, (os) => os.put(r));
+          }
+        };
         for (let i = 0; i < rows.length; i++) {
           batch.push(await unpack(rows[i], bins, count));
-          if (count.bytes > 24e6 || batch.length >= 200) await flush();
+          if (count.bytes > 8e6 || batch.length >= 100) await flush();
           onProgress?.(++done, total);
         }
         await flush();
