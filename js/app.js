@@ -3736,7 +3736,8 @@ async function importBackup(file) {
   if (!sure) return;
   const busy = toast('Importing…', { ms: Infinity });
   try {
-    await b.restore();
+    navigator.storage?.persist?.().catch(() => {});
+    await b.restore((n, of) => { const m = busy.firstChild; if (m) m.textContent = `Importing… ${Math.round((n / of) * 100)}%`; });
     location.reload();
   } catch (err) {
     busy._hide();
