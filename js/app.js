@@ -1,6 +1,6 @@
 import { compile, MODES } from './search.js';
 import { store, stuckStorage, setDiskPath } from './store.js';
-import { isNative, Files, Link, listFiles, readFileObj, recognize, writeBytes } from './native.js';
+import { isNative, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, cloudStatus, setCloud, listAll } from './native.js';
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
 import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION } from './pdf.js';
@@ -2795,12 +2795,15 @@ async function syncFolder() {
   if (!isNative) return;
   if (syncing) return syncing;
   syncing = (async () => {
-    const [files, paths] = await Promise.all([listFiles(), store.paths()]);
+    const [all, paths] = await Promise.all([listAll(), store.paths()]);
+    const files = all.files || [];
     const byPath = new Map([...paths].map(([id, p]) => [p, id]));
     const onDisk = new Map(files.map((f) => [f.path, f]));
+    const waiting = new Set(all.waiting || []); // still coming down from iCloud: not deleted
+    if (all.pending) setTimeout(() => syncFolder(), 4000); // check again once they've arrived
     // gone from the folder: gone from the library
     for (const [id, path] of paths) {
-      if (onDisk.has(path)) continue;
+      if (onDisk.has(path) || waiting.has(path)) continue;
       const doc = docById(id);
       if (!doc || doc.status) continue;
       S.docs.splice(S.docs.indexOf(doc), 1);
@@ -2858,11 +2861,97 @@ function openFromSystem(r) {
   if (r.q) { q.value = r.q; if (active === reader) closeReader(); runSearch(); updateChrome?.(); }
   else if (r.doc && docById(r.doc)) openReader(r.doc, 0);
 }
+// ---- iCloud sync: your folders and how documents are organised travel with the files ----
+// The documents themselves sync as files in iCloud Drive › Findly (each device reads them itself). Folders and each
+// document's folder, order and on/off state go in a small library file next to them; the newest one wins.
+const STATE = '.findly/library.json';
+const ME = (() => { try { let id = localStorage.getItem('instant-search:device'); if (!id) { id = uid(); localStorage.setItem('instant-search:device', id); } return id; } catch { return 'device'; } })();
+let cloudOn = false, stateT = 0, applying = false;
+function scheduleState() {
+  if (!cloudOn || applying) return;
+  clearTimeout(stateT);
+  stateT = setTimeout(writeState, 1200);
+}
+async function writeState() {
+  const paths = await store.paths();
+  const docs = {};
+  for (const d of S.docs) { const p = paths.get(d.id); if (p && !d.status) docs[p] = { folderId: d.folderId || null, order: d.order || 0, enabled: d.enabled !== false, name: d.name }; }
+  const at = Date.now();
+  await writeBytes(STATE, JSON.stringify({ v: 1, at, device: ME, folders: S.folders, docs })).catch(() => {});
+  try { localStorage.setItem('instant-search:stateAt', String(at)); } catch {}
+}
+async function applyState() {
+  if (!cloudOn) return;
+  let st;
+  try { st = JSON.parse(new TextDecoder().decode(await readBytes(STATE))); } catch { return; }
+  const seen = Number(localStorage.getItem('instant-search:stateAt') || 0);
+  if (!st || st.at <= seen) return;
+  await queue; // documents still being read get their folder once they're in
+  applying = true;
+  try {
+    S.folders = st.folders || [];
+    const ids = new Map([...(await store.paths())].map(([id, p]) => [p, id]));
+    const changed = [];
+    for (const [p, m] of Object.entries(st.docs || {})) {
+      const doc = docById(ids.get(p));
+      if (!doc) continue;
+      Object.assign(doc, { folderId: m.folderId && S.folders.some((f) => f.id === m.folderId) ? m.folderId : null, order: m.order, enabled: m.enabled });
+      changed.push(doc);
+    }
+    S.docs.sort((a, b) => (a.order || 0) - (b.order || 0));
+    await store.putFolders(S.folders).catch(() => {});
+    if (changed.length) await store.updateDocs(changed.map(stripMeta)).catch(() => {});
+    localStorage.setItem('instant-search:stateAt', String(st.at));
+    renderLibrary();
+    runSearch({ keepScroll: true });
+  } finally { applying = false; }
+}
+async function syncCloud() {
+  await syncFolder();
+  await applyState();
+  indexSpotlight();
+}
+async function toggleCloud() {
+  const st = await cloudStatus();
+  if (!st.available) { toast('iCloud Drive isn’t available. Sign in to iCloud and turn on iCloud Drive in Settings, then try again.', { ms: 7000 }); return; }
+  const on = !st.on;
+  const sure = await review({
+    title: on ? 'Turn on iCloud sync?' : 'Turn off iCloud sync?',
+    intro: on
+      ? 'Your documents move into <b>iCloud Drive › Findly</b>, so Findly on your other Apple devices has the same library: documents, folders and how they’re organised. Documents already there from your other devices are added here too, with no duplicates.'
+      : 'Your documents are copied back onto this device. iCloud keeps its copy for your other devices; changes here won’t reach them any more.',
+    rows: [],
+    apply: on ? 'Turn on' : 'Turn off',
+    alwaysApply: true,
+  });
+  if (!sure) return;
+  const busy = toast(on ? 'Moving your library into iCloud…' : 'Copying your library onto this device…', { ms: Infinity });
+  try {
+    // what each document is called on disk now, so they keep their place after the move
+    const before = await store.paths();
+    await setCloud(on);
+    cloudOn = on;
+    const after = new Set((await listFiles()).map((f) => f.path));
+    for (const [id, p] of before) if (after.has(p)) setDiskPath(id, p);
+    busy._hide();
+    toast(on ? 'iCloud sync is on' : 'iCloud sync is off');
+    if (on) await writeState();
+    syncCloud();
+  } catch (e) {
+    busy._hide();
+    toast(`Couldn’t change iCloud sync: ${e?.message || e}`, { ms: 7000 });
+  }
+}
+
 function nativeSetup() {
   if (!isNative) return;
   document.documentElement.classList.add('native');
-  syncFolder().then(indexSpotlight);
-  Files.addListener('changed', () => syncFolder().then(indexSpotlight));
+  for (const k of ['updateDoc', 'updateDocs', 'putFolders', 'deleteFolder', 'addDoc']) { // any change to the library: tell your other devices
+    const orig = store[k];
+    store[k] = (...a) => { scheduleState(); return orig.apply(store, a); };
+  }
+  cloudStatus().then((st) => { cloudOn = !!st.on; return syncCloud(); });
+  Files.addListener('changed', () => syncCloud());
   Files.addListener('incoming', () => syncFolder().then(indexSpotlight));
   Files.takeIncoming().then((r) => { if (r?.files?.length) syncFolder(); }).catch(() => {});
   Link.addListener('open', openFromSystem);
@@ -3840,6 +3929,7 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
 function backupMenu(anchor) {
   openMenu(anchor, [
     { header: 'Backup' },
+    ...(isNative ? [{ label: 'iCloud sync', sub: cloudOn ? 'On: your Apple devices share one library (iCloud Drive › Findly)' : 'Keep the same library on your iPhone, iPad and Mac', icon: I.save, checked: cloudOn, run: toggleCloud }, { sep: true }] : []),
     { label: 'Send to another device', sub: 'Straight across Wi-Fi, no file: scan the code on the other device', icon: I.out, run: () => sendTo() },
     { label: 'Receive from another device', sub: 'Shows a code to scan; adds what’s new, no duplicates', icon: I.upload, run: () => receiveFrom({ reload: () => location.reload() }) },
     { sep: true },

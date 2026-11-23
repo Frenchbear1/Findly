@@ -72,3 +72,8 @@ export async function diskFile(path) {
   });
   return { name: path.split('/').pop(), size: f.size, slice: (a, b = f.size) => piece(a, Math.min(b, f.size)) };
 }
+
+/** iCloud sync (iCloud Drive › Findly): { available, on } */
+export const cloudStatus = () => (Files.cloud ? Files.cloud().catch(() => ({ available: false, on: false })) : Promise.resolve({ available: false, on: false }));
+export const setCloud = async (on) => { const r = await Files.setCloud({ on }); rootP = null; return r; }; // the library moved: ask where it is now
+export const listAll = async () => Files.list();

@@ -99,6 +99,19 @@
 			</dict>
 		</dict>
 	</array>
+	<!-- iCloud sync: the library shows in iCloud Drive as "Findly" -->
+	<key>NSUbiquitousContainers</key>
+	<dict>
+		<key>iCloud.com.davidlabarre.instantsearch</key>
+		<dict>
+			<key>NSUbiquitousContainerIsDocumentScopePublic</key>
+			<true/>
+			<key>NSUbiquitousContainerName</key>
+			<string>Findly</string>
+			<key>NSUbiquitousContainerSupportedFolderLevels</key>
+			<string>Any</string>
+		</dict>
+	</dict>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>com.apple.corespotlightitem</string>
