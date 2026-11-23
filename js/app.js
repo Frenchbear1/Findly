@@ -105,6 +105,7 @@ const prefs = Object.assign(
 for (const [k, v] of Object.entries(THEME_DEFAULTS)) if (!(k in prefs)) prefs[k] = k === 'rtheme' ? ({ light: 'daylight', dark: 'night' }[prefs.theme] || 'auto') : structuredClone(v);
 // v2: pages open as the original and fit the width by default; Regex is gone
 if ((prefs.v || 1) < 2) { prefs.view = 'original'; prefs.zoom = 'width'; prefs.v = PREFS_V; }
+prefs.view = 'original'; // pages are always shown as the original (the text view is gone)
 if (!MODES[prefs.mode]) prefs.mode = 'all';
 const savePrefs = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch {} };
 
@@ -1933,7 +1934,7 @@ function syncControls() {
   $('#wordBtn').setAttribute('aria-pressed', String(prefs.wholeWord));
   $('#sortSel2').value = prefs.sort;
   $$('#viewSeg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === prefs.view)));
-  $('#viewSeg').hidden = !S.docs.some(hasOriginal);
+  $('#viewSeg').hidden = true;
   document.body.classList.toggle('compact', !!prefs.compact || isPhone()); // phones always use the slim search bar
   document.body.classList.toggle('side-hidden', !!prefs.sideHidden);
   $('#compactBtn').title = prefs.compact ? `Show the full toolbar (${keyHint('toggleCompact')})` : `Minimize the toolbar (${keyHint('toggleCompact')})`;
@@ -5117,7 +5118,6 @@ const ACTIONS = [
   { id: 'fitWidth', label: 'Fit width', keys: ['W'], run: () => setFit('width') },
   { id: 'fitPage', label: 'Fit page', keys: ['F'], run: () => setFit('page') },
   { id: 'fitColumn', label: 'Column view (just the column with your hits)', keys: ['V'], run: () => setFit('column') },
-  { id: 'toggleView', label: 'PDF pages: text / original', keys: ['O'], run: () => setView(prefs.view === 'text' ? 'original' : 'text') },
   { id: 'toggleCrop', label: 'Crop result pages to the hits', keys: ['C'], run: () => setCrop(!prefs.crop) },
   { id: 'toggleTrim', label: 'Trim page margins (wide view)', keys: ['M'], run: () => setTrim(!prefs.trim) },
   { id: 'toggleCompact', label: 'Minimize / show the toolbar', keys: ['H'], run: () => toggleCompact() },
@@ -5443,9 +5443,6 @@ function redrawMenu() {
 const on = (b) => `aria-pressed="${!!b}"`;
 function moreItems() {
   const items = [];
-  if (S.docs.some(hasOriginal)) {
-    items.push({ header: 'Pages' }, { node: panelRow('seg-row', `<div class="seg"><button data-v="text" ${on(prefs.view === 'text')}>${I.text}Text</button><button data-v="original" ${on(prefs.view === 'original')}>${I.image}Original</button></div>`, (v) => setView(v)) });
-  }
   items.push({ header: 'Zoom' },
     { node: panelRow('zoom-row', `<button class="pk-step" data-v="-1" aria-label="Zoom out">${I.minus}</button><button class="mp-zoom" data-v="1">${Math.round(zoomValue() * 100)}%</button><button class="pk-step" data-v="+1" aria-label="Zoom in">${I.plus}</button>`,
       (v) => (v === '1' ? setZoom(1) : zoomBy(Number(v)))) },
@@ -5522,10 +5519,6 @@ function pageItems(art) {
       if (art.lastElementChild.classList.contains('cropped')) items.push({ label: 'Show the whole page', icon: I.expand, run: () => expandCrop(art, 'all') });
       else if (cropOpen.has(pkey(doc.id, n))) items.push({ label: 'Crop to the hits again', icon: I.crop, run: () => expandCrop(art, 'crop') });
     }
-  }
-  if (hasOriginal(doc) && !(art._flat && doc.kind === 'html')) {
-    const orig = pageMode(doc, n) === 'original';
-    items.push({ label: orig ? 'Show as text' : 'Show the original', icon: orig ? I.text : I.image, run: () => togglePageMode(art) });
   }
   if (art._flat && doc.kind === 'html') items.push({ label: 'Open the web page', icon: I.globe, run: () => { override.set(pkey(doc.id, WEB), 'original'); openReader(doc.id, n); } });
   if (v.kind === 'results') items.push({ label: 'Read it in the document', icon: I.book, run: () => openReader(doc.id, art._web ? undefined : n) });
