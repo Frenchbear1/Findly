@@ -20,6 +20,7 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "takeIncoming", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "read", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stat", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "keepAwake", returnType: CAPPluginReturnPromise),
     ]
 
     private let queue = DispatchQueue(label: "instantsearch.files", qos: .utility)
@@ -39,6 +40,7 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         NotificationCenter.default.addObserver(self, selector: #selector(opened(_:)), name: .capacitorOpenURL, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(foreground), name: UIApplication.willEnterForegroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(toBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
     }
 
     @objc private func foreground() {
@@ -189,6 +191,27 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
             let a = try self.fm.attributesOfItem(atPath: url.path)
             return ["path": path, "size": (a[.size] as? NSNumber)?.intValue ?? 0]
         }
+    }
+
+    /// While a transfer runs: the screen doesn't lock, and if you switch apps iOS is asked for extra time to finish
+    /// (iOS gives a little; if it runs out the transfer pauses and carries on when you come back).
+    private var awake = false
+    private var bgTask: UIBackgroundTaskIdentifier = .invalid
+    @objc func keepAwake(_ call: CAPPluginCall) {
+        let on = call.getBool("on") ?? false
+        DispatchQueue.main.async {
+            self.awake = on
+            UIApplication.shared.isIdleTimerDisabled = on
+            if !on { self.endBackground() }
+            call.resolve()
+        }
+    }
+    @objc private func toBackground() {
+        guard awake, bgTask == .invalid else { return }
+        bgTask = UIApplication.shared.beginBackgroundTask(withName: "Transfer") { [weak self] in self?.endBackground() }
+    }
+    private func endBackground() {
+        if bgTask != .invalid { UIApplication.shared.endBackgroundTask(bgTask); bgTask = .invalid }
     }
 
     @objc func takeIncoming(_ call: CAPPluginCall) {
