@@ -2850,6 +2850,11 @@ function indexSpotlight() {
 // Shortcuts / Siri ("Search documents for…") and Spotlight results open here.
 function openFromSystem(r) {
   if (!r) return;
+  if (r.url) { // a link to a search, opened in the app instead of the browser
+    const h = (() => { try { return new URL(r.url).hash; } catch { return ''; } })();
+    if (h.startsWith('#find?')) { if (location.hash === h) openSearchLink(); else location.hash = h; }
+    return;
+  }
   if (r.q) { q.value = r.q; if (active === reader) closeReader(); runSearch(); updateChrome?.(); }
   else if (r.doc && docById(r.doc)) openReader(r.doc, 0);
 }
@@ -5576,6 +5581,7 @@ function setMode(mode) {
 // A link like …/#find?q=dihedral&t=near&n=8&doc=07_phak_ch5.pdf&p=19&src=https://… opens the app with that
 // search, in that one document, at that page. "Copy link to this page" in a page's tap menu makes one, so you
 // can drop it in your notes. If the document isn't in this library yet, src lets the app download it first.
+const APP_WEB = 'https://instant-search-virid.vercel.app/';
 function searchLink(doc, n) {
   const p = new URLSearchParams();
   if (q.value.trim()) p.set('q', q.value.trim());
@@ -5586,7 +5592,9 @@ function searchLink(doc, n) {
   p.set('doc', doc.name);
   if (n != null) p.set('p', String(n + 1));
   if (doc.source?.url) p.set('src', doc.source.url);
-  return `${location.origin}${location.pathname}#find?${p}`;
+  // from the iPhone app, links use the website's address: on an iPhone with the app they open the app (Universal Links),
+  // anywhere else the website
+  return `${isNative ? APP_WEB : location.origin + location.pathname}#find?${p}`;
 }
 const bareName = (s) => String(s || '').toLowerCase().replace(/\.[a-z0-9]{2,5}$/, '').trim();
 function findLinkedDoc(name, src) {

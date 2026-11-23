@@ -1,0 +1,10 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["__APPLE_TEAM_ID__.com.davidlabarre.instantsearch"],
+        "components": [{ "/": "/*", "#": "find?*", "comment": "links to a search open in the iPhone app" }]
+      }
+    ]
+  }
+}
