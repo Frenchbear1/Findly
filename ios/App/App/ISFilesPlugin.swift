@@ -18,6 +18,8 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "remove", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "rename", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "takeIncoming", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "read", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stat", returnType: CAPPluginReturnPromise),
     ]
 
     private let queue = DispatchQueue(label: "instantsearch.files", qos: .utility)
@@ -164,6 +166,28 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
             let dest = self.free(name, in: src.deletingLastPathComponent())
             try self.fm.moveItem(at: src, to: dest)
             return ["path": self.rel(dest)]
+        }
+    }
+
+    /// A piece of a file, as base64 (a big backup is read a few MB at a time).
+    @objc func read(_ call: CAPPluginCall) {
+        guard let path = call.getString("path"), let url = at(path) else { return call.reject("bad path") }
+        let offset = UInt64(max(0, call.getDouble("offset") ?? 0))
+        let length = max(0, call.getInt("length") ?? 0)
+        run(call) {
+            let h = try FileHandle(forReadingFrom: url)
+            defer { try? h.close() }
+            try h.seek(toOffset: offset)
+            let data = try h.read(upToCount: length) ?? Data()
+            return ["data": data.base64EncodedString()]
+        }
+    }
+
+    @objc func stat(_ call: CAPPluginCall) {
+        guard let path = call.getString("path"), let url = at(path) else { return call.reject("bad path") }
+        run(call) {
+            let a = try self.fm.attributesOfItem(atPath: url.path)
+            return ["path": path, "size": (a[.size] as? NSNumber)?.intValue ?? 0]
         }
     }
 

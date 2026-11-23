@@ -1,6 +1,7 @@
 import { compile, MODES } from './search.js';
 import { store, stuckStorage, setDiskPath } from './store.js';
-import { isNative, Files, Link, listFiles, readFileObj, recognize } from './native.js';
+import { isNative, Files, Link, listFiles, readFileObj, recognize, writeBytes } from './native.js';
+const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
 import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION } from './pdf.js';
 import { renderHtmlPage, forgetHtml, renderedText } from './htmlview.js';
@@ -8,7 +9,8 @@ import { remoteFetch, remoteInfo, remoteChanged, download, documentLinks, looksL
 import { comboFromEvent, comboLabel, worksWhileTyping, isMac } from './keys.js';
 import { applyReadingTheme, openThemeBar, themeBarOpen, THEME_DEFAULTS } from './themes.js';
 import { initBoards } from './boards.js';
-import { makeBackup, readBackup } from './backup.js';
+import { makeBackup, readBackup, backupStream } from './backup.js';
+import { send as sendTo, receive as receiveFrom } from './transfer.js';
 
 // ---------- small helpers ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -3833,12 +3835,40 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
 function backupMenu(anchor) {
   openMenu(anchor, [
     { header: 'Backup' },
+    { label: 'Send to another device', sub: 'Straight across Wi-Fi, no file: scan the code on the other device', icon: I.out, run: () => sendTo() },
+    { label: 'Receive from another device', sub: 'Shows a code to scan; adds what’s new, no duplicates', icon: I.upload, run: () => receiveFrom({ reload: () => location.reload() }) },
+    { sep: true },
     { label: 'Export everything', sub: 'Documents, folders, links, boards, themes and settings in one file', icon: I.save, run: exportAll },
-    { label: 'Import a backup…', sub: 'Replaces everything on this device', icon: I.upload, run: () => $('#backupInput').click() },
+    { label: 'Import a backup…', sub: 'Adds what’s new, or replaces everything', icon: I.upload, run: () => $('#backupInput').click() },
   ]);
 }
 async function exportAll() {
   const busy = toast('Making the backup…', { ms: Infinity });
+  if (isNative) { // the iPhone app: written straight into Files › On My iPhone › Instant Search › Backups, a piece at a time
+    try {
+      const d = new Date();
+      const name = `Backup ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.isbackup`;
+      const st = await backupStream();
+      const { path } = await Files.freeName({ name, folder: 'Backups' });
+      await writeBytes(path, st.head);
+      let done = st.head.length;
+      for (const p of st.parts) {
+        const blob = await p.read();
+        const u8 = new Uint8Array(await blob.arrayBuffer());
+        for (let i = 0; i < u8.length; i += 3 << 20) {
+          await Files.write({ path, data: b64(u8.subarray(i, i + (3 << 20))), append: true });
+        }
+        done += u8.length;
+        const m = busy.firstChild; if (m) m.textContent = `Making the backup… ${Math.round((done / st.size) * 100)}%`;
+      }
+      busy._hide();
+      toast(`Backup saved in Files › On My iPhone › Instant Search › ${path} (${fmtSize(st.size)})`, { ms: 8000 });
+    } catch (err) {
+      busy._hide();
+      toast(`Couldn’t make the backup: ${err?.message || err}`, { ms: 6000 });
+    }
+    return;
+  }
   try {
     const blob = await makeBackup();
     const d = new Date();
@@ -3860,19 +3890,21 @@ async function importBackup(file) {
   let b;
   try { b = await readBackup(file); } catch (err) { toast(`Couldn’t open “${file.name}”: ${err?.message || err}`, { ms: 6000 }); return; }
   const s = b.summary;
-  const what = [plural(s.docs, 'document'), s.folders && plural(s.folders, 'folder'), s.boards && plural(s.boards, 'board')].filter(Boolean).join(', ');
-  const sure = await review({
+  const fresh = await b.fresh().catch(() => s.docs);
+  const res = await review({
     title: 'Import this backup?',
-    intro: `${esc(what)} plus themes and settings, made ${esc(new Date(s.made).toLocaleString())} (${fmtSize(s.size)}). This replaces everything in Instant Search on this device.`,
+    intro: `Made ${esc(new Date(s.made).toLocaleString())} with ${esc(plural(s.docs, 'document'))} (${fmtSize(s.size)}). ${fresh ? `<b>${esc(plural(fresh, 'document'))}</b> ${fresh === 1 ? 'is' : 'are'} new or changed here and will be added; the rest are already here and are skipped, so nothing is duplicated.` : 'Every document in it is already here; folders and boards will be brought up to date.'} Nothing on this device is removed.`,
     rows: [],
-    apply: 'Replace and import',
-    danger: true,
+    options: [{ id: 'replace', label: 'Replace everything instead (this device becomes an exact copy of the backup, settings included)' }],
+    apply: 'Import',
+    alwaysApply: true,
   });
-  if (!sure) return;
+  if (!res) return;
+  const merge = !res.options?.replace;
   const busy = toast('Importing…', { ms: Infinity });
   try {
     navigator.storage?.persist?.().catch(() => {});
-    await b.restore((n, of) => { const m = busy.firstChild; if (m) m.textContent = `Importing… ${Math.round((n / of) * 100)}%`; });
+    await b.restore((n, of) => { const m = busy.firstChild; if (m) m.textContent = `Importing… ${Math.round((n / of) * 100)}%`; }, { merge });
     location.reload();
   } catch (err) {
     busy._hide();
@@ -5628,6 +5660,8 @@ async function start() {
   applyZoom();
   updateStorage();
   nativeSetup();
+  const sendTo_ = location.hash.match(/send-to=([A-Z0-9]{6})/i);
+  if (sendTo_) { history.replaceState(null, '', location.pathname + location.search); sendTo({ code: sendTo_[1] }); }
   if (prefs.autoCheck && hasSources() && Date.now() - (prefs.lastAutoCheck || 0) > 20 * 3600e3) {
     prefs.lastAutoCheck = Date.now();
     savePrefs();

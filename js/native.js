@@ -52,3 +52,23 @@ export async function recognize(canvas) {
   const url = canvas.toDataURL('image/jpeg', 0.85);
   return Text.recognize({ image: url.slice(url.indexOf(',') + 1) });
 }
+
+/** A file in the library folder that reads only the pieces asked for (so a backup of any size can be imported). */
+export async function diskFile(path) {
+  const f = (await listFiles()).find((x) => x.path === path) || (await Files.stat({ path }));
+  const piece = (a, b) => ({
+    size: Math.max(0, b - a),
+    async arrayBuffer() {
+      const out = new Uint8Array(Math.max(0, b - a));
+      for (let at = 0; at < out.length; at += 4 * 1024 * 1024) {
+        const { data } = await Files.read({ path, offset: a + at, length: Math.min(4 * 1024 * 1024, out.length - at) });
+        const bin = atob(data);
+        for (let i = 0; i < bin.length; i++) out[at + i] = bin.charCodeAt(i);
+      }
+      return out.buffer;
+    },
+    async text() { return new TextDecoder().decode(await this.arrayBuffer()); },
+    slice(x, y) { return piece(a + x, a + Math.min(y, b - a)); },
+  });
+  return { name: path.split('/').pop(), size: f.size, slice: (a, b = f.size) => piece(a, Math.min(b, f.size)) };
+}

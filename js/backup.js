@@ -4,7 +4,7 @@
 // File layout: "ISBACKUP1\n", a 12-digit header length, the header (JSON), then the binary parts back to back.
 // Binary values (file bytes, pictures on boards) are swapped in the header for { __bin: i } markers.
 
-import { isNative, readBytes, saveBytes, removeFile } from './native.js';
+import { isNative, readBytes, saveBytes, writeBytes, removeFile, listFiles } from './native.js';
 
 const MAGIC = 'ISBACKUP1\n';
 const DBS = ['instant-search', 'instant-search-boards'];
@@ -67,36 +67,73 @@ async function unpack(v, bins, count) {
   return v;
 }
 
-/** Builds the backup file. */
-export async function makeBackup() {
+// ---- syncing without duplicates ----
+// A document counts as already here when it's the same one (same id, same text) or the same text added separately
+// (same text fingerprint, or same name and size). A document with the same id but different text is an update.
+export async function inventory() {
+  if (!(await exists('instant-search'))) return [];
+  const db = await openDb('instant-search');
+  const out = [];
+  try { if (db.objectStoreNames.contains('docs')) await eachOf(db, 'docs', (d) => out.push({ id: d.id, name: d.name, size: d.size || 0, hash: d.hash || '' })); }
+  finally { db.close(); }
+  return out;
+}
+export function alreadyHere(have) {
+  const byId = new Map(have.map((d) => [d.id, d]));
+  const hashes = new Set(have.map((d) => d.hash).filter(Boolean));
+  const named = new Set(have.map((d) => `${d.name}|${d.size}`));
+  return (d) => {
+    const mine = byId.get(d.id);
+    if (mine) return !!d.hash && mine.hash === d.hash;
+    return (d.hash && hashes.has(d.hash)) || named.has(`${d.name}|${d.size || 0}`);
+  };
+}
+const DOC_STORES = new Set(['docs', 'texts', 'files']);
+
+/** The backup as a stream: the header bytes, then parts that are only read when they're needed (so a library of any
+ *  size can be sent to another device or written to a file a piece at a time). */
+export async function backupStream({ have = null } = {}) {
   const parts = [];
   const dbs = {};
+  let skip = new Set(), sending = 0;
+  const sizes = isNative ? new Map((await listFiles()).map((f) => [f.path, f.size])) : null;
   for (const name of DBS) {
     if (!(await exists(name))) continue; // opening a database that isn't there would create an empty one
     let db;
     try { db = await openDb(name); } catch { continue; }
     const stores = {};
+    if (have && name === 'instant-search' && db.objectStoreNames.contains('docs')) { // syncing: leave out what the other device has
+      const here = alreadyHere(have);
+      await eachOf(db, 'docs', (d) => { if (here(d)) skip.add(d.id); else sending++; });
+    } else if (name === 'instant-search' && db.objectStoreNames.contains('docs')) await eachOf(db, 'docs', () => sending++);
     for (const s of db.objectStoreNames) {
       const rows = [];
-      // in the iPhone app the documents themselves are files in the library folder: put their bytes in the backup
+      const skipped = (row) => name === 'instant-search' && DOC_STORES.has(s) && skip.has(row.id);
+      // in the iPhone app the documents themselves are files in the library folder: they're read when they're sent
       if (isNative && s === 'files') {
         const recs = [];
         await eachOf(db, s, (row) => recs.push(row));
         for (const r of recs) {
+          if (skipped(r)) continue;
           if (!r.path) { rows.push(pack(r, parts)); continue; }
-          let bytes;
-          try { bytes = await readBytes(r.path); } catch { continue; }
-          const row = { id: r.id, bytes: r.text ? new TextDecoder().decode(bytes) : new Blob([bytes]) };
-          const packed = pack(row, parts);
-          rows.push(JSON.stringify(packed).length > BIG_ROW ? (parts.push({ data: new Blob([JSON.stringify(packed)]), kind: 'json' }), { __json: parts.length - 1 }) : packed);
+          if (r.text) {
+            let bytes;
+            try { bytes = await readBytes(r.path); } catch { continue; }
+            rows.push(pack({ id: r.id, bytes: new TextDecoder().decode(bytes) }, parts));
+            continue;
+          }
+          if (!sizes.has(r.path)) continue;
+          parts.push({ size: sizes.get(r.path), kind: 'blob', read: async () => new Blob([await readBytes(r.path)]) });
+          rows.push({ id: r.id, bytes: { __bin: parts.length - 1 } });
         }
         stores[s] = rows;
         continue;
       }
       await eachOf(db, s, (row) => {
+        if (skipped(row)) return;
         const packed = pack(row, parts);
         const json = JSON.stringify(packed);
-        if (json.length > BIG_ROW) { parts.push({ data: new Blob([json]), kind: 'json' }); rows.push({ __json: parts.length - 1 }); }
+        if (json.length > BIG_ROW) { parts.push({ data: new Blob([json]), kind: 'json' }); rows.push({ __json: parts.length - 1, id: row.id }); }
         else rows.push(packed);
       });
       stores[s] = rows;
@@ -109,13 +146,28 @@ export async function makeBackup() {
     const k = localStorage.key(i);
     if (k && k.startsWith(LS_PREFIX)) ls[k] = localStorage.getItem(k);
   }
+  const lib = dbs['instant-search']?.stores || {};
   const header = JSON.stringify({
     app: 'Instant Search', v: 1, made: Date.now(),
     localStorage: ls, dbs,
-    bins: parts.map((p) => ({ size: p.data.size, kind: p.kind, type: p.type || '', name: p.name || '' })),
+    bins: parts.map((p) => ({ size: p.data ? p.data.size : p.size, kind: p.kind, type: p.type || '', name: p.name || '' })),
   });
-  const head = new TextEncoder().encode(header);
-  return new Blob([MAGIC, String(head.length).padStart(12, '0'), head, ...parts.map((p) => p.data)], { type: 'application/octet-stream' });
+  const json = new TextEncoder().encode(header);
+  const head = new Uint8Array([...new TextEncoder().encode(MAGIC + String(json.length).padStart(12, '0')), ...json]);
+  const size = head.length + parts.reduce((t, p) => t + (p.data ? p.data.size : p.size), 0);
+  return {
+    head, size,
+    summary: { docs: (lib.docs || []).length, sending, folders: (lib.folders || []).length },
+    parts: parts.map((p) => ({ size: p.data ? p.data.size : p.size, read: p.data ? async () => p.data : p.read })),
+  };
+}
+
+/** Builds the backup file (all of it, as one Blob: for browsers). */
+export async function makeBackup() {
+  const st = await backupStream();
+  const blobs = [];
+  for (const p of st.parts) blobs.push(await p.read());
+  return new Blob([st.head, ...blobs], { type: 'application/octet-stream' });
 }
 
 function tx(db, s, fn) {
@@ -148,7 +200,11 @@ export async function readBackup(file) {
   };
   const total = Object.values(header.dbs).reduce((t, d) => t + Object.values(d.stores).reduce((u, r) => u + r.length, 0), 0);
   let done = 0;
-  async function restore(onProgress) {
+  // merge: add what's new and update what changed, keep everything else here (and this device's settings)
+  async function restore(onProgress, { merge = false } = {}) {
+    const here = merge ? alreadyHere(await inventory()) : null;
+    const skip = new Set();
+    if (merge) for (const d of await unpack(lib.docs || [], bins)) if (here(d)) skip.add(d.id);
     for (const [name, { version, stores }] of Object.entries(header.dbs)) {
       // open at the backup's version so missing stores get made (same app, same versions); a newer app here
       // already has a higher version, so then just open it as it is
@@ -156,11 +212,16 @@ export async function readBackup(file) {
       try { db = await openDb(name, version, Object.keys(stores)); } catch (e) { if (e?.name !== 'VersionError') throw e; db = await openDb(name); }
       for (const [s, rows] of Object.entries(stores)) {
         if (!db.objectStoreNames.contains(s)) continue;
-        if (isNative && s === 'files') { // replacing everything: the old documents' files go too
+        const existing = new Map();
+        if (merge && isNative && s === 'files') {
+          const old = await new Promise((res, rej) => { const r = db.transaction([s], 'readonly').objectStore(s).getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+          for (const r of old) if (r.path) existing.set(r.id, r.path);
+        }
+        if (merge) { /* nothing is cleared */ } else if (isNative && s === 'files') { // replacing everything: the old documents' files go too
           const old = await new Promise((res, rej) => { const r = db.transaction([s], 'readonly').objectStore(s).getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
           for (const r of old) if (r.path) await removeFile(r.path);
         }
-        await tx(db, s, (os) => os.clear());
+        if (!merge) await tx(db, s, (os) => os.clear());
         // a few documents at a time: each is read from the file only when it's saved, so a backup of any
         // size never has to fit in memory at once
         let batch = [];
@@ -178,11 +239,16 @@ export async function readBackup(file) {
         };
         const names = new Map((await unpack(stores.docs || [], bins)).map((d) => [d.id, d.name]));
         for (let i = 0; i < rows.length; i++) {
+          const docRow = name === 'instant-search' && DOC_STORES.has(s);
+          if (merge && docRow && rows[i].id != null && skip.has(rows[i].id)) { onProgress?.(++done, total); continue; }
           let row = await unpack(rows[i], bins, count);
+          if (merge && docRow && skip.has(row.id)) { onProgress?.(++done, total); continue; }
           // in the iPhone app, documents go back into the library folder as real files
           if (isNative && s === 'files' && row.bytes != null) {
             const text = typeof row.bytes === 'string';
-            const path = await saveBytes(names.get(row.id) || `${row.id}.pdf`, row.bytes);
+            let path = existing.get(row.id); // an update to a document already here: same file, new contents
+            if (path) await writeBytes(path, row.bytes);
+            else path = await saveBytes(names.get(row.id) || `${row.id}.pdf`, row.bytes);
             row = { id: row.id, path, text };
             count.bytes = 0;
           }
@@ -194,10 +260,16 @@ export async function readBackup(file) {
       }
       db.close();
     }
+    if (merge) return; // this device keeps its own settings
     const old = [];
     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(LS_PREFIX)) old.push(k); }
     old.forEach((k) => localStorage.removeItem(k));
     for (const [k, v] of Object.entries(header.localStorage || {})) localStorage.setItem(k, v);
   }
-  return { summary, restore };
+  /** How many of the backup's documents are new or changed here. */
+  async function fresh() {
+    const here = alreadyHere(await inventory());
+    return (await unpack(lib.docs || [], bins)).filter((d) => !here(d)).length;
+  }
+  return { summary, restore, fresh };
 }
