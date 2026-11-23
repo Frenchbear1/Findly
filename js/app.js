@@ -1,5 +1,5 @@
 import { compile, MODES } from './search.js';
-import { store } from './store.js';
+import { store, stuckStorage } from './store.js';
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
 import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION } from './pdf.js';
 import { renderHtmlPage, forgetHtml, renderedText } from './htmlview.js';
@@ -2640,7 +2640,8 @@ async function ingest(file, meta) {
     try {
       await store.addDoc(stripMeta(meta), pages, bytes);
     } catch (e) {
-      toast(`“${meta.name}” is searchable now but couldn’t be saved on this device (${e.message || 'storage full'})`);
+      if (stuckStorage(e)) storageStuck();
+      else toast(`“${meta.name}” is searchable now but couldn’t be saved on this device (${e.message || 'storage full'})`);
     }
     if (meta.noText) toast(`“${meta.name}” has little or no text — it may be scanned. Use Original view to read it.`);
   } catch (err) {
@@ -2649,6 +2650,20 @@ async function ingest(file, meta) {
   }
   runSearch({ keepScroll: true });
   updateStorage();
+}
+
+// Safari's database got stuck: offer to rebuild it (it's unusable until then)
+async function storageStuck(lead = 'Saving failed because') {
+  const sure = await review({
+    title: 'This browser’s storage is stuck',
+    intro: `${lead} Safari’s storage for this app stopped working (“internal error in the Indexed Database server”). This often happens after a very large import. Repairing deletes what’s stored here so it can start fresh; then add your documents again (or import a smaller backup).`,
+    rows: [],
+    apply: 'Repair storage',
+    danger: true,
+  });
+  if (!sure) return;
+  await store.rebuild();
+  location.reload();
 }
 
 async function updateStorage() {
@@ -3741,7 +3756,8 @@ async function importBackup(file) {
     location.reload();
   } catch (err) {
     busy._hide();
-    toast(`Import stopped: ${err?.message || err}. Try again, or free up space on this device.`, { ms: 8000 });
+    if (stuckStorage(err)) storageStuck('The import stopped because');
+    else toast(`Import stopped: ${err?.message || err}. Try again, or free up space on this device.`, { ms: 8000 });
   }
 }
 
@@ -5485,7 +5501,8 @@ async function start() {
     for (const t of texts) S.texts.set(t.id, t.pages);
     S.docs = docs.filter((d) => S.texts.has(d.id)).sort((a, b) => (a.order || 0) - (b.order || 0));
   } catch (e) {
-    toast('This browser is blocking local storage, so documents won’t be kept after you close the page.');
+    if (stuckStorage(e)) storageStuck('Your library couldn’t be loaded because');
+    else toast('This browser is blocking local storage (a Private tab?), so documents won’t be kept after you close the page.');
   }
   runSearch();
   applyZoom();

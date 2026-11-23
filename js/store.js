@@ -83,4 +83,14 @@ export const store = {
       t.objectStore('folders').clear();
     });
   },
+  // Safari can leave its database stuck ("an internal error was encountered in the Indexed Database
+  // server") after a failed big write; only deleting it and starting fresh gets it working again.
+  async rebuild() {
+    try { (await dbPromise)?.close(); } catch {}
+    dbPromise = null;
+    for (const name of ['instant-search', 'instant-search-boards']) {
+      await new Promise((resolve) => { const r = indexedDB.deleteDatabase(name); r.onsuccess = r.onerror = r.onblocked = () => resolve(); });
+    }
+  },
 };
+export const stuckStorage = (e) => /internal error|Indexed Database server|UnknownError/i.test(`${e?.name} ${e?.message}`);
