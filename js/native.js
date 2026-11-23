@@ -3,16 +3,57 @@
 // In a normal browser none of this exists and isNative is false.
 export const NATIVE_BUILD = '__IS_BUILD__';
 const cap = globalThis.Capacitor;
-export const isNative = !!cap?.isNativePlatform?.();
-const plugin = (name) => (isNative && typeof cap.registerPlugin === 'function' ? cap.registerPlugin(name) : null);
-export const Files = plugin('ISFiles');
+const tauri = globalThis.__TAURI__;
+/** 'ios' (the iPhone/iPad app), 'windows' (the desktop app) or 'web' (a browser). */
+export const platform = cap?.isNativePlatform?.() ? 'ios' : tauri?.core ? 'windows' : 'web';
+export const isNative = platform !== 'web';
+const plugin = (name) => (platform === 'ios' && typeof cap.registerPlugin === 'function' ? cap.registerPlugin(name) : null);
+
+// The Windows app: the same calls as the iPhone's plugin, answered by the app itself (src-tauri/src/lib.rs).
+const invoke = (cmd, args) => tauri.core.invoke(cmd, args);
+const onFocus = (cb) => {
+  let last = 0;
+  const go = () => { if (Date.now() - last > 1500) { last = Date.now(); cb(); } };
+  addEventListener('focus', go);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) go(); });
+};
+const desktopFiles = platform === 'windows' ? {
+  info: () => invoke('info'),
+  list: () => invoke('list'),
+  write: ({ path, data, append }) => invoke('write', { path, data, append }),
+  freeName: ({ name, folder }) => invoke('free_name', { name, folder: folder || null }),
+  remove: ({ path }) => invoke('remove', { path }),
+  rename: ({ from, name }) => invoke('rename', { from, name }),
+  read: ({ path, offset, length }) => invoke('read', { path, offset, length }),
+  stat: ({ path }) => invoke('stat', { path }),
+  takeIncoming: async () => ({ files: [] }),
+  keepAwake: async () => {},
+  cloud: async () => ({ available: false, on: false }),
+  setCloud: async () => { throw new Error('iCloud sync is for Apple devices'); },
+  pickFolder: () => invoke('pick_folder'),
+  reveal: () => invoke('reveal'),
+  // files changed in the folder (Explorer, another app): picked up whenever you come back to the window
+  addListener: (ev, cb) => { if (ev === 'changed') onFocus(cb); },
+} : null;
+const quiet = { index: async () => ({}), takePending: async () => ({}), addListener: () => {} };
+
+export const Files = platform === 'windows' ? desktopFiles : plugin('ISFiles');
 export const Text = plugin('ISText');
-export const Link = plugin('ISLink');
+export const Link = plugin('ISLink') || quiet;
+/** Live Text (reading scanned pages) is on the iPhone. */
+export const hasLiveText = !!Text;
 
 let rootP = null;
-const root = () => (rootP ||= Files.info().then((r) => r.root.replace(/\/?$/, '/')));
+const root = () => (rootP ||= Files.info().then((r) => (platform === 'windows' ? r.root.replace(/[\\/]?$/, '\\') : r.root.replace(/\/?$/, '/'))));
 const enc = (path) => path.split('/').map(encodeURIComponent).join('/');
-export async function fileUrl(path) { return cap.convertFileSrc((await root()) + enc(path)); }
+export async function fileUrl(path) {
+  if (platform === 'windows') return tauri.core.convertFileSrc((await root()) + path.replace(/\//g, '\\'));
+  return cap.convertFileSrc((await root()) + enc(path));
+}
+/** Windows: pick the library folder (the app then reads documents straight from it). */
+export async function pickLibraryFolder() { const p = await Files.pickFolder(); if (p) rootP = null; return p; }
+export async function libraryFolder() { return (await Files.info()).root; }
+export const revealLibrary = () => Files.reveal?.();
 
 /** The bytes of a file in the library folder. */
 export async function readBytes(path) {

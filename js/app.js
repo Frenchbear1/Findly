@@ -1,6 +1,6 @@
 import { compile, MODES } from './search.js';
 import { store, stuckStorage, setDiskPath } from './store.js';
-import { isNative, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, cloudStatus, setCloud, listAll } from './native.js';
+import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary } from './native.js';
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
 import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION } from './pdf.js';
@@ -2779,7 +2779,7 @@ async function ingest(file, meta) {
       const plain = pages.join('\n').trim();
       if (shown.length > plain.length * 1.15 + 80) pages = paginate(shown);
     }
-    if (isNative && meta.kind === 'pdf' && bytes) pages = await liveText(bytes, pages, meta);
+    if (hasLiveText && meta.kind === 'pdf' && bytes) pages = await liveText(bytes, pages, meta);
     const chars = pages.reduce((a, p) => a + p.trim().length, 0);
     meta.pages = pages.length;
     meta.hash = textHash(pages);
@@ -3088,6 +3088,26 @@ async function toggleCloud() {
   }
 }
 
+// Windows: the library is a folder you choose; documents are read straight from it
+async function changeLibraryFolder() {
+  const now = await libraryFolder().catch(() => '');
+  const sure = await review({
+    title: 'Library folder',
+    intro: `Findly reads your documents straight from a folder on this computer${now ? `, now <b>${esc(now)}</b>` : ''}. Pick another folder: the documents in it become your library, and anything you add goes there.`,
+    rows: [],
+    apply: 'Choose folder…',
+    alwaysApply: true,
+  });
+  if (!sure) return;
+  const p = await pickLibraryFolder().catch((e) => { toast(`Couldn’t change the folder: ${e?.message || e}`); return null; });
+  if (!p) return;
+  // the old folder's documents leave the library (their files stay where they are); the new folder's come in
+  for (const d of [...S.docs]) { S.docs.splice(S.docs.indexOf(d), 1); S.texts.delete(d.id); closePdf(d.id); await store.deleteDoc(d.id, { keepFile: true }).catch(() => {}); }
+  renderLibrary();
+  toast(`Library folder: ${p}`);
+  syncFolder().then(indexSpotlight);
+}
+
 function nativeSetup() {
   if (!isNative) return;
   document.documentElement.classList.add('native');
@@ -3095,6 +3115,7 @@ function nativeSetup() {
     const orig = store[k];
     store[k] = (...a) => { scheduleState(); return orig.apply(store, a); };
   }
+  if (platform === 'windows') document.documentElement.classList.add('desktop-app');
   cloudStatus().then((st) => { cloudOn = !!st.on; return syncCloud(); });
   Files.addListener('changed', () => syncCloud());
   Files.addListener('incoming', () => syncFolder().then(indexSpotlight));
@@ -4074,7 +4095,8 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
 function backupMenu(anchor) {
   openMenu(anchor, [
     { header: 'Backup' },
-    ...(isNative ? [{ label: 'iCloud sync', sub: cloudOn ? 'On: your Apple devices share one library (iCloud Drive › Findly)' : 'Keep the same library on your iPhone, iPad and Mac', icon: I.save, checked: cloudOn, run: toggleCloud }, { sep: true }] : []),
+    ...(platform === 'windows' ? [{ label: 'Library folder…', sub: 'Choose the folder on this computer that holds your documents', icon: I.folder, run: changeLibraryFolder }, { label: 'Show library folder', sub: 'Open it in File Explorer', icon: I.out, run: () => revealLibrary() }, { sep: true }] : []),
+    ...(platform === 'ios' ? [{ label: 'iCloud sync', sub: cloudOn ? 'On: your Apple devices share one library (iCloud Drive › Findly)' : 'Keep the same library on your iPhone, iPad and Mac', icon: I.save, checked: cloudOn, run: toggleCloud }, { sep: true }] : []),
     { label: 'Send to another device', sub: 'Straight across Wi-Fi, no file: scan the code on the other device', icon: I.out, run: () => sendTo() },
     { label: 'Receive from another device', sub: 'Shows a code to scan; adds what’s new, no duplicates', icon: I.upload, run: () => receiveFrom({ reload: () => location.reload() }) },
     { sep: true },
@@ -4102,7 +4124,7 @@ async function exportAll() {
         const m = busy.firstChild; if (m) m.textContent = `Making the backup… ${Math.round((done / st.size) * 100)}%`;
       }
       busy._hide();
-      toast(`Backup saved in Files › On My iPhone › Instant Search › ${path} (${fmtSize(st.size)})`, { ms: 8000 });
+      toast(`Backup saved in ${platform === 'windows' ? 'your library folder' : 'Files › On My iPhone › Instant Search'} › ${path} (${fmtSize(st.size)})`, { ms: 8000 });
     } catch (err) {
       busy._hide();
       toast(`Couldn’t make the backup: ${err?.message || err}`, { ms: 6000 });

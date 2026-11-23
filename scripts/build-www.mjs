@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = join(root, 'www');
 const skip = new Set(['.git', '.github', '.gitignore', '.nojekyll', 'node_modules', 'www', 'ios', 'scripts', 'tests', 'helper',
-  'package.json', 'package-lock.json', 'capacitor.config.json', 'vercel.json']);
+  'package.json', 'package-lock.json', 'capacitor.config.json', 'vercel.json', 'src-tauri']);
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out);
 for (const name of readdirSync(root)) {
@@ -16,7 +16,7 @@ for (const name of readdirSync(root)) {
 }
 // the iPhone app bundles its own files: no service worker there (it would only get in the way of app updates);
 // the website (Vercel) keeps it for offline use
-if (process.env.IS_APP === '1') writeFileSync(join(out, 'sw.js'), 'self.addEventListener("install",()=>self.skipWaiting());self.addEventListener("activate",e=>e.waitUntil(self.registration.unregister()));\n');
+if (process.env.IS_APP === '1' || process.argv.includes('--app')) writeFileSync(join(out, 'sw.js'), 'self.addEventListener("install",()=>self.skipWaiting());self.addEventListener("activate",e=>e.waitUntil(self.registration.unregister()));\n');
 const nat = join(out, 'js', 'native.js');
 writeFileSync(nat, readFileSync(nat, 'utf8').replace('__IS_BUILD__', process.env.IS_BUILD || 'local'));
 // Universal Links: tells iPhones that links to a search on this site belong to the app (team ID from the

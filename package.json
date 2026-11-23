@@ -4,13 +4,16 @@
   "description": "Instant Search: web app plus the Capacitor iOS shell",
   "scripts": {
     "build": "node scripts/build-www.mjs",
-    "sync": "IS_APP=1 npm run build && cap sync ios"
+    "sync": "IS_APP=1 npm run build && cap sync ios",
+    "build:app": "node scripts/build-www.mjs --app",
+    "windows": "tauri build"
   },
   "dependencies": {
     "@capacitor/core": "8.5.3",
     "@capacitor/ios": "8.5.3"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.5.3"
+    "@capacitor/cli": "8.5.3",
+    "@tauri-apps/cli": "^2.12.6"
   }
 }

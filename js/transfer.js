@@ -8,7 +8,7 @@
 // reconnect; once it does, it carries on from the last byte that arrived, so nothing is sent twice or lost.
 import qrcode from '../vendor/transfer/qrcode.mjs';
 import { backupStream, readBackup, inventory } from './backup.js';
-import { isNative, Files, writeBytes, removeFile, diskFile } from './native.js';
+import { isNative, platform, Files, writeBytes, removeFile, diskFile } from './native.js';
 
 const WEB_URL = 'https://instant-search-virid.vercel.app/';
 const CHUNK = 64 * 1024;
@@ -18,7 +18,7 @@ const PEER_OPTS = () => ({ debug: 0, ...(globalThis.__peerOpts || {}) });
 const peerId = (code) => `findly-xfer-${code.toLowerCase()}`;
 const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => ALPHA[b % ALPHA.length]).join('');
 const fmt = (b) => (b < 1048576 ? `${Math.max(b ? 1 : 0, Math.round(b / 1024))} KB` : b < 1073741824 ? `${(b / 1048576).toFixed(b < 10485760 ? 1 : 0)} MB` : `${(b / 1073741824).toFixed(2)} GB`);
-const device = () => (isNative ? 'iPhone' : /Android/i.test(navigator.userAgent) ? 'Android device' : /iPhone|iPad/i.test(navigator.userAgent) ? 'iPhone' : /Mac/i.test(navigator.platform) ? 'Mac' : 'computer');
+const device = () => (platform === 'ios' ? (/iPad/.test(navigator.userAgent) || navigator.maxTouchPoints > 1 && /Mac/.test(navigator.userAgent) ? 'iPad' : 'iPhone') : platform === 'windows' ? 'Windows PC' : /Android/i.test(navigator.userAgent) ? 'Android device' : /iPhone|iPad/i.test(navigator.userAgent) ? 'iPhone' : /Mac/i.test(navigator.platform) ? 'Mac' : 'computer');
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const keepAwake = (on) => { if (isNative) Files.keepAwake?.({ on }).catch?.(() => {}); };
