@@ -1425,3 +1425,13 @@ body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-ins
 .xf-pill.paused { color: var(--muted); }
 .xf-pill.done .v { stroke-dasharray: 100 100; }
 body.bar-hidden .xf-pill { top: max(10px, env(safe-area-inset-top)); }
+
+/* dragging in the library */
+.drag-ghost { position: fixed; left: 0; top: 0; z-index: 200; margin: 0; list-style: none; pointer-events: none; border-radius: 12px; background: var(--card); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22), 0 0 0 1px var(--line-2); opacity: 0.96; transition: none; }
+.drag-ghost .folder-docs { display: none; }
+.drag-src { opacity: 0.35; }
+.drag-line { position: absolute; height: 3px; border-radius: 3px; background: var(--accent); pointer-events: none; z-index: 5; box-shadow: 0 0 0 3px var(--accent-soft); }
+.drag-line::before { content: ""; position: absolute; left: -5px; top: -3px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+.folder.drop-into > .folder-row { background: var(--accent-soft); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); border-radius: 10px; }
+body.lib-dragging, body.lib-dragging * { cursor: grabbing !important; user-select: none !important; -webkit-user-select: none !important; }
+.lib .lib-item, .lib .folder-row { -webkit-touch-callout: none; }

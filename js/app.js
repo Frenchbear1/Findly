@@ -1861,7 +1861,7 @@ function docItemHtml(d, hits) {
   const h = S.matcher && d.enabled && !d.status ? `<span class="lhits${hits.get(d.id) ? '' : ' zero'}">${fmt(hits.get(d.id) || 0)}</span>` : '';
   return `<li class="lib-item${d.enabled ? ' on' : ''}${d.status ? ' busy' : ''}${reader.docId === d.id && active === reader ? ' reading' : ''}" data-id="${d.id}">
     <label class="chk" title="Include in search"><input type="checkbox" ${d.enabled ? 'checked' : ''} ${d.status ? 'disabled' : ''}><span></span></label>
-    <button class="lib-main" data-act="read" title="${esc(d.name)}" draggable="${d.status ? 'false' : 'true'}"><span class="lname">${esc(d.name)}</span><span class="lmeta"><span class="ftype ${d.kind}">${KIND_LABEL[d.kind]}</span>${meta}</span></button>
+    <button class="lib-main" data-act="read" title="${esc(d.name)}" draggable="false"><span class="lname">${esc(d.name)}</span><span class="lmeta"><span class="ftype ${d.kind}">${KIND_LABEL[d.kind]}</span>${meta}</span></button>
     ${h}
     <span class="lib-acts"><button class="mini" data-act="solo" title="Search only this document">${I.target}</button><button class="mini" data-act="dmenu" title="More">${I.more}</button></span>
     ${d.status === 'indexing' ? `<div class="prog"><i style="width:${Math.round((d.progress || 0) * 100)}%"></i></div>` : ''}
@@ -2274,6 +2274,151 @@ function flashRow(sel) {
 }
 const docsIn = (fid) => S.docs.filter((x) => liveFolder(x) === fid);
 const self = (label) => ({ label: `${label} (this one)`, icon: I.text, disabled: true });
+// ---------- drag to reorder the library ----------
+// Press and drag a document or folder (with a finger: hold a moment, then drag). The others make room under a line that
+// shows where it will land; over the middle of a folder, a document goes inside it. Near the top or bottom the list
+// scrolls. Works the same with a mouse, a pen or a finger. ("Rearrange" in the menus still does it by picking.)
+function bindLibDrag() {
+  const lib = $('#lib'), zone = $('.lib-zone');
+  const NO = '.lib-acts, .chk, .mini, input, .rename';
+  let s = null;
+  const line = el('div', 'drag-line');
+  const end = (drop) => {
+    if (!s) return;
+    const { ghost, src, kind, id, target, timer } = s;
+    clearTimeout(timer);
+    cancelAnimationFrame(s.raf);
+    s = null;
+    document.body.classList.remove('lib-dragging');
+    line.remove();
+    $$('.drop-into').forEach((x) => x.classList.remove('drop-into'));
+    src?.classList.remove('drag-src');
+    if (!ghost) return;
+    if (drop && target) {
+      ghost.remove();
+      lib._justDragged = performance.now();
+      if (kind === 'doc') putDoc(id, target.where);
+      else putFolder(id, target.where.aboveFolder || target.where.above || null);
+    } else {
+      // nowhere to put it: it floats back home
+      const r = src.getBoundingClientRect();
+      ghost.animate([{ transform: ghost.style.transform }, { transform: `translate(${r.left}px, ${r.top}px)` }], { duration: 200, easing: 'ease-out' }).onfinish = () => ghost.remove();
+    }
+  };
+  // where the dragged thing would land for a pointer at y
+  const targetAt = (x, y) => {
+    const under = document.elementFromPoint(x, y);
+    const zr = zone.getBoundingClientRect();
+    if (!under || !zone.contains(under) || y > lib.getBoundingClientRect().bottom) {
+      if (y >= zr.top && y <= zr.bottom && x >= zr.left && x <= zr.right) return { where: { bottom: true }, lineEl: lib, after: true };
+      return null;
+    }
+    const docLi = under.closest('.lib-item');
+    const folder = under.closest('.folder');
+    if (s.kind === 'folder') {
+      // folders only go between top-level things
+      const top = under.closest('#lib > li');
+      if (!top) return { where: { bottom: true }, lineEl: lib, after: true };
+      const r = top.getBoundingClientRect();
+      const below = y > r.top + Math.min(r.height, 44) / 2;
+      const next = below ? top.nextElementSibling : top;
+      const nid = next && (next.dataset.fid || next.dataset.id);
+      return nid ? { where: { aboveFolder: nid }, lineEl: next } : { where: { bottom: true }, lineEl: top, after: true };
+    }
+    if (folder && under.closest('.folder-row')) {
+      const r = folder.querySelector('.folder-row').getBoundingClientRect();
+      const f = r.height, rel = (y - r.top) / f;
+      if (rel > 0.25 && rel < 0.75) return { where: { endOf: folder.dataset.fid }, into: folder }; // into the folder
+      if (rel <= 0.25) return { where: { aboveFolder: folder.dataset.fid }, lineEl: folder };
+      const first = folder.classList.contains('collapsed') ? null : folder.querySelector('.folder-docs > .lib-item');
+      if (first) return { where: { above: first.dataset.id }, lineEl: first };
+      const nxt = folder.nextElementSibling;
+      return nxt ? { where: nxt.dataset.fid ? { aboveFolder: nxt.dataset.fid } : { above: nxt.dataset.id }, lineEl: nxt } : { where: { bottom: true }, lineEl: folder, after: true };
+    }
+    if (docLi) {
+      const r = docLi.getBoundingClientRect();
+      if (y < r.top + r.height / 2) return { where: { above: docLi.dataset.id }, lineEl: docLi };
+      const nxt = docLi.nextElementSibling?.classList.contains('lib-item') ? docLi.nextElementSibling : null;
+      if (nxt) return { where: { above: nxt.dataset.id }, lineEl: nxt };
+      const inF = docLi.closest('.folder');
+      if (inF) return { where: { endOf: inF.dataset.fid }, lineEl: docLi, after: true };
+      const n2 = docLi.nextElementSibling;
+      return n2 ? { where: n2.dataset.fid ? { aboveFolder: n2.dataset.fid } : { above: n2.dataset.id }, lineEl: n2 } : { where: { bottom: true }, lineEl: docLi, after: true };
+    }
+    if (folder) return { where: { endOf: folder.dataset.fid }, into: folder }; // the empty space inside an open folder
+    return null;
+  };
+  const show = (t) => {
+    $$('.drop-into').forEach((x) => x.classList.remove('drop-into'));
+    if (!t) { line.remove(); return; }
+    if (t.into) { line.remove(); t.into.classList.add('drop-into'); return; }
+    const r = t.lineEl.getBoundingClientRect(), zr = zone.getBoundingClientRect();
+    const y = (t.after ? r.bottom : r.top) - zr.top + zone.scrollTop;
+    line.style.top = `${y - 1}px`;
+    line.style.left = `${Math.max(6, r.left - zr.left)}px`;
+    line.style.right = '6px';
+    if (!line.isConnected) zone.append(line);
+  };
+  const begin = () => {
+    s.started = true;
+    const r = s.src.getBoundingClientRect();
+    s.dx = s.x - r.left; s.dy = s.y - r.top;
+    const ghost = s.src.cloneNode(true);
+    ghost.classList.add('drag-ghost');
+    ghost.style.width = `${r.width}px`;
+    ghost.style.transform = `translate(${r.left}px, ${r.top}px)`;
+    document.body.append(ghost);
+    s.ghost = ghost;
+    s.src.classList.add('drag-src');
+    document.body.classList.add('lib-dragging');
+    navigator.vibrate?.(8);
+    const scroll = () => { // near the top or bottom edge, the list scrolls by itself
+      if (!s) return;
+      const zr = zone.getBoundingClientRect();
+      const v = s.y < zr.top + 44 ? -Math.ceil((zr.top + 44 - s.y) / 4) : s.y > zr.bottom - 44 ? Math.ceil((s.y - zr.bottom + 44) / 4) : 0;
+      if (v) { zone.scrollTop += v; s.target = targetAt(s.x, s.y); show(s.target); }
+      s.raf = requestAnimationFrame(scroll);
+    };
+    s.raf = requestAnimationFrame(scroll);
+  };
+  lib.addEventListener('pointerdown', (e) => {
+    if (e.button > 0 || e.target.closest(NO)) return;
+    const li = e.target.closest('.lib-item');
+    const fr = !li && e.target.closest('.folder-row');
+    if (!li && !fr) return;
+    if (li && docById(li.dataset.id)?.status) return;
+    const kind = li ? 'doc' : 'folder';
+    s = { kind, id: li ? li.dataset.id : fr.closest('.folder').dataset.fid, src: li || fr.closest('.folder'), x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, touch: e.pointerType !== 'mouse', pid: e.pointerId, started: false };
+    // a finger has to hold still a moment first (so a quick swipe still scrolls the list)
+    if (s.touch) s.timer = setTimeout(() => { if (s && !s.started) begin(); }, 380);
+  });
+  addEventListener('pointermove', (e) => {
+    if (!s || e.pointerId !== s.pid) return;
+    s.x = e.clientX; s.y = e.clientY;
+    if (!s.started) {
+      const moved = Math.hypot(s.x - s.x0, s.y - s.y0);
+      if (s.touch) { if (moved > 8) { clearTimeout(s.timer); s = null; } return; } // it was a scroll
+      if (moved < 6) return;
+      begin();
+    }
+    s.ghost.style.transform = `translate(${s.x - s.dx}px, ${s.y - s.dy}px) scale(1.02)`;
+    s.target = targetAt(s.x, s.y);
+    show(s.target);
+    // hovering a closed folder opens it
+    const f = s.target?.into;
+    if (f && f.classList.contains('collapsed')) {
+      if (s.hoverF !== f) { s.hoverF = f; clearTimeout(s.openT); s.openT = setTimeout(() => { const fo = folderById(f.dataset.fid); if (s && s.hoverF === f && fo?.collapsed) toggleFolder(fo.id); }, 650); }
+    } else s.hoverF = null;
+  });
+  addEventListener('pointerup', (e) => { if (s && e.pointerId === s.pid) end(s.started); });
+  addEventListener('pointercancel', (e) => { if (s && e.pointerId === s.pid) end(false); });
+  // while dragging with a finger, the page mustn't scroll under it
+  addEventListener('touchmove', (e) => { if (s?.started) e.preventDefault(); }, { passive: false });
+  // the click that ends a drag isn't a tap on the row
+  lib.addEventListener('click', (e) => { if (performance.now() - (lib._justDragged || 0) < 400) { e.stopPropagation(); e.preventDefault(); } }, true);
+  lib.addEventListener('contextmenu', (e) => { if (s?.touch) e.preventDefault(); });
+}
+
 // "Rearrange" for a document: the library as it looks. Tap anything to put the document right above it.
 // A folder's › (or hovering it) opens its files, to put the document inside it.
 function rearrangeDocItems(id) {
@@ -4635,6 +4780,7 @@ function bind() {
     if (internal) moveDocs([dragId || e.dataTransfer.getData(DOC_TYPE)], fid);
     else importDrop(e.dataTransfer, fid || undefined);
   });
+  bindLibDrag();
   $('#toggleAll').addEventListener('click', toggleAll);
   $('#clearLib').addEventListener('click', openClear);
   $('#backupBtn').addEventListener('click', (e) => { e.stopPropagation(); backupMenu(e.currentTarget); });
