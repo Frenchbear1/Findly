@@ -1,5 +1,6 @@
 import { compile, MODES } from './search.js';
-import { store, stuckStorage } from './store.js';
+import { store, stuckStorage, setDiskPath } from './store.js';
+import { isNative, Files, Link, listFiles, readFileObj, recognize } from './native.js';
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
 import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION } from './pdf.js';
 import { renderHtmlPage, forgetHtml, renderedText } from './htmlview.js';
@@ -1839,7 +1840,7 @@ function updateOutline() {
   trackPosition();
 }
 
-const progressText = (d) => `${d.phase === 'download' ? 'Downloading' : 'Reading'}… ${d.progress ? Math.round(d.progress * 100) + '%' : ''}`;
+const progressText = (d) => `${d.phase === 'download' ? 'Downloading' : d.phase === 'scan' ? 'Reading scanned pages' : 'Reading'}… ${d.progress ? Math.round(d.progress * 100) + '%' : ''}`;
 // While a file downloads or reads, only its own text and bar change — nothing else in the library is touched.
 function showProgress(d) {
   const li = $(`#lib .lib-item[data-id="${d.id}"]`);
@@ -2592,6 +2593,11 @@ function addFiles(fileList, folderId = null, { quietSkip = false } = {}) {
     const kind = kindOf(file.name);
     if (!kind) continue;
     const dup = S.docs.find((d) => d.name === file.name && d.size === file.size);
+    if (dup && file._diskPath) { // already in the library: from now on it's this file in the folder
+      setDiskPath(dup.id, file._diskPath);
+      store.addDoc(stripMeta(dup), S.texts.get(dup.id) || [], null).catch(() => {});
+      continue;
+    }
     if (dup) {
       if (folderId && dup.folderId !== folderId) moveDocs([dup.id], folderId);
       else toast(`“${file.name}” is already in your library`);
@@ -2599,8 +2605,9 @@ function addFiles(fileList, folderId = null, { quietSkip = false } = {}) {
     }
     // same name, or the same document with a different edition letter/year: probably a newer copy
     const older = S.docs.find((d) => !d.status && d.kind === kind && (d.name === file.name || editionKey(d.name) === editionKey(file.name)));
-    if (older && !forceNew.has(file)) { maybeNewer.push({ file, doc: older }); continue; }
+    if (older && !forceNew.has(file) && !file._diskPath) { maybeNewer.push({ file, doc: older }); continue; }
     const meta = { id: uid(), name: file.name, kind, size: file.size, addedAt: Date.now(), order: ++order, enabled: true, status: 'indexing', progress: 0, v: EXTRACTOR_VERSION, folderId: folderId || null };
+    if (file._diskPath) setDiskPath(meta.id, file._diskPath);
     S.docs.push(meta);
     queue = queue.then(() => ingest(file, meta));
   }
@@ -2625,6 +2632,7 @@ async function ingest(file, meta) {
       const plain = pages.join('\n').trim();
       if (shown.length > plain.length * 1.15 + 80) pages = paginate(shown);
     }
+    if (isNative && meta.kind === 'pdf' && bytes) pages = await liveText(bytes, pages, meta);
     const chars = pages.reduce((a, p) => a + p.trim().length, 0);
     meta.pages = pages.length;
     meta.hash = textHash(pages);
@@ -2667,6 +2675,7 @@ async function storageStuck(lead = 'Saving failed because') {
 }
 
 async function updateStorage() {
+  indexSpotlight();
   const box = $('#storage');
   try {
     const est = await navigator.storage?.estimate?.();
@@ -2740,6 +2749,117 @@ function addRemote(url, { folderId = null, linkText = '', note = '', page = '', 
       else toast(`Couldn’t add “${meta.name}”: ${helperProblem(err)}`, { ms: 6000 });
     }
   });
+}
+
+// ---------- the iPhone app ----------
+// Scanned pages (little or no text) are read with Live Text, on the device.
+async function liveText(bytes, pages, meta) {
+  const scanned = pages.map((p, i) => (p.trim().length < 25 ? i : -1)).filter((i) => i >= 0);
+  if (!scanned.length) return pages;
+  const out = pages.slice();
+  let pdf;
+  try {
+    const pdfjs = globalThis.pdfjsLib;
+    pdf = await pdfjs.getDocument({ data: new Uint8Array(bytes instanceof ArrayBuffer ? bytes.slice(0) : bytes), isEvalSupported: false }).promise;
+    meta.phase = 'scan';
+    for (let k = 0; k < scanned.length; k++) {
+      if (!S.docs.includes(meta)) break;
+      const page = await pdf.getPage(scanned[k] + 1);
+      const vp = page.getViewport({ scale: 1 });
+      const scale = Math.min(2.5, 2200 / Math.max(vp.width, vp.height));
+      const v = page.getViewport({ scale });
+      const c = document.createElement('canvas');
+      c.width = Math.round(v.width);
+      c.height = Math.round(v.height);
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff';
+      g.fillRect(0, 0, c.width, c.height);
+      await page.render({ canvasContext: g, viewport: v }).promise;
+      const r = await recognize(c).catch(() => null);
+      if (r?.text?.trim()) out[scanned[k]] = r.text;
+      c.width = c.height = 0;
+      page.cleanup();
+      meta.progress = (k + 1) / scanned.length;
+      showProgress(meta);
+    }
+  } catch {} finally { pdf?.destroy?.(); delete meta.phase; }
+  return out;
+}
+
+// The library folder (On My iPhone › Instant Search): files added there are added to the library, files
+// changed there are read again, files deleted there leave the library. Runs at start and whenever the app comes back.
+let syncing = null;
+async function syncFolder() {
+  if (!isNative) return;
+  if (syncing) return syncing;
+  syncing = (async () => {
+    const [files, paths] = await Promise.all([listFiles(), store.paths()]);
+    const byPath = new Map([...paths].map(([id, p]) => [p, id]));
+    const onDisk = new Map(files.map((f) => [f.path, f]));
+    // gone from the folder: gone from the library
+    for (const [id, path] of paths) {
+      if (onDisk.has(path)) continue;
+      const doc = docById(id);
+      if (!doc || doc.status) continue;
+      S.docs.splice(S.docs.indexOf(doc), 1);
+      S.texts.delete(id);
+      closePdf(id);
+      store.deleteDoc(id, { keepFile: true }).catch(() => {});
+    }
+    const fresh = [];
+    for (const f of files) {
+      const name = f.path.split('/').pop();
+      if (!kindOf(name) || name === 'Put documents here.txt') continue;
+      const id = byPath.get(f.path);
+      const doc = id && docById(id);
+      if (doc) {
+        // replaced or edited in the folder: read it again in place
+        if (!doc.status && doc.size && f.size !== doc.size) {
+          try {
+            const file = await readFileObj(f.path);
+            const { pages, bytes } = await readFile(file);
+            setDiskPath(doc.id, f.path);
+            await replaceDoc(doc, { pages, bytes, size: f.size }, false);
+          } catch {}
+        }
+        continue;
+      }
+      if (id) continue;
+      const file = await readFileObj(f.path).catch(() => null);
+      if (!file) continue;
+      file._diskPath = f.path;
+      fresh.push(file);
+    }
+    if (fresh.length) addFiles(fresh, null, { quietSkip: true });
+    else { renderLibrary(); runSearch({ keepScroll: true }); }
+  })().finally(() => { syncing = null; });
+  return syncing;
+}
+// Spotlight: every document, with its text, so a search on the iPhone finds it.
+let spotT = 0;
+function indexSpotlight() {
+  if (!isNative) return;
+  clearTimeout(spotT);
+  spotT = setTimeout(() => {
+    const docs = S.docs.filter((d) => !d.status).map((d) => ({ id: d.id, title: d.name.replace(/\.[a-z0-9]+$/i, ''), pages: d.pages || 0, text: (S.texts.get(d.id) || []).join('\n').slice(0, 200000) }));
+    Link.index({ docs }).catch(() => {});
+  }, 3000);
+}
+// Shortcuts / Siri ("Search documents for…") and Spotlight results open here.
+function openFromSystem(r) {
+  if (!r) return;
+  if (r.q) { q.value = r.q; if (active === reader) closeReader(); runSearch(); updateChrome?.(); }
+  else if (r.doc && docById(r.doc)) openReader(r.doc, 0);
+}
+function nativeSetup() {
+  if (!isNative) return;
+  document.documentElement.classList.add('native');
+  syncFolder().then(indexSpotlight);
+  Files.addListener('changed', () => syncFolder().then(indexSpotlight));
+  Files.addListener('incoming', () => syncFolder().then(indexSpotlight));
+  Files.takeIncoming().then((r) => { if (r?.files?.length) syncFolder(); }).catch(() => {});
+  Link.addListener('open', openFromSystem);
+  Link.takePending().then(openFromSystem).catch(() => {});
 }
 
 // Swap a document's contents for a newer version, optionally keeping the old one as "(previous)".
@@ -5507,6 +5627,7 @@ async function start() {
   runSearch();
   applyZoom();
   updateStorage();
+  nativeSetup();
   if (prefs.autoCheck && hasSources() && Date.now() - (prefs.lastAutoCheck || 0) > 20 * 3600e3) {
     prefs.lastAutoCheck = Date.now();
     savePrefs();

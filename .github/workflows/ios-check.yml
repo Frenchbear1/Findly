@@ -1,0 +1,28 @@
+# Compiles the iOS app for the simulator (no signing) so Swift mistakes show up before a
+# TestFlight build is attempted. Manual only: macOS minutes count 10x against the free quota.
+name: iOS build check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run sync
+      - name: Build for the simulator
+        run: |
+          xcodebuild build \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build.log; code=${PIPESTATUS[0]}
+          grep -E "error:" build.log | sort -u | head -10 | while IFS= read -r l; do echo "::error::${l//%/%25}"; done
+          exit $code

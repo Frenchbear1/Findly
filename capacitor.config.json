@@ -1,0 +1,9 @@
+{
+  "appId": "com.davidlabarre.instantsearch",
+  "appName": "Instant Search",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "allowsLinkPreview": false
+  }
+}

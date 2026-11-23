@@ -1,6 +1,13 @@
 // Tiny IndexedDB wrapper. Documents live on this device only.
 // stores: docs (metadata), texts (page text per doc), files (original PDF bytes for the page view), folders
 
+import { isNative, readBytes, saveBytes, writeBytes, removeFile } from './native.js';
+
+// In the iPhone app a document's original file is a real file in the library folder (On My iPhone › Instant Search);
+// the database only remembers which file is whose. In a browser the bytes go in the database as before.
+const diskPath = new Map(); // id -> path, for documents found in the folder (already on disk)
+export const setDiskPath = (id, path) => diskPath.set(id, path);
+
 const DB_NAME = 'instant-search';
 const DB_VERSION = 2;
 let dbPromise;
@@ -52,11 +59,28 @@ export const store = {
     return tx(['texts'], 'readonly', (t) => t.objectStore('texts').getAll());
   },
   async addDoc(meta, pages, fileBytes) {
+    let rec = fileBytes ? { id: meta.id, bytes: fileBytes } : null;
+    if (isNative && (fileBytes || diskPath.has(meta.id))) {
+      const text = typeof fileBytes === 'string';
+      let path = diskPath.get(meta.id);
+      diskPath.delete(meta.id);
+      if (!path) {
+        const old = await tx(['files'], 'readonly', (t) => t.objectStore('files').get(meta.id));
+        if (old?.path) { path = old.path; await writeBytes(path, fileBytes); } // a newer version: same file, new contents
+        else path = await saveBytes(meta.name, fileBytes);
+      }
+      rec = { id: meta.id, path, text };
+    }
     return tx(['docs', 'texts', 'files'], 'readwrite', (t) => {
       t.objectStore('docs').put(meta);
       t.objectStore('texts').put({ id: meta.id, pages });
-      if (fileBytes) t.objectStore('files').put({ id: meta.id, bytes: fileBytes });
+      if (rec) t.objectStore('files').put(rec);
     });
+  },
+  /** id -> path of every document kept as a file in the library folder (iPhone app). */
+  async paths() {
+    const all = await tx(['files'], 'readonly', (t) => t.objectStore('files').getAll());
+    return new Map(all.filter((r) => r.path).map((r) => [r.id, r.path]));
   },
   async updateDoc(meta) {
     return tx(['docs'], 'readwrite', (t) => t.objectStore('docs').put(meta));
@@ -66,9 +90,14 @@ export const store = {
   },
   async file(id) {
     const rec = await tx(['files'], 'readonly', (t) => t.objectStore('files').get(id));
+    if (rec?.path) { const b = await readBytes(rec.path); return rec.text ? new TextDecoder().decode(b) : b; }
     return rec ? rec.bytes : null;
   },
-  async deleteDoc(id) {
+  async deleteDoc(id, { keepFile = false } = {}) {
+    if (isNative && !keepFile) {
+      const rec = await tx(['files'], 'readonly', (t) => t.objectStore('files').get(id)).catch(() => null);
+      if (rec?.path) await removeFile(rec.path);
+    }
     return tx(['docs', 'texts', 'files'], 'readwrite', (t) => {
       t.objectStore('docs').delete(id);
       t.objectStore('texts').delete(id);
@@ -76,6 +105,7 @@ export const store = {
     });
   },
   async clear() {
+    if (isNative) for (const path of (await this.paths()).values()) await removeFile(path);
     return tx(['docs', 'texts', 'files', 'folders'], 'readwrite', (t) => {
       t.objectStore('docs').clear();
       t.objectStore('texts').clear();

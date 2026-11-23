@@ -4,6 +4,8 @@
 // File layout: "ISBACKUP1\n", a 12-digit header length, the header (JSON), then the binary parts back to back.
 // Binary values (file bytes, pictures on boards) are swapped in the header for { __bin: i } markers.
 
+import { isNative, readBytes, saveBytes, removeFile } from './native.js';
+
 const MAGIC = 'ISBACKUP1\n';
 const DBS = ['instant-search', 'instant-search-boards'];
 const LS_PREFIX = 'instant-search';
@@ -76,6 +78,21 @@ export async function makeBackup() {
     const stores = {};
     for (const s of db.objectStoreNames) {
       const rows = [];
+      // in the iPhone app the documents themselves are files in the library folder: put their bytes in the backup
+      if (isNative && s === 'files') {
+        const recs = [];
+        await eachOf(db, s, (row) => recs.push(row));
+        for (const r of recs) {
+          if (!r.path) { rows.push(pack(r, parts)); continue; }
+          let bytes;
+          try { bytes = await readBytes(r.path); } catch { continue; }
+          const row = { id: r.id, bytes: r.text ? new TextDecoder().decode(bytes) : new Blob([bytes]) };
+          const packed = pack(row, parts);
+          rows.push(JSON.stringify(packed).length > BIG_ROW ? (parts.push({ data: new Blob([JSON.stringify(packed)]), kind: 'json' }), { __json: parts.length - 1 }) : packed);
+        }
+        stores[s] = rows;
+        continue;
+      }
       await eachOf(db, s, (row) => {
         const packed = pack(row, parts);
         const json = JSON.stringify(packed);
@@ -139,6 +156,10 @@ export async function readBackup(file) {
       try { db = await openDb(name, version, Object.keys(stores)); } catch (e) { if (e?.name !== 'VersionError') throw e; db = await openDb(name); }
       for (const [s, rows] of Object.entries(stores)) {
         if (!db.objectStoreNames.contains(s)) continue;
+        if (isNative && s === 'files') { // replacing everything: the old documents' files go too
+          const old = await new Promise((res, rej) => { const r = db.transaction([s], 'readonly').objectStore(s).getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+          for (const r of old) if (r.path) await removeFile(r.path);
+        }
         await tx(db, s, (os) => os.clear());
         // a few documents at a time: each is read from the file only when it's saved, so a backup of any
         // size never has to fit in memory at once
@@ -155,8 +176,17 @@ export async function readBackup(file) {
             for (const r of b) await tx(db, s, (os) => os.put(r));
           }
         };
+        const names = new Map((await unpack(stores.docs || [], bins)).map((d) => [d.id, d.name]));
         for (let i = 0; i < rows.length; i++) {
-          batch.push(await unpack(rows[i], bins, count));
+          let row = await unpack(rows[i], bins, count);
+          // in the iPhone app, documents go back into the library folder as real files
+          if (isNative && s === 'files' && row.bytes != null) {
+            const text = typeof row.bytes === 'string';
+            const path = await saveBytes(names.get(row.id) || `${row.id}.pdf`, row.bytes);
+            row = { id: row.id, path, text };
+            count.bytes = 0;
+          }
+          batch.push(row);
           if (count.bytes > 8e6 || batch.length >= 100) await flush();
           onProgress?.(++done, total);
         }

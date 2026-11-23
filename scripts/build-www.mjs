@@ -1,0 +1,21 @@
+// Copies the static web app into www/ so Capacitor can bundle it into the iOS app.
+// GitHub Pages keeps serving the repo root as the web app; www/ is a generated copy and is gitignored.
+import { cpSync, rmSync, readdirSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const out = join(root, 'www');
+const skip = new Set(['.git', '.github', '.gitignore', '.nojekyll', 'node_modules', 'www', 'ios', 'scripts', 'tests', 'helper',
+  'package.json', 'package-lock.json', 'capacitor.config.json']);
+rmSync(out, { recursive: true, force: true });
+mkdirSync(out);
+for (const name of readdirSync(root)) {
+  if (skip.has(name) || name.endsWith('.md')) continue;
+  cpSync(join(root, name), join(out, name), { recursive: true });
+}
+// the app bundles its own files: no service worker (it would only get in the way of app updates)
+writeFileSync(join(out, 'sw.js'), 'self.addEventListener("install",()=>self.skipWaiting());self.addEventListener("activate",e=>e.waitUntil(self.registration.unregister()));\n');
+const nat = join(out, 'js', 'native.js');
+writeFileSync(nat, readFileSync(nat, 'utf8').replace('__IS_BUILD__', process.env.IS_BUILD || 'local'));
+console.log('Built www/');

@@ -1,0 +1,16 @@
+{
+  "name": "instant-search",
+  "private": true,
+  "description": "Instant Search: web app plus the Capacitor iOS shell",
+  "scripts": {
+    "build": "node scripts/build-www.mjs",
+    "sync": "IS_APP=1 npm run build && cap sync ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "8.5.3",
+    "@capacitor/ios": "8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3"
+  }
+}

@@ -119,3 +119,23 @@ vendor/             pdf.js 3.11.174 and mammoth 1.13.0 (bundled so it works offl
 ## Credits
 
 Paper textures in `vendor/paper/` are from [Subtle Patterns](https://www.toptal.com/designers/subtlepatterns/) (Toptal), licensed CC BY-SA 3.0. They were converted to greyscale and evened out so they work as grain over any page colour; see `vendor/paper/LICENSE.txt`.
+
+## iPhone app
+
+The iPhone app is the same web app inside a small native shell (Capacitor), built the same way as Calfie. On the iPhone:
+
+- **Your library is a real folder.** Documents are saved as files in *Files › On My iPhone › Instant Search* instead of the
+  browser's storage, so there's no Safari storage limit. Add, replace or delete files there (from Files, a Mac, anything) and
+  the app picks up the changes when it opens or comes back to the front.
+- **Open in Instant Search** from the share sheet, Files or Mail adds a document to the library.
+- **Live Text**: scanned PDF pages are read on the device so they become searchable.
+- **Spotlight and Shortcuts**: documents show up in Spotlight; *Search Documents* runs a search from Shortcuts, Siri or the Action button.
+
+Building (no Mac needed — GitHub's cloud Macs do it):
+
+1. In App Store Connect, create the app with bundle ID `com.davidlabarre.instantsearch`.
+2. Add the same four repository secrets Calfie uses (Settings › Secrets and variables › Actions):
+   `APPLE_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8`.
+3. Actions › **iOS build check** compiles it (optional, no signing). Actions › **iOS TestFlight** builds, signs and uploads it.
+
+The web app (GitHub Pages) is unchanged for laptops and Android; `www/` is a generated copy (`npm run build`) and isn't committed.
