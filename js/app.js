@@ -3698,7 +3698,7 @@ function review({ title, intro = '', rows, options = [], apply = 'Apply', cancel
       const picked = new Set($$('#reviewList input:checked').map((x) => rows[Number(x.dataset.i)]));
       const opts = Object.fromEntries($$('#reviewOpts input[data-o]').map((x) => [x.dataset.o, x.checked]));
       for (const x of $$('#reviewOpts input[data-c]:checked')) opts[x.dataset.c] = x.value;
-      $('#reviewApply').onclick = $('#reviewCancel').onclick = null;
+      $('#reviewApply').onclick = $('#reviewCancel').onclick = $('#reviewX').onclick = null;
       dlg.onclose = null;
       if (dlg.open) dlg.close();
       resolve(ok ? { picked, unpicked: rows.filter((r) => !r.header && !r.info && !picked.has(r)), options: opts } : null);
@@ -3729,7 +3729,7 @@ function review({ title, intro = '', rows, options = [], apply = 'Apply', cancel
       count();
     };
     $('#reviewApply').onclick = () => finish(true);
-    $('#reviewCancel').onclick = () => finish(false);
+    $('#reviewCancel').onclick = $('#reviewX').onclick = () => finish(false);
     // a previous dialog's close event can arrive after this one opened; only a real close cancels
     dlg.onclose = () => { if (!dlg.open) finish(false); };
     closeMenu();
