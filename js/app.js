@@ -4270,6 +4270,9 @@ function openSettings() {
       <header class="set-head"><h3>Settings</h3><button class="icon-btn sm" data-s="x" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
       <div class="set-body">
         ${group('Appearance', [row('theme', palette, 'Reading theme', 'Colours, paper and textures')])}
+        ${group('Reading', [
+          `<div class="set-row static"><span class="set-ic">${I.undo}</span><span class="set-t"><b>Undo &amp; redo</b><small>${prefs.undoStyle === 'buttons' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar; Undo pops up after a change'}</small></span><span class="seg small set-seg"><button type="button" data-s="ug" aria-pressed="${prefs.undoStyle !== 'buttons'}">Gestures</button><button type="button" data-s="ub" aria-pressed="${prefs.undoStyle === 'buttons'}">Buttons</button></span></div>`,
+        ])}
         ${group('Documents from websites', [
           row('helper', bolt, 'Download helper', helper.get() ? 'Set up' : 'Not set up · needed for sites like faa.gov'),
           linked && row('check', refresh, 'Check for updates now', 'Looks for newer editions of linked documents'),
@@ -4302,6 +4305,7 @@ function openSettings() {
     const k = b.dataset.s;
     const then = (fn) => { shut(); closeDrawer(); setTimeout(fn, 200); };
     if (k === 'x') return shut();
+    if (k === 'ug' || k === 'ub') { prefs.undoStyle = k === 'ub' ? 'buttons' : 'gestures'; savePrefs(); syncUndoBtns(); render(); return; }
     if (k === 'auto') { prefs.autoCheck = !prefs.autoCheck; savePrefs(); $('#autoCheck') && ($('#autoCheck').checked = prefs.autoCheck); b.querySelector('.set-sw').classList.toggle('on', prefs.autoCheck); return; }
     if (k === 'cloud') { await toggleCloud(); render(); return; }
     if (k === 'theme') return then(openThemes);
@@ -4736,6 +4740,16 @@ async function redo() {
   H.undo.push(e);
   showUndo('undo', `Redone: ${e.label}`);
 }
+// Undo / redo on the phone bar: "gestures" (swipe the bar, and a chip pops up after a change) or "buttons"
+// (fixed arrows at either end of the bar).
+function syncUndoBtns() {
+  const buttons = prefs.undoStyle === 'buttons';
+  document.body.classList.toggle('undo-buttons', buttons);
+  if (buttons) document.body.classList.remove('undo-on');
+  const u = $('#mUndoBtn'), r = $('#mRedoBtn');
+  if (u) { u.disabled = !H.undo.length; u.title = H.undo.length ? `Undo: ${H.undo.at(-1).label}` : 'Nothing to undo'; }
+  if (r) { r.disabled = !H.redo.length; r.title = H.redo.length ? `Redo: ${H.redo.at(-1).label}` : 'Nothing to redo'; }
+}
 // The chip: "Undo" right after you do something, "Redo" right after an undo; it steps aside after a moment.
 let undoTimer = 0;
 function showUndo(kind, note) {
@@ -4743,8 +4757,14 @@ function showUndo(kind, note) {
   for (const b of [$('#mUndo'), $('#dUndo')]) {
     if (!b) continue;
     b.dataset.kind = kind;
-    b.innerHTML = `${kind === 'undo' ? I.undo : I.redo}<span>${label}</span>`;
+    b.innerHTML = b.id === 'mUndo' ? (kind === 'undo' ? I.undo : I.redo) : `${kind === 'undo' ? I.undo : I.redo}<span>${label}</span>`; // on the phone bar: just the arrow
+    b.setAttribute('aria-label', label);
     b.title = `${label}: ${(kind === 'undo' ? H.undo : H.redo).at(-1)?.label || ''} (${kind === 'undo' ? MOD + '+Z' : MOD + '+Shift+Z'})`;
+  }
+  syncUndoBtns();
+  if (prefs.undoStyle === 'buttons' && matchMedia('(max-width: 900px)').matches) { // fixed arrows on the bar: no pop-up chip
+    if (note) { const hint = $('#swipeHint'); if (hint) { hint.textContent = note; hint.className = 'swipe-hint flash'; clearTimeout(hint._t); hint._t = setTimeout(() => (hint.className = 'swipe-hint'), 1400); } }
+    return;
   }
   document.body.classList.add('undo-on');
   clearTimeout(undoTimer);
@@ -4771,7 +4791,7 @@ function bindBarSwipe(el) {
     if (ready && !s.buzzed && list.length) { s.buzzed = true; navigator.vibrate?.(6); }
     if (!ready) s.buzzed = false;
   };
-  el.addEventListener('pointerdown', (e) => { if (e.button === 0) s = { x: e.clientX, y: e.clientY, t: performance.now(), on: false }; }, true);
+  el.addEventListener('pointerdown', (e) => { if (e.button === 0 && prefs.undoStyle !== 'buttons') s = { x: e.clientX, y: e.clientY, t: performance.now(), on: false }; }, true);
   el.addEventListener('pointermove', (e) => {
     if (!s) return;
     const dx = e.clientX - s.x, dy = e.clientY - s.y;
@@ -4943,6 +4963,9 @@ function bind() {
   bindModePicker($('#mMode'));
   bindBarSwipe($('#mbar'));
   for (const b of [$('#mUndo'), $('#dUndo')]) b.addEventListener('click', () => (b.dataset.kind === 'redo' ? redo() : undo()));
+  $('#mUndoBtn').addEventListener('click', () => undo());
+  $('#mRedoBtn').addEventListener('click', () => redo());
+  syncUndoBtns();
   bindHoldMenu($('#mMore'), moreItems);
   bindJog($('#mCount'));
   $('#mPrev').addEventListener('click', () => step(-1));

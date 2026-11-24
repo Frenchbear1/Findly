@@ -254,3 +254,35 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   .mbar .m-undo:active, .m-count:active:not(:disabled) { background: color-mix(in srgb, var(--ink) 9%, transparent); color: var(--ink); }
   .m-count.jogging { background: color-mix(in srgb, var(--ink) 12%, transparent); color: var(--ink); }
 }
+
+/* balanced bar: matching ends, the hit counter dead centre */
+.m-ur { display: none; }
+@media (max-width: 900px) {
+  .mbar:not([hidden]) { gap: 0; padding: 6px 8px; }
+  .mbar .m-lead { width: 48px; margin: 0; justify-content: center; }
+  .mbar .m-mode { min-width: 0 !important; width: 48px; padding: 0 !important; justify-content: center; }
+  .mbar .m-mode .short { font-size: 14px; }
+  .mbar .m-undo { width: 48px; padding: 0; }
+  .mbar .m-undo span { display: none; }
+  #mMore { width: 48px; }
+  .mb { width: 40px; }
+  .m-count { flex: 1 1 0; min-width: 0; margin: 0 2px; }
+  body.undo-buttons .m-ur { display: grid; width: 40px; }
+  body.undo-buttons .mbar .m-lead, body.undo-buttons #mMore { width: 42px; }
+  body.undo-buttons .mbar .m-mode { width: 42px; }
+  body.undo-buttons .mb { width: 36px; }
+  body.undo-buttons .m-ur { width: 40px; }
+  body.undo-buttons .m-undo { display: none; }
+  .m-ur:disabled { opacity: 0.3; }
+}
+.set-seg { flex: none; }
+.set-seg button { padding: 0 10px; }
+@media (max-width: 900px) {
+  body.undo-buttons .mbar:not([hidden]) { padding: 6px 4px; }
+  body.undo-buttons .m-ur { width: 34px; }
+  body.undo-buttons .mbar .m-lead, body.undo-buttons #mMore, body.undo-buttons .mbar .m-mode { width: 38px; }
+  body.undo-buttons .mbar .m-mode .short { font-size: 13px; }
+  body.undo-buttons .mb:not(.m-ur):not(#mMore) { width: 32px; }
+  body.undo-buttons .mb svg { width: 19px; height: 19px; }
+  body.undo-buttons .m-count { font-size: 13.5px; }
+}
