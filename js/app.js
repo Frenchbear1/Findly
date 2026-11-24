@@ -8,7 +8,7 @@ import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION } from './pdf.js';
 import { renderHtmlPage, forgetHtml, renderedText } from './htmlview.js';
 import { remoteFetch, remoteInfo, remoteChanged, download, documentLinks, looksLikeDocument, fileNameFor, editionKey, linkKey, linkSimilarity, SAME_DOC_SCORE, helper, NeedsHelper } from './remote.js';
 import { comboFromEvent, comboLabel, worksWhileTyping, isMac } from './keys.js';
-import { applyReadingTheme, openThemeBar, themeBarOpen, THEME_DEFAULTS } from './themes.js';
+import { applyReadingTheme, openThemeBar, themeBarOpen, THEME_DEFAULTS, BLUR_DEF, blurPx } from './themes.js';
 import { initBoards } from './boards.js';
 import { makeBackup, readBackup, backupStream } from './backup.js';
 import { send as sendTo, receive as receiveFrom } from './transfer.js';
@@ -4683,7 +4683,7 @@ function openSettings() {
   };
   d.oninput = (e) => {
     if (e.target.hasAttribute('data-glass')) prefs.glassT = Number(e.target.value);
-    else if (e.target.hasAttribute('data-blur')) prefs.glassB = Number(e.target.value);
+    else if (e.target.hasAttribute('data-blur')) prefs.blurL = Number(e.target.value);
     else return;
     applyGlass();
     clearTimeout(d._gt);
@@ -5247,9 +5247,8 @@ function applyGlass() {
     const a = t <= 0.5 ? 100 + (base - 100) * (t / 0.5) : base + (6 - base) * ((t - 0.5) / 0.5);
     root.setProperty(k, `${a.toFixed(1)}%`);
   }
-  // blur: 0 = none, 50 = as designed (22px), 100 = heavy (28px; past that a thin bar starts to look washed out rather than frosted)
-  const b = Math.max(0, Math.min(100, prefs.glassB ?? 50)) / 100;
-  root.setProperty('--bpx', `${(b <= 0.5 ? 22 * (b / 0.5) : 22 + 6 * ((b - 0.5) / 0.5)).toFixed(1)}px`);
+  // blur on a curve (see themes.js): fine control at the light end, heavy frosting only at the far end
+  root.setProperty('--bpx', `${blurPx(prefs.blurL ?? BLUR_DEF).toFixed(1)}px`);
 }
 function openThemes() {
   closeMenu();

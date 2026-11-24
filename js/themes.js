@@ -36,6 +36,10 @@ export const PAPERS = [
 ];
 export const THEME_DEFAULTS = { rtheme: 'auto', tint: true, tintAmt: 85, pageLift: null, paper: 'theme', grain: 50, accent: null, custom: { h: 38, s: 32, b: 86 } };
 // accent colours to pick from (null = the theme's own); lifted a little on dark themes so they stay readable
+// Blur is set on a curve: most of the slider is the light end, where small changes show; the last stretch is
+// the heavy frosting. 0 = none, BLUR_DEF = the designed look (about 22 px), 100 = 28 px.
+export const BLUR_DEF = 89;
+export const blurPx = (v) => 28 * Math.pow(Math.max(0, Math.min(100, v)) / 100, 2);
 export const ACCENTS = ['#2f54eb', '#5e5ce6', '#9b51e0', '#d6457b', '#e0533d', '#d9820f', '#2f9e44', '#0e9aa7', '#5f6b7a'];
 // absolute, because a url() inside a CSS variable resolves against the stylesheet that uses it
 const paperUrl = (id) => (id && id !== 'smooth' ? new URL(`vendor/paper/${id}.webp`, document.baseURI).href : '');
@@ -203,12 +207,12 @@ export function openThemeBar(prefs, { save, glass } = {}) {
         <p class="tbar-credit">Paper textures from Subtle Patterns (CC BY-SA 3.0)</p>`;
     } else if (tab === 'glass') {
       // see-through and blur of the bars, headers and menus, live over the results behind
-      const gt = prefs.glassT ?? 50, gb = prefs.glassB ?? 50;
+      const gt = prefs.glassT ?? 50, gb = prefs.blurL ?? BLUR_DEF;
       body = `<div class="tbar-sliders">
         <p class="tbar-note">The search bar, bottom bar, headers and menus. Scroll your results behind them to see it.</p>
         ${field('Transparency', gt === 50 ? 'As designed' : pct(gt), `<input type="range" min="0" max="100" value="${gt}" data-gt>`, ['Solid', 'Clear'])}
-        ${field('Blur', gb === 50 ? 'As designed' : pct(gb), `<input type="range" min="0" max="100" value="${gb}" data-gb>`, ['Sharp', 'Frosted'])}
-        <button class="tb-reset" data-greset ${gt !== 50 || gb !== 50 ? '' : 'disabled'}>Reset these</button>
+        ${field('Blur', gb === BLUR_DEF ? 'As designed' : `${blurPx(gb).toFixed(blurPx(gb) < 10 ? 1 : 0)} px`, `<input type="range" min="0" max="100" value="${gb}" data-gb>`, ['Sharp', 'Frosted'])}
+        <button class="tb-reset" data-greset ${gt !== 50 || gb !== BLUR_DEF ? '' : 'disabled'}>Reset these</button>
       </div>`;
     } else {
       const tint = prefs.tint !== false;
@@ -249,7 +253,7 @@ export function openThemeBar(prefs, { save, glass } = {}) {
     if (pp) { prefs.paper = pp.dataset.paper; apply(); keepScroll(() => render()); return; }
     const ac = e.target.closest('[data-accent]');
     if (ac) { prefs.accent = ac.dataset.accent || null; apply(); render(); return; }
-    if (e.target.closest('[data-greset]')) { prefs.glassT = 50; prefs.glassB = 50; bar._glass?.(); commit(); render(); return; }
+    if (e.target.closest('[data-greset]')) { prefs.glassT = 50; prefs.blurL = BLUR_DEF; bar._glass?.(); commit(); render(); return; }
     if (e.target.closest('[data-reset]')) { prefs.pageLift = null; prefs.accent = null; prefs.tint = true; prefs.tintAmt = 85; apply(); render(); }
   };
   bar.oninput = (e) => {
@@ -259,14 +263,15 @@ export function openThemeBar(prefs, { save, glass } = {}) {
     else if (t.hasAttribute('data-lift')) prefs.pageLift = Number(t.value);
     else if (t.hasAttribute('data-amt')) prefs.tintAmt = Number(t.value);
     else if (t.hasAttribute('data-gt') || t.hasAttribute('data-gb')) {
-      prefs[t.hasAttribute('data-gt') ? 'glassT' : 'glassB'] = Number(t.value);
+      prefs[t.hasAttribute('data-gt') ? 'glassT' : 'blurL'] = Number(t.value);
       bar._glass?.();
       commit();
       fillTrack(t);
       const out = t.closest('.tb-field')?.querySelector('output');
-      if (out) out.textContent = Number(t.value) === 50 ? 'As designed' : `${t.value}%`;
+      const v = Number(t.value);
+      if (out) out.textContent = t.hasAttribute('data-gt') ? (v === 50 ? 'As designed' : `${v}%`) : v === BLUR_DEF ? 'As designed' : `${blurPx(v).toFixed(blurPx(v) < 10 ? 1 : 0)} px`;
       const rs = bar.querySelector('[data-greset]');
-      if (rs) rs.disabled = prefs.glassT === 50 && prefs.glassB === 50;
+      if (rs) rs.disabled = (prefs.glassT ?? 50) === 50 && (prefs.blurL ?? BLUR_DEF) === BLUR_DEF;
       return;
     }
     else if (t.hasAttribute('data-tint')) { prefs.tint = t.checked; bar.querySelector('[data-amt]').closest('.tb-field').hidden = !t.checked; }
