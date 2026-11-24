@@ -12,7 +12,6 @@ import { applyReadingTheme, openThemeBar, themeBarOpen, THEME_DEFAULTS, BLUR_DEF
 import { initBoards } from './boards.js';
 import { makeBackup, readBackup, backupStream } from './backup.js';
 import { send as sendTo, receive as receiveFrom } from './transfer.js';
-import { pageScrub } from './scrub.js';
 
 // ---------- small helpers ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -6733,30 +6732,6 @@ function onScrollBars() {
   const want = y <= 4 ? 0 : barRun > 14 ? barMax : barRun < -14 ? 0 : null;
   if (want != null && want !== barGoal) { barGoal = want; glideBar(want, BAR_MS); }
 }
-
-// ---------- scrubbers: glass bars standing in for the scroll bars ----------
-// Results and documents: one stop per page, the page number floating beside your finger.
-const topLine = () => { const t = $('.topbar'); const b = t ? t.getBoundingClientRect().bottom : 0; return Math.max(safeProbe(), b); };
-const pageScrubber = pageScrub({
-  root: () => active.root,
-  on: () => !document.body.classList.contains('drawer') && !document.body.classList.contains('panel'),
-  topY: topLine,
-  // the bar itself stays put as the top bar slides away: it starts where the top bar ends when it's out
-  trackTop() { const t = $('.topbar'); return t ? t.getBoundingClientRect().bottom + Math.round(barOff) : 0; },
-  bottomY() {
-    const d = $('#dock');
-    if (d && !d.hidden && d.offsetParent) return d.getBoundingClientRect().top - 4;
-    return innerHeight - (isPhone() ? 24 : 10);
-  },
-  hold() { autoScrollUntil = performance.now() + 300; },
-  prepare() { finishRender(active); },
-  label(art) {
-    const doc = art && docById(art.dataset.doc);
-    if (!doc) return { main: '' };
-    const main = art._web ? 'Web page' : `Page ${plabel(doc, Number(art.dataset.n))}`;
-    return { main, sub: active === results ? doc.name : '' };
-  },
-});
 
 function setMode(mode) {
   if (!MODES[mode] || prefs.mode === mode) return;
