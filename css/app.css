@@ -1615,3 +1615,15 @@ button.set-row:active { background: color-mix(in srgb, var(--accent) 12%, transp
 .col-drag.on i { width: 6px; opacity: 1; }
 article.page.dragging .page-body { will-change: height; }
 article.page.dragging .col-nav, article.page.dragging .col-drag:not(.on) { opacity: 0; transition: opacity 0.15s; }
+
+/* the page number and its hit count share a pill; when the header sticks at the top only the pill frosts
+   over the page (no full-width bar), sized around its contents so they sit centred in it */
+.ph-pill { display: inline-flex; align-items: center; gap: 8px; height: 34px; margin-left: -12px; padding: 0 6px 0 12px; border-radius: 999px; transition: background 0.2s, box-shadow 0.2s; }
+.ph-pill:not(:has(.phits)) { padding-right: 12px; }
+.page-head.stuck { background: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.page-head.stuck .ph-pill {
+  background: color-mix(in srgb, var(--bg) var(--a-head, 78%), transparent);
+  -webkit-backdrop-filter: var(--blur, saturate(150%) blur(12px)); backdrop-filter: var(--blur, saturate(150%) blur(12px));
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--ink) 12%, transparent), 0 6px 18px -8px rgba(0, 0, 0, 0.25);
+}
+.page-head.stuck { padding-top: 6px; }

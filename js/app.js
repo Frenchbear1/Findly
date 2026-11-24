@@ -403,7 +403,7 @@ function webR(v, doc) { return v.list.find((r) => r.doc.id === doc.id && !r.flat
 function webHeadHtml(v, doc) {
   const R = webR(v, doc);
   const badge = R ? `<span class="phits" title="${plural(R.hits, 'hit')}">${fmt(R.hits)}</span>` : '';
-  return `<span class="pno">Web page</span>${badge}<span class="grow"></span><button class="chip-btn" data-act="pmode" title="Show the page’s text instead, split into pages">${I.text}Text</button>`;
+  return `<span class="ph-pill"><span class="pno">Web page</span>${badge}</span><span class="grow"></span><button class="chip-btn" data-act="pmode" title="Show the page’s text instead, split into pages">${I.text}Text</button>`;
 }
 function webEl(v, doc, R) {
   const art = el('article', `page web${R ? ' hit' : ''}`);
@@ -479,7 +479,7 @@ function headHtml(v, doc, n, ctx, flat = false) {
     if (i >= 0) rank = `<span class="rank" title="Ranked ${fmt(i + 1)} by hits">${fmt(i + 1)}</span>`;
   }
   const lab = plabel(doc, n);
-  return `${rank}<span class="pno"${lab !== String(n + 1) ? ` title="Page ${lab} · ${fmt(n + 1)} of ${fmt(S.texts.get(doc.id)?.length || 0)} in the file"` : ''}>Page ${esc(lab)}</span>${badge}<span class="grow"></span>`;
+  return `<span class="ph-pill">${rank}<span class="pno"${lab !== String(n + 1) ? ` title="Page ${lab} · ${fmt(n + 1)} of ${fmt(S.texts.get(doc.id)?.length || 0)} in the file"` : ''}>Page ${esc(lab)}</span>${badge}</span><span class="grow"></span>`;
 }
 
 function pageEl(v, doc, n, R) {
@@ -1390,7 +1390,7 @@ function visitEl(home, n) {
   art._home = home;
   const info = v.info.get(pkey(doc.id, n));
   const hn = Number(home.dataset.n);
-  const head = el('header', 'page-head', `<span class="pno">Page ${esc(plabel(doc, n))}</span>${info ? `<span class="phits">${fmt(info.count)}</span>` : ''}<span class="grow"></span><button class="visit-back" data-act="visit-back" title="Back to the result">${I.undo}Page ${esc(plabel(doc, hn))}</button>`);
+  const head = el('header', 'page-head', `<span class="ph-pill"><span class="pno">Page ${esc(plabel(doc, n))}</span>${info ? `<span class="phits">${fmt(info.count)}</span>` : ''}</span><span class="grow"></span><button class="visit-back" data-act="visit-back" title="Back to the result">${I.undo}Page ${esc(plabel(doc, hn))}</button>`);
   const body = el('div', 'page-body');
   body.style.minHeight = Math.round(home.lastElementChild.offsetHeight) + 'px';
   art.append(head, body);
