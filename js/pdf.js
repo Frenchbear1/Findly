@@ -139,11 +139,20 @@ async function inkBox(page, base, key) {
     const ctx = c.getContext('2d', { alpha: false });
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
     const { data } = ctx.getImageData(0, 0, c.width, c.height);
+    // the paper's colour: what most of the page's outer edge is (not always white)
+    const tally = new Map();
+    const note = (x, y) => { const i = (y * c.width + x) * 4; const k = ((data[i] >> 3) << 10) | ((data[i + 1] >> 3) << 5) | (data[i + 2] >> 3); tally.set(k, (tally.get(k) || 0) + 1); };
+    for (let x = 0; x < c.width; x += 2) { note(x, 1); note(x, c.height - 2); }
+    for (let y = 0; y < c.height; y += 2) { note(1, y); note(c.width - 2, y); }
+    let bk = 0x7fff, bn = 0;
+    for (const [k, n] of tally) if (n > bn) { bn = n; bk = k; }
+    const br = ((bk >> 10) << 3) + 4, bg = (((bk >> 5) & 31) << 3) + 4, bb = ((bk & 31) << 3) + 4;
+    // anything printed differs from it: dark text, and also pale pictures, tints and chart backgrounds
     const cols = new Uint16Array(c.width), rows = new Uint16Array(c.height);
     for (let y = 0; y < c.height; y++) {
       for (let x = 0; x < c.width; x++) {
         const i = (y * c.width + x) * 4;
-        if (data[i] * 0.3 + data[i + 1] * 0.59 + data[i + 2] * 0.11 < 232) { cols[x]++; rows[y]++; }
+        if (Math.abs(data[i] - br) + Math.abs(data[i + 1] - bg) + Math.abs(data[i + 2] - bb) > 30) { cols[x]++; rows[y]++; }
       }
     }
     // ignore specks: a column/row needs a couple of dark pixels to count
@@ -159,11 +168,14 @@ async function inkBox(page, base, key) {
 // Text box tightened by the ink: never keep a side that has nothing printed on it.
 function tighten(box, ink) {
   if (!ink) return box;
+  // what's printed, not where the text is: pictures and charts past the text (or above and below it)
+  // stay in, and invisible text out in the margins doesn't hold them open
   const pad = 0.025;
-  const a = Math.max(0, ink.x[0] - pad), b = Math.min(1, ink.x[1] + pad);
-  let x = box.x ? [Math.max(box.x[0], a), Math.min(box.x[1], b)] : [a, b];
-  if (x[1] - x[0] < 0.35 || x[0] + (1 - x[1]) < 0.08) x = box.x && x[1] - x[0] >= 0.35 ? x : null;
-  return { ...box, x };
+  let x = [Math.max(0, ink.x[0] - pad), Math.min(1, ink.x[1] + pad)];
+  if (x[1] - x[0] < 0.35 || x[0] + (1 - x[1]) < 0.08) x = null;
+  let y = [Math.max(0, ink.y[0] - 0.015), Math.min(1, ink.y[1] + 0.015)];
+  if (y[1] - y[0] < 0.2 || y[0] + (1 - y[1]) < 0.05) y = null;
+  return { ...box, x, y };
 }
 
 // Every piece of (unrotated) text as [left, right, top, bottom] fractions of the page, packed in one array.
