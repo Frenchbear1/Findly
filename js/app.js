@@ -6546,11 +6546,16 @@ const safeProbe = () => {
   if (!p) { p = el('div'); p.id = 'safeProbe'; p.style.cssText = 'position:fixed;top:0;left:0;width:0;height:env(safe-area-inset-top);visibility:hidden;pointer-events:none'; document.body.append(p); }
   return p.offsetHeight;
 };
-let barSafe = 0;
+let barSafe = 0, barView = '';
 function measureBar() {
   barSafe = safeProbe();
+  barView = document.body.dataset.view || '';
   const t = $('.topbar');
   barMax = t ? t.offsetHeight + 2 : 0; // all the way out; the sticky headers stop under the status bar (see ios.css)
+  // reading a document: only the search row tucks away; the title row (back, name, page box) stays, just
+  // under the status bar
+  const sum = barView === 'reader' && t ? $('#summary') : null;
+  if (sum && sum.offsetHeight) barMax = Math.max(0, sum.getBoundingClientRect().top - t.getBoundingClientRect().top + barOff - barSafe - 4);
 }
 // Smoothness: the offset is drawn once per frame, in whole pixels (half pixels make the bar and its text
 // shimmer), and only on what moves: the bar and the headers of the few pages at the top of the screen.
@@ -6563,8 +6568,6 @@ function placeHeads(art, px) {
   const sec = art.closest('.doc-sec');
   const dh = sec?.querySelector(':scope > .doc-head');
   if (dh) dh.style.top = `${t}px`;
-  const ph = art.firstElementChild;
-  if (ph?.classList.contains('page-head')) ph.style.top = `${active === reader || sec?.classList.contains('same-doc') ? t : t + 48}px`;
 }
 function drawBar() {
   barRaf = 0;
@@ -6573,6 +6576,10 @@ function drawBar() {
   barDrawn = px;
   const tb = $('.topbar');
   if (tb) tb.style.transform = px ? `translateY(${-px}px)` : '';
+  // reading a document the search row slides up under the status bar while the title row stays: fade it as it goes
+  const sr = barView === 'reader' ? $('.search-row') : null;
+  if (sr) sr.style.opacity = barMax ? String(Math.max(0, 1 - px / (barMax * 0.75)).toFixed(2)) : '';
+  else if (barDrawn === px) $('.search-row')?.style.removeProperty('opacity');
   for (const art of nearTop) placeHeads(art, px);
   document.body.classList.toggle('bar-hidden', barMax > 0 && barOff >= barMax - 0.5);
   markStuck();
@@ -6616,7 +6623,7 @@ function onScrollBars() {
     if (barOff) glideBar(0);
     return;
   }
-  if (!barMax) measureBar();
+  if (!barMax || barView !== (document.body.dataset.view || '')) measureBar();
   cancelAnimationFrame(barAnim);
   if (Math.abs(dy) >= 2) barDir = Math.sign(dy);
   // near the top the bar can't be further out than the page has scrolled, so it's fully back by the time you get there

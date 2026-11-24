@@ -242,7 +242,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   #reader .page-head, .doc-sec.same-doc .page-head { top: max(env(safe-area-inset-top), var(--top-h)); }
   /* the status bar / Dynamic Island strip stays frosted once the bar has slid away */
   body::after {
-    content: ""; position: fixed; z-index: 19; left: 0; right: 0; top: 0; height: env(safe-area-inset-top); pointer-events: none;
+    content: ""; position: fixed; z-index: 21; left: 0; right: 0; top: 0; height: env(safe-area-inset-top); pointer-events: none;
     background: color-mix(in srgb, var(--bg) var(--a-top, 72%), transparent); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   }
 }
@@ -357,3 +357,21 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
 .tbar-foot .tbar-tabs { flex: 1; max-width: none; }
 .tbar-foot .tbar-tabs button { flex: 1; padding: 0 6px; }
 .tbar { padding: 0 !important; }
+
+/* page headers sit with their page and scroll with it (they no longer stick to the top of the screen) */
+.page-head { position: relative !important; top: auto !important; }
+/* reading a whole document: no "Page n · hits" rows, just the pages close together */
+#reader .page-head { display: none !important; }
+#reader .page { margin-bottom: 8px; }
+#reader .page-body { scroll-margin-top: calc(var(--top-h) + 8px); }
+/* the page number box frosts like the bars */
+.jump input {
+  border: 0; box-shadow: 0 0 0 0.5px var(--sep, var(--line)) inset;
+  background: color-mix(in srgb, var(--card) var(--a-head, 78%), transparent);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+}
+@media (max-width: 900px) {
+  .summary:has(.back-btn) { min-height: 44px; padding-top: 5px; padding-bottom: 5px; margin-top: 0; }
+  .jump input { height: 34px; border-radius: 10px; }
+  .back-btn { height: 34px; border-radius: 10px; }
+}
