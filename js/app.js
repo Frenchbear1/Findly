@@ -4433,6 +4433,8 @@ function openSettings() {
           row('theme', palette, 'Reading theme', 'Colours, paper and textures'),
           `<div class="set-row static set-slide"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18" opacity=".5"/></svg></span><span class="set-t"><b>Transparency</b><small>Search bar, bottom bar, headers and menus</small>
             <input type="range" min="0" max="100" value="${prefs.glassT ?? 50}" data-glass aria-label="Transparency"><span class="set-ends"><span>Solid</span><span>Clear</span></span></span></div>`,
+          `<div class="set-row static set-slide"><span class="set-ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="6.5" opacity=".55"/><circle cx="12" cy="12" r="10" opacity=".25"/></svg></span><span class="set-t"><b>Blur</b><small>How much the page behind them is softened</small>
+            <input type="range" min="0" max="100" value="${prefs.glassB ?? 50}" data-blur aria-label="Blur"><span class="set-ends"><span>Sharp</span><span>Frosted</span></span></span></div>`,
         ])}
         ${group('Reading', [
           `<div class="set-row static"><span class="set-ic">${I.undo}</span><span class="set-t"><b>Undo &amp; redo</b><small>${prefs.undoStyle === 'buttons' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar: right to undo, left to redo'}</small></span><span class="seg small set-seg"><button type="button" data-s="ug" aria-pressed="${prefs.undoStyle !== 'buttons'}">Gestures</button><button type="button" data-s="ub" aria-pressed="${prefs.undoStyle === 'buttons'}">Buttons</button></span></div>`,
@@ -4463,8 +4465,9 @@ function openSettings() {
     </div>`;
   };
   d.oninput = (e) => {
-    if (!e.target.hasAttribute('data-glass')) return;
-    prefs.glassT = Number(e.target.value);
+    if (e.target.hasAttribute('data-glass')) prefs.glassT = Number(e.target.value);
+    else if (e.target.hasAttribute('data-blur')) prefs.glassB = Number(e.target.value);
+    else return;
     applyGlass();
     clearTimeout(d._gt);
     d._gt = setTimeout(savePrefs, 250);
@@ -5005,6 +5008,9 @@ function applyGlass() {
     const a = t <= 0.5 ? 100 + (base - 100) * (t / 0.5) : base + (6 - base) * ((t - 0.5) / 0.5);
     root.setProperty(k, `${a.toFixed(1)}%`);
   }
+  // blur: 0 = none, 50 = as designed (22px), 100 = heavy (28px; past that a thin bar starts to look washed out rather than frosted)
+  const b = Math.max(0, Math.min(100, prefs.glassB ?? 50)) / 100;
+  root.setProperty('--bpx', `${(b <= 0.5 ? 22 * (b / 0.5) : 22 + 6 * ((b - 0.5) / 0.5)).toFixed(1)}px`);
 }
 function openThemes() {
   closeMenu();

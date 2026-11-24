@@ -12,7 +12,7 @@
   --sep: color-mix(in srgb, var(--ink) 11%, transparent);     /* hairline separators */
   --glass: color-mix(in srgb, var(--bg) 72%, transparent);
   --glass-card: color-mix(in srgb, var(--card) 78%, transparent);
-  --blur: saturate(180%) blur(22px);
+  --blur: saturate(180%) blur(var(--bpx, 22px));
 }
 
 /* taps feel physical everywhere: a quick press-in, a springy release */
@@ -233,7 +233,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
 @media (max-width: 900px) {
   .mbar:not([hidden]) {
     background: color-mix(in srgb, var(--card) 38%, transparent);
-    -webkit-backdrop-filter: saturate(200%) blur(26px) brightness(1.04); backdrop-filter: saturate(200%) blur(26px) brightness(1.04);
+    -webkit-backdrop-filter: saturate(200%) blur(calc(var(--bpx, 22px) * 1.2)) brightness(1.04); backdrop-filter: saturate(200%) blur(calc(var(--bpx, 22px) * 1.2)) brightness(1.04);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.55),          /* light catching the top edge */
       inset 0 -1px 0 rgba(255, 255, 255, 0.12),
@@ -319,3 +319,5 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
   .set-row:has(.set-seg) .set-t { flex: 1 1 calc(100% - 50px); }
   .set-row .set-seg { margin-left: 42px; }
 }
+/* Settings › Blur drives these on every screen size */
+.topbar, .dock { -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
