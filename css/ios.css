@@ -47,7 +47,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
     transition: background 0.2s, box-shadow 0.25s;
   }
   .search-box:focus-within { border: 0; background: var(--card); box-shadow: 0 0 0 1px var(--sep), 0 4px 14px -8px rgba(0, 0, 0, 0.14); }
-  .menu { width: 40px; height: 40px; border-radius: 50%; background: var(--fill); }
+  .menu { width: 40px; height: 40px; border-radius: 50%; background: transparent; } /* just the icon */
   .menu svg { width: 20px; height: 20px; }
   .mode-pill { border-radius: 9px; }
   .summary { padding-bottom: 10px; }
