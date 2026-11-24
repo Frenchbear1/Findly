@@ -4236,6 +4236,91 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
 // ---------- backup ----------
 // One file with everything (documents, folders, linked pages, boards, themes, settings, shortcuts, helper),
 // to save to Files and import on another device.
+// ---------- settings: one tidy sheet for everything that isn't searching or reading ----------
+function openSettings() {
+  closeMenu();
+  let d = $('#settingsDlg');
+  if (!d) {
+    d = el('dialog', 'set-dlg');
+    d.id = 'settingsDlg';
+    document.body.append(d);
+    d.addEventListener('click', (e) => { if (e.target === d) shut(); });
+    d.addEventListener('cancel', (e) => { e.preventDefault(); shut(); });
+  }
+  function shut() {
+    if (!d.open || d.classList.contains('closing')) return;
+    d.classList.add('closing');
+    setTimeout(() => { d.classList.remove('closing'); d.close(); }, 180);
+  }
+  const chev = '<svg class="set-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
+  const row = (id, icon, label, sub = '', end = chev, cls = '') => `<button type="button" class="set-row ${cls}" data-s="${id}"><span class="set-ic">${icon}</span><span class="set-t"><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</span>${end}</button>`;
+  const sw = (on) => `<span class="set-sw${on ? ' on' : ''}" aria-hidden="true"><i></i></span>`;
+  const group = (title, rows) => rows.filter(Boolean).length ? `<section><h4>${title}</h4><div class="set-group">${rows.filter(Boolean).join('')}</div></section>` : '';
+  const palette = '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0 0 18c1.1 0 1.6-.9 1.2-1.8l-.4-.9c-.5-1.1.3-2.3 1.5-2.3H17a4 4 0 0 0 4-4c0-5-4-9-9-9z"/><circle cx="7.5" cy="11" r="1.2"/><circle cx="10.5" cy="7" r="1.2"/><circle cx="15.5" cy="7.5" r="1.2"/></svg>';
+  const refresh = '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.8-4M4 4v4h4M4 13a8 8 0 0 0 14.8 4M20 20v-4h-4"/></svg>';
+  const cloud = '<svg viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.4-9A6 6 0 0 1 18 9.5a4.2 4.2 0 0 1-.5 8.5z"/></svg>';
+  const help = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4M12 17h.01"/></svg>';
+  const keys = '<svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M8 14h8"/></svg>';
+  const bolt = '<svg viewBox="0 0 24 24"><path d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/></svg>';
+  const disk = '<svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>';
+  const render = () => {
+    const linked = hasSources();
+    d.innerHTML = `<div class="set-sheet">
+      <i class="set-grab" aria-hidden="true"></i>
+      <header class="set-head"><h3>Settings</h3><button class="icon-btn sm" data-s="x" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
+      <div class="set-body">
+        ${group('Appearance', [row('theme', palette, 'Reading theme', 'Colours, paper and textures')])}
+        ${group('Documents from websites', [
+          row('helper', bolt, 'Download helper', helper.get() ? 'Set up' : 'Not set up · needed for sites like faa.gov'),
+          linked && row('check', refresh, 'Check for updates now', 'Looks for newer editions of linked documents'),
+          row('auto', refresh, 'Check daily', 'When you open the app, once a day', sw(prefs.autoCheck)),
+        ])}
+        ${group('Sync & backup', [
+          platform === 'ios' && row('cloud', cloud, 'iCloud sync', cloudOn ? 'On · your Apple devices share one library' : 'Keep iPhone, iPad and Mac in step', sw(cloudOn)),
+          platform === 'windows' && row('folder', I.folder, 'Library folder', cloudOn ? 'In iCloud Drive · syncing' : 'Choose where your documents live'),
+          platform === 'windows' && row('reveal', I.out, 'Show library folder', 'Open it in File Explorer'),
+          row('send', I.out, 'Send to another device', 'Straight across Wi-Fi, no file'),
+          row('receive', I.upload, 'Receive from another device', 'Adds what’s new, no duplicates'),
+          row('export', I.save, 'Export everything', 'One backup file'),
+          row('import', I.upload, 'Import a backup', 'Adds what’s new, or replaces everything'),
+        ])}
+        ${group('Help', [
+          row('help', help, 'How searching works'),
+          !matchMedia('(pointer: coarse)').matches && row('keys', keys, 'Keyboard shortcuts'),
+        ])}
+        ${group('Library', [
+          `<div class="set-row static"><span class="set-ic">${disk}</span><span class="set-t"><b>Storage</b><small>${esc($('#storage').textContent)} · ${plural(S.docs.length, 'document')}</small></span></div>`,
+          row('clear', I.trash || I.x, 'Clear library…', 'Pick folders, documents or everything', '', 'danger'),
+        ])}
+      </div>
+    </div>`;
+  };
+  d.onclick = async (e) => {
+    if (e.target === d) return shut();
+    const b = e.target.closest('[data-s]');
+    if (!b) return;
+    const k = b.dataset.s;
+    const then = (fn) => { shut(); closeDrawer(); setTimeout(fn, 200); };
+    if (k === 'x') return shut();
+    if (k === 'auto') { prefs.autoCheck = !prefs.autoCheck; savePrefs(); $('#autoCheck') && ($('#autoCheck').checked = prefs.autoCheck); b.querySelector('.set-sw').classList.toggle('on', prefs.autoCheck); return; }
+    if (k === 'cloud') { await toggleCloud(); render(); return; }
+    if (k === 'theme') return then(openThemes);
+    if (k === 'helper') return then(openHelper);
+    if (k === 'check') return then(() => checkSources());
+    if (k === 'folder') return then(changeLibraryFolder);
+    if (k === 'reveal') return then(() => revealLibrary());
+    if (k === 'send') return then(() => sendTo());
+    if (k === 'receive') return then(() => receiveFrom({ reload: (mode) => (mode === 'replace' ? location.reload() : refreshLibrary()) }));
+    if (k === 'export') return then(exportAll);
+    if (k === 'import') return then(() => $('#backupInput').click());
+    if (k === 'help') return then(() => $('#help').showModal());
+    if (k === 'keys') return then(openKeys);
+    if (k === 'clear') return then(openClear);
+  };
+  updateStorage();
+  render();
+  d.showModal();
+}
 function backupMenu(anchor) {
   openMenu(anchor, [
     { header: 'Backup' },
@@ -5010,8 +5095,7 @@ function bind() {
   });
   bindLibDrag();
   $('#toggleAll').addEventListener('click', toggleAll);
-  $('#clearLib').addEventListener('click', openClear);
-  $('#backupBtn').addEventListener('click', (e) => { e.stopPropagation(); backupMenu(e.currentTarget); });
+  $('#settingsBtn').addEventListener('click', openSettings);
   $('#backupInput').addEventListener('change', (e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importBackup(f); });
 
   // results + reader (delegated)

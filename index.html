@@ -42,6 +42,7 @@
         <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.6-4.6"/></svg></span>
         <span>Findly</span>
         <button class="brand-boards" id="libBoardsBtn" aria-label="Boards" title="Your boards"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="9" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="1.6"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="1.6"/><rect x="3" y="15" width="7.5" height="6" rx="1.6"/></svg>Boards</button>
+        <button class="brand-gear" id="settingsBtn" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path d="M19.4 13.5a7.7 7.7 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.6 7.6 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.7 7.7 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 2.6-1.5l2.4 1 2-3.4z"/></svg></button>
       </div>
       <div class="split">
         <button class="btn primary add" id="addBtn">
@@ -67,12 +68,8 @@
         <div class="lib-out">Drop here to take it out of its folder</div>
         <p class="lib-empty" id="libEmpty">No documents yet. Drop files or whole folders anywhere on the page.</p>
       </div>
-      <div class="side-foot">
-        <span id="storage">Stored only on this device</span>
-        <button class="link" id="backupBtn">Backup</button>
-        <button class="link danger" id="clearLib">Clear</button>
-        <input type="file" id="backupInput" hidden />
-      </div>
+      <span id="storage" hidden>Stored only on this device</span>
+      <input type="file" id="backupInput" hidden />
       <div class="side-resize" id="sideResize" role="separator" aria-orientation="vertical" aria-label="Resize the library" tabindex="0" title="Drag to resize · double-click to reset"></div>
     </aside>
     <div class="scrim" id="scrim"></div>
