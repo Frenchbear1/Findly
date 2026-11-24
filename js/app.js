@@ -610,7 +610,8 @@ function fill(art) {
           pdf.getPageLabels().then((l) => { const c = cleanPdfLabels(l, pdf.numPages); if (c) doc.labels = c; store.updateDoc(stripMeta(doc)).catch(() => {}); }).catch(() => {});
         }
         if (token !== art._token) return;
-        const r = await renderPdfPage(pdf, n, body, ranges, BASE_W * zoomValue(), { trim: !!prefs.trim, columns: !!prefs.columns && v.kind === 'results' });
+        const r = await renderPdfPage(pdf, n, body, ranges, BASE_W * zoomValue(), { trim: !!prefs.trim, columns: !!prefs.columns && v.kind === 'results', prio: () => (token === art._token && art.isConnected ? screenDistance(art) : null) });
+        if (!r) return; // let go before its turn came
         if (token !== art._token) { r.cleanup(); return; }
         r.show();
         art._cleanup = r.cleanup;
@@ -704,6 +705,11 @@ const drawn = new Set();
 // a page let go while still near the screen is drawn again as it comes into view
 const comeback = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { comeback.unobserve(e.target); fill(e.target); } }, { rootMargin: '300px 0px' });
 const DRAWN_MAX = 16;
+// how far a page is from the screen, in pixels (0 when any of it shows): pages are drawn nearest first
+function screenDistance(art) {
+  const r = art.getBoundingClientRect();
+  return r.bottom < 0 ? -r.bottom : r.top > innerHeight ? r.top - innerHeight : 0;
+}
 function keepBudget(art) {
   drawn.add(art);
   if (drawn.size <= DRAWN_MAX) return;
@@ -822,6 +828,7 @@ function applyCrop(art) {
   if (ty) band = [Math.max(band[0], ty[0]), Math.min(band[1], ty[1])];
   if (band[1] - band[0] < 0.02) band = hits || [0, 1];
   art._band = band[0] > 0 || band[1] < 1 ? band : null;
+  content._sharpen?.(band);
   if (!art._band) {
     if (clip) body.replaceChildren(content);
     body.classList.remove('cropped', 'cut-top', 'cut-bottom');
@@ -955,6 +962,9 @@ function applyEdge(d) {
   const { clip, H, cur } = d;
   clip.style.height = Math.max(24, Math.round((cur[1] - cur[0]) * H)) + 'px';
   clip.firstElementChild.style.marginTop = -Math.round(cur[0] * H) + 'px';
+  // ask for the sharp copy a good way ahead of the finger, so it's usually there before you get to it
+  const src = d.art.lastElementChild.querySelector('.pdf-frame:not(.clone)');
+  src?._sharpen?.([Math.max(0, cur[0] - (d.side === 'top' ? 0.15 : 0)), Math.min(1, cur[1] + (d.side === 'bottom' ? 0.15 : 0))]);
 }
 function dragLoop() {
   const d = dragging;
@@ -993,6 +1003,11 @@ function dragLoop() {
 const safeTop = () => { const p = $('#safeProbe'); return p ? p.offsetHeight : 0; };
 function applyCol(d, p) {
   d.p = p;
+  if (!d.asked) { // the column it's heading for, sharp in time
+    d.asked = true;
+    const src = d.frame.closest('.page-body')?.querySelector('.pdf-frame:not(.clone)');
+    src?._sharpen?.([Math.min(d.from.band[0], d.to.band[0]), Math.max(d.from.band[1], d.to.band[1])], [Math.min(d.from.span[0], d.to.span[0]), Math.max(d.from.span[1], d.to.span[1])]);
+  }
   const span = [lerp(d.from.span[0], d.to.span[0], p), lerp(d.from.span[1], d.to.span[1], p)];
   frameSpan(d.frame, span);
   const H = d.frame.offsetHeight;
@@ -1257,11 +1272,22 @@ function columnRun(lines, cols, k, k2, top, bot, ty, line) {
   }
   return [Math.max(a, up - line * 0.4), Math.min(z, down + line * 0.4)];
 }
+function copyCanvases(frame, c) {
+  const src = [...frame.querySelectorAll('canvas')];
+  for (const old of c.querySelectorAll('canvas')) { old.width = old.height = 0; old.remove(); }
+  const sheet = c.querySelector('.pdf-page');
+  const first = sheet.firstChild;
+  for (const s of src) {
+    const d = s.cloneNode(false);
+    d.width = s.width; d.height = s.height;
+    if (s.width) d.getContext('2d').drawImage(s, 0, 0);
+    sheet.insertBefore(d, first);
+  }
+}
 function cloneFrame(frame) {
   const c = frame.cloneNode(true);
   c.classList.add('clone');
-  const src = frame.querySelector('canvas'), dst = c.querySelector('canvas');
-  if (src && dst) { dst.width = src.width; dst.height = src.height; dst.getContext('2d').drawImage(src, 0, 0); }
+  copyCanvases(frame, c);
   return c;
 }
 function frameSpan(frame, span) {
@@ -1328,6 +1354,12 @@ function layoutPieces(art, body, content, plan) {
       if (Math.abs(h - seen) > 0.5) { seen = h; applyCrop(art); }
     });
     art._cropRO.observe(content);
+  }
+  if (content._sharpen) {
+    const ys = plan.pieces.map((p) => p.band), xs = plan.pieces.map((p) => p.span || [0, 1]);
+    content._sharpen([Math.min(...ys.map((b) => b[0])), Math.max(...ys.map((b) => b[1]))], [Math.min(...xs.map((b) => b[0])), Math.max(...xs.map((b) => b[1]))]);
+    // the copies for the other pieces take the sharp drawing too, once it's there
+    content._onSharp = () => { for (const c of body.querySelectorAll('.pdf-frame.clone')) copyCanvases(content, c); };
   }
   const so = content.querySelector('.pdf-page');
   [...body.querySelectorAll(':scope > .piece')].forEach((clip, k) => {

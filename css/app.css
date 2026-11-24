@@ -1724,3 +1724,8 @@ html, body { overflow-anchor: none; }
 /* where you're looking shows on the pill, phones included */
 .mode-pill em.where { display: inline !important; margin-left: 5px; }
 .mode-pill.m-mode em.where { display: none !important; }
+
+/* a PDF page is drawn twice: a soft copy of the whole page at once, then a sharp copy of just the part that
+   shows laid over it (see sharpen in pdf.js). Both stay in the normal flow (the sharp one pulled up over the
+   soft one by its margins), so the theme's tint and grain and the highlights all sit above them as before. */
+.pdf-frame canvas.sharp { height: auto; }

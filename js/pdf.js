@@ -352,8 +352,39 @@ function textLayer(items, styles, base) {
   return layer;
 }
 
-export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false, columns = false } = {}) {
-  const page = await pdf.getPage(n + 1);
+// ---------- drawing order ----------
+// Pages are drawn two at a time, nearest to where you are first: each waiting job is asked how far it is
+// from the screen when a slot frees up (so scrolling re-orders the queue), and a job that answers null has
+// been called off.
+const waiting = [];
+let running = 0;
+const SLOTS = 2;
+function pump() {
+  while (running < SLOTS && waiting.length) {
+    let best = -1, bd = Infinity;
+    for (let i = waiting.length - 1; i >= 0; i--) {
+      const d = waiting[i].prio();
+      if (d == null) { waiting[i].res(null); waiting.splice(i, 1); if (best > i) best--; continue; }
+      if (d < bd || best < 0) { bd = d; best = i; }
+    }
+    if (best < 0) return;
+    const [job] = waiting.splice(best, 1);
+    running++;
+    job.res(() => { running--; pump(); });
+  }
+}
+function slot(prio) {
+  return new Promise((res) => { waiting.push({ prio, res }); pump(); });
+}
+
+export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false, columns = false, prio = () => 0 } = {}) {
+  const got = await slot(prio);
+  if (!got) return null; // called off while waiting
+  let freed = false;
+  const release = () => { if (!freed) { freed = true; got(); } };
+  let page;
+  try {
+  page = await pdf.getPage(n + 1);
   const base = page.getViewport({ scale: 1 });
   const content = await page.getTextContent();
   // "wide view": cut the side margins so the text fills the width (top and bottom margins are trimmed by the app)
@@ -369,6 +400,9 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   // once, and on iPhone running out of memory makes iOS restart the whole app
   const scale = Math.min(Math.min(cssWidth * dpr, 4096) / base.width, Math.sqrt(6e6 / (base.width * base.height)) * (ts > 1 ? Math.min(ts, 1.6) : 1));
   const vp = page.getViewport({ scale });
+  // first a quick, soft copy of the whole page; the sharp one is drawn just for what's shown (sharpen below)
+  const pscale = Math.max(Math.min(scale * 0.4, 520 / base.width), Math.min(scale, 300 / base.width));
+  const pvp = page.getViewport({ scale: pscale });
 
   // .pdf-frame is the visible box; .pdf-page inside it is the whole page, scaled and shifted when trimmed
   const frame = document.createElement('div');
@@ -380,8 +414,9 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   if (box.y) frame.dataset.ty = box.y.join(','); // where the text starts and ends down the page
   frame._lines = textLines(content.items, base); // where each piece of text sits, for finding columns
   const canvas = document.createElement('canvas');
-  canvas.width = Math.floor(vp.width);
-  canvas.height = Math.floor(vp.height);
+  canvas.className = 'soft';
+  canvas.width = Math.floor(pvp.width);
+  canvas.height = Math.floor(pvp.height);
   const layer = document.createElement('div');
   layer.className = 'pdf-hits';
   sheet.append(canvas, layer, textLayer(content.items, content.styles, base));
@@ -390,7 +425,7 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   sizer.observe(sheet);
   // Draw off-screen first; whatever is showing now (the old render, or text) stays until this is ready.
 
-  const task = page.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport: vp });
+  const task = page.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport: pvp });
 
   if (ranges.length) {
     const { map } = textFromItems(content.items);
@@ -435,9 +470,61 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   }
   let cancelled = false;
   try { await task.promise; } catch (e) { if (e?.name !== 'RenderingCancelledException') throw e; cancelled = true; }
-  page.cleanup();
-  const cleanup = () => { task.cancel(); sizer.disconnect(); canvas.width = canvas.height = 0; frame.remove(); };
+  release();
+
+  // ---- the sharp copy, of just the part of the page that's shown (plus a little either side) ----
+  // sharpen([y0, y1], [x0, x1]) asks for it; asking again for more (opening the crop) draws the larger part
+  // and swaps it in when ready, the soft copy showing meanwhile. Fractions of the page.
+  let sharp = null, have = null, want = null, busy = false, dead = false, sharpTask = null;
+  const covers = (a, b) => a && a[0] <= b[0] + 1e-3 && a[1] >= b[1] - 1e-3 && a[2] <= b[2] + 1e-3 && a[3] >= b[3] - 1e-3;
+  const sharpen = (y = [0, 1], x = span || [0, 1]) => {
+    const pad = 0.04;
+    const r = [Math.max(0, x[0] - 0.01), Math.min(1, x[1] + 0.01), Math.max(0, y[0] - pad), Math.min(1, y[1] + pad)];
+    want = want && !covers(r, want) ? [Math.min(want[0], r[0]), Math.max(want[1], r[1]), Math.min(want[2], r[2]), Math.max(want[3], r[3])] : r;
+    if (covers(have, want) || busy || dead) return;
+    busy = true;
+    (async () => {
+      while (!dead && want && !covers(have, want)) {
+        const go = await slot(() => (dead ? null : (prio() ?? Infinity) + 400));
+        if (!go) break;
+        const [x0, x1, y0, y1] = want;
+        try {
+          const c = document.createElement('canvas');
+          c.className = 'sharp';
+          const sx = Math.floor(x0 * vp.width), sy = Math.floor(y0 * vp.height);
+          c.width = Math.max(1, Math.ceil(x1 * vp.width) - sx);
+          c.height = Math.max(1, Math.ceil(y1 * vp.height) - sy);
+          sharpTask = page.render({ canvasContext: c.getContext('2d', { alpha: false }), viewport: vp, transform: [1, 0, 0, 1, -sx, -sy] });
+          await sharpTask.promise;
+          if (dead) { c.width = c.height = 0; break; }
+          // margins in % are of the page's width: pull the strip up over the soft copy, to where it belongs
+          const ar = vp.height / vp.width;
+          c.style.marginTop = `${((sy / vp.height) - 1) * ar * 100}%`;
+          c.style.marginLeft = `${(sx / vp.width) * 100}%`;
+          c.style.width = `${(c.width / vp.width) * 100}%`;
+          if (sharp) { sharp.replaceWith(c); sharp.width = sharp.height = 0; } else canvas.after(c);
+          sharp = c;
+          have = [sx / vp.width, (sx + c.width) / vp.width, sy / vp.height, (sy + c.height) / vp.height];
+          frame._onSharp?.();
+        } catch (e) { if (e?.name !== 'RenderingCancelledException') break; }
+        finally { go(); }
+      }
+      busy = false;
+    })();
+  };
+  const cleanup = () => {
+    dead = true;
+    task.cancel();
+    sharpTask?.cancel();
+    sizer.disconnect();
+    canvas.width = canvas.height = 0;
+    if (sharp) sharp.width = sharp.height = 0;
+    frame.remove();
+    try { page.cleanup(); } catch {}
+  };
+  frame._sharpen = sharpen;
   return { cleanup, trimmed: !!span, show: () => { if (!cancelled) host.replaceChildren(frame); } };
+  } catch (e) { release(); throw e; }
 }
 
 /** Headings and captions for a document already in the library (added before they were detected). */
