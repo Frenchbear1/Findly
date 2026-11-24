@@ -287,3 +287,17 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   body.undo-buttons .m-count { font-size: 13.5px; }
 }
 .m-undo, .d-undo { display: none !important; }
+
+/* the pages panel on the right: the mirror image of the library sheet */
+@media (max-width: 900px) {
+  .content > .outline {
+    width: min(340px, 88vw); background: var(--bg); border-left: 0;
+    border-radius: 26px 0 0 26px;
+    padding-right: max(12px, env(safe-area-inset-right));
+    box-shadow: 0 0 0 0.5px var(--sep), -18px 0 50px -20px rgba(0, 0, 0, 0.35);
+    transition: transform 0.42s var(--spring), visibility 0s linear 0.42s;
+  }
+  body.panel .content > .outline { transition: transform 0.42s var(--spring); }
+  .ol-p { border-radius: 10px; }
+}
+body.searching #mCountText, body.searching .counter { opacity: 0.45; transition: opacity 0.2s; }

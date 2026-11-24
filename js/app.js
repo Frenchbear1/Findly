@@ -17,7 +17,8 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ESC[c]);
-const fmt = (n) => n.toLocaleString();
+const NUM = new Intl.NumberFormat(); // one formatter, reused (toLocaleString builds a new one every call)
+const fmt = (n) => NUM.format(n);
 // Only touch the page when the content really changed: rebuilding an element under the mouse
 // restarts its hover effect, which looks like flickering.
 function setHTML(node, html) {
@@ -110,10 +111,19 @@ if (!MODES[prefs.mode]) prefs.mode = 'all';
 const savePrefs = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch {} };
 
 // ---------- state ----------
+// Searching while you type happens in a worker that keeps its own copy of the page texts; this map keeps it in step.
+const searchWorker = (() => {
+  try { return new Worker(new URL('./search-worker.js', import.meta.url), { type: 'module' }); } catch { return null; }
+})();
+class TextMap extends Map {
+  set(k, v) { super.set(k, v); try { searchWorker?.postMessage({ t: 'set', id: k, pages: v }); } catch {} return this; }
+  delete(k) { try { searchWorker?.postMessage({ t: 'del', id: k }); } catch {} return super.delete(k); }
+  clear() { try { searchWorker?.postMessage({ t: 'clear' }); } catch {} super.clear(); }
+}
 const S = {
   docs: [],            // metadata, library order
   folders: [],         // { id, name, order, collapsed }
-  texts: new Map(),    // docId -> page texts
+  texts: new TextMap(), // docId -> page texts
   matcher: null,
   error: null,
   terms: [],
@@ -171,9 +181,9 @@ function computeHits(docs) {
       const hp = [];
       for (let n = 0; n < pages.length; n++) {
         const r = S.matcher.match(pages[n]);
-        if (r) hp.push({ n, ranges: r });
+        if (r) hp.push({ n, ranges: r, count: r.length });
       }
-      if (hp.length) list.push({ doc, pages: hp, hits: hp.reduce((a, p) => a + p.ranges.length, 0) });
+      if (hp.length) list.push({ doc, pages: hp, hits: hp.reduce((a, p) => a + p.count, 0) });
     }
   }
   return list;
@@ -184,7 +194,7 @@ function assign(v, list) {
   if (v.kind === 'results' && prefs.sort === 'pages') {
     // every hit page from every document, ranked by how many hits it has
     const flat = [];
-    list.forEach((R, di) => R.pages.forEach((p) => flat.push({ doc: R.doc, pages: [p], hits: p.ranges.length, flat: true, di })));
+    list.forEach((R, di) => R.pages.forEach((p) => flat.push({ doc: R.doc, pages: [p], hits: p.count, flat: true, di })));
     flat.sort((a, b) => b.hits - a.hits || a.di - b.di || a.pages[0].n - b.pages[0].n);
     list = flat;
   }
@@ -194,23 +204,83 @@ function assign(v, list) {
   let h = 0;
   for (const R of list) {
     R.hitStart = h;
-    for (const p of R.pages) { p.h0 = h; h += p.ranges.length; v.info.set(pkey(R.doc.id, p.n), p); }
+    for (const p of R.pages) { p.h0 = h; h += p.count; v.info.set(pkey(R.doc.id, p.n), p); }
   }
   v.total = h;
   v.cur = -1;
   v.navY = null;
 }
 
-function runSearch({ keepScroll = false } = {}) {
+// A page found by the worker: its hit count right away, its hit positions decoded only when something needs them.
+function workerPage(n, count, data, at) {
+  let ranges = null;
+  return {
+    n, count,
+    get ranges() {
+      if (!ranges) { ranges = new Array(count); for (let i = 0; i < count; i++) { const j = (at + i) * 3; ranges[i] = [data[j], data[j + 1], data[j + 2]]; } }
+      return ranges;
+    },
+  };
+}
+let searchSeq = 0;
+const workerWaits = new Map();
+searchWorker?.addEventListener('message', (e) => { const w = workerWaits.get(e.data.qid); if (w) { workerWaits.delete(e.data.qid); w(e.data.docs); } });
+// Searches the documents in the worker; resolves to the same shape as computeHits, or null if a newer search took over.
+function workerHits(docs) {
+  const qid = ++searchSeq;
+  for (const [k, w] of workerWaits) { workerWaits.delete(k); w(null); } // older searches are moot
+  return new Promise((resolve) => {
+    workerWaits.set(qid, (found) => {
+      if (!found) return resolve(null);
+      const byId = new Map(docs.map((d) => [d.id, d]));
+      resolve(found.map((f) => {
+        let at = 0;
+        const pages = [];
+        for (let i = 0; i < f.ns.length; i++) { pages.push(workerPage(f.ns[i], f.counts[i], f.data, at)); at += f.counts[i]; }
+        return { doc: byId.get(f.id), pages, hits: at };
+      }).filter((R) => R.doc));
+    });
+    searchWorker.postMessage({ t: 'q', qid, query: q.value, opts: { mode: prefs.mode, matchCase: prefs.matchCase, wholeWord: prefs.wholeWord, near: prefs.near }, ids: docs.map((d) => d.id) });
+  });
+}
+
+function prepSearch() {
   prefs.q = q.value;
   savePrefs();
   const m = compile(q.value, prefs);
   S.error = m?.error || null;
   S.matcher = m && !m.error ? m : null;
   S.terms = S.matcher ? S.matcher.terms : [];
+}
+// While typing: the matching runs in the worker, so the keyboard and the page stay smooth; only the newest
+// keystroke's results are shown.
+async function runSearchLive() {
+  if (!searchWorker) { runSearch(); return; }
+  prepSearch();
+  if (!S.matcher) { searchSeq++; runSearch(); return; }
+  const scope = orderedDocs().filter(inScope);
+  const rdoc = reader.docId && docById(reader.docId);
+  const docs = rdoc && !scope.includes(rdoc) ? [...scope, rdoc] : scope;
+  document.body.classList.add('searching');
+  const found = await workerHits(docs);
+  if (!found) return; // a newer search is on its way
+  document.body.classList.remove('searching');
+  const inResults = new Set(scope);
+  showSearch(found.filter((R) => inResults.has(R.doc)), rdoc ? found.filter((R) => R.doc === rdoc) : null);
+}
 
+function runSearch({ keepScroll = false } = {}) {
+  searchSeq++; // anything the worker is still doing is out of date now
+  for (const [k, w] of workerWaits) { workerWaits.delete(k); w(null); }
+  document.body.classList.remove('searching');
+  prepSearch();
+  const rdoc = reader.docId && docById(reader.docId);
+  showSearch(computeHits(orderedDocs().filter(inScope)), rdoc ? computeHits([rdoc]) : null, { keepScroll });
+}
+
+function showSearch(list, readerList, { keepScroll = false } = {}) {
   const before = { sig: resultsSig(), cur: results.cur, navY: results.navY, dirty: results.dirty, state: resultsState() };
-  assign(results, computeHits(orderedDocs().filter(inScope)));
+  assign(results, list);
   if (keepScroll && !before.dirty && before.sig === resultsSig() && before.state === resultsState() && results.list.length) {
     results.cur = before.cur; // same results: keep the page as it is, including opened pages and the current hit
     results.navY = before.navY;
@@ -222,8 +292,7 @@ function runSearch({ keepScroll = false } = {}) {
   }
 
   if (reader.docId) {
-    const doc = docById(reader.docId);
-    assign(reader, doc ? computeHits([doc]) : []);
+    assign(reader, readerList || []);
     if (active === reader) refreshInPlace(reader);
     else reader.dirty = true;
   }
@@ -231,7 +300,7 @@ function runSearch({ keepScroll = false } = {}) {
 }
 
 function resultsSig() {
-  return prefs.sort + '§' + results.list.map((R) => `${R.doc.id}:${R.doc.name}:${R.doc.hash || ''}:${R.doc.folderId || ''}:${R.pages.map((p) => p.n + '/' + p.ranges.length).join(',')}`).join('|');
+  return prefs.sort + '§' + results.list.map((R) => `${R.doc.id}:${R.doc.name}:${R.doc.hash || ''}:${R.doc.folderId || ''}:${R.pages.map((p) => p.n + '/' + p.count).join(',')}`).join('|');
 }
 // what the results area shows when there are no results lists (library empty, idle, error…)
 function resultsState() {
@@ -243,7 +312,8 @@ function scheduleSearch() {
   clearTimeout(searchTimer);
   let chars = 0;
   for (const p of S.texts.values()) chars += p.length * 3000;
-  searchTimer = setTimeout(runSearch, chars > 6e6 ? 260 : 110);
+  // the search itself no longer holds up typing (it runs in a worker), so it can start almost at once
+  searchTimer = setTimeout(searchWorker ? runSearchLive : runSearch, searchWorker ? 70 : chars > 6e6 ? 260 : 110);
 }
 
 // ---------- text rendering ----------
@@ -304,7 +374,10 @@ function pageMode(doc, n) {
 // moving between hits scrolls inside it. (In the "pages with most hits" ranking each entry stays its own card.)
 const WEB = 'web';
 const webMode = (doc, R) => doc.kind === 'html' && !R?.flat && pageMode(doc, 0) === 'original';
-const artFor = (v, docId, n) => v.pageEls.get(pkey(docId, n)) || v.pageEls.get(pkey(docId, WEB));
+const artFor = (v, docId, n) => {
+  const find = () => v.pageEls.get(pkey(docId, n)) || v.pageEls.get(pkey(docId, WEB));
+  return find() || (v.pending ? (finishRender(v), find()) : null); // not drawn yet: finish the list first
+};
 function webR(v, doc) { return v.list.find((r) => r.doc.id === doc.id && !r.flat) || null; }
 function webHeadHtml(v, doc) {
   const R = webR(v, doc);
@@ -377,8 +450,8 @@ const ioFar = new IntersectionObserver(
 function headHtml(v, doc, n, ctx, flat = false) {
   const info = v.info.get(pkey(doc.id, n));
   let badge = '';
-  if (info && ctx) badge = `<span class="phits none" title="${plural(info.ranges.length, 'hit')} — this page is also ranked on its own">${fmt(info.ranges.length)}</span>`;
-  else if (info) badge = `<span class="phits" title="${plural(info.ranges.length, 'hit')}">${fmt(info.ranges.length)}</span>`;
+  if (info && ctx) badge = `<span class="phits none" title="${plural(info.count, 'hit')} — this page is also ranked on its own">${fmt(info.count)}</span>`;
+  else if (info) badge = `<span class="phits" title="${plural(info.count, 'hit')}">${fmt(info.count)}</span>`;
   let rank = '';
   if (flat && !ctx) {
     const i = v.list.findIndex((r) => r.flat && r.doc.id === doc.id && r.pages[0].n === n);
@@ -541,7 +614,7 @@ function refill(art) {
 const cropOpen = new Map(); // pkey -> { top, bottom } opened out by hand (cleared when the search changes)
 function cropWanted(art) {
   if (!prefs.crop || art._ctx || art._web || art._v?.kind !== 'results') return false;
-  return !!art._v.info.get(pkey(art.dataset.doc, Number(art.dataset.n)))?.ranges.length;
+  return !!art._v.info.get(pkey(art.dataset.doc, Number(art.dataset.n)))?.count;
 }
 // The band to show, as fractions of the page's height: [a, b], or null for the whole page.
 function cropBand(art, content) {
@@ -1082,7 +1155,7 @@ function visitEl(home, n) {
   art._home = home;
   const info = v.info.get(pkey(doc.id, n));
   const hn = Number(home.dataset.n);
-  const head = el('header', 'page-head', `<span class="pno">Page ${n + 1}</span>${info ? `<span class="phits">${fmt(info.ranges.length)}</span>` : ''}<span class="grow"></span><button class="visit-back" data-act="visit-back" title="Back to the result">${I.undo}Page ${hn + 1}</button>`);
+  const head = el('header', 'page-head', `<span class="pno">Page ${n + 1}</span>${info ? `<span class="phits">${fmt(info.count)}</span>` : ''}<span class="grow"></span><button class="visit-back" data-act="visit-back" title="Back to the result">${I.undo}Page ${hn + 1}</button>`);
   const body = el('div', 'page-body');
   body.style.minHeight = Math.round(home.lastElementChild.offsetHeight) + 'px';
   art.append(head, body);
@@ -1470,8 +1543,64 @@ function clearView(v, { keep = false } = {}) {
     }
   }
   v.pageEls.clear();
+  v.pending = null; // stop drawing the old list
+  v.pendingTok = (v.pendingTok || 0) + 1;
   v.root.replaceChildren();
   return kept;
+}
+
+// ---- drawing a long results list a screenful at a time ----
+// The first pages go in at once; the rest follow in small slices between frames, so typing and scrolling never
+// wait for thousands of pages to be built. Anything that needs a page that isn't drawn yet finishes the list first.
+function sectionJob(v, doc, R) {
+  if (webMode(doc, R)) return { sec: sectionEl(v, doc, R), done: true };
+  const sec = el('section', 'doc-sec');
+  sec.dataset.doc = doc.id;
+  sec.dataset.key = groupKey(R, doc);
+  if (R?.flat) {
+    sec.classList.add('ranked');
+    const prev = v.list[v.list.indexOf(R) - 1];
+    if (prev?.doc.id === doc.id) sec.classList.add('same-doc');
+  }
+  sec.append(el('div', 'doc-head', docHeadHtml(v, doc, R)));
+  const pagesEl = el('div', 'doc-pages');
+  sec.append(pagesEl);
+  const count = S.texts.get(doc.id)?.length || 0;
+  let lo = -1, hi = count;
+  if (R?.flat) {
+    const i = v.list.indexOf(R);
+    const first = R.pages[0].n;
+    const prev = v.list[i - 1], next = v.list[i + 1];
+    if (prev?.flat && prev.doc.id === doc.id && prev.pages[0].n < first) lo = first - 1;
+    if (next?.flat && next.doc.id === doc.id && next.pages[0].n > first) hi = next.pages[0].n;
+  }
+  const vis = visiblePages(v, doc, R).filter((n) => n > lo && n < hi);
+  return { sec, pagesEl, doc, R, vis, lo, hi, idx: 0, done: false };
+}
+function renderSome(v, budget) {
+  const P = v.pending;
+  if (!P) return;
+  while (P.i < P.jobs.length && budget > 0) {
+    const j = P.jobs[P.i];
+    if (!j.sec.isConnected) v.root.append(j.sec);
+    if (j.done) { P.i++; continue; }
+    const chunk = j.vis.slice(j.idx, j.idx + budget);
+    const last = j.idx + chunk.length >= j.vis.length;
+    const a = j.idx === 0 ? j.lo : j.vis[j.idx - 1];
+    const b = last ? j.hi : chunk[chunk.length - 1] + 1; // only the final slice draws the gap after the last page
+    j.pagesEl.append(...nodesBetween(v, j.doc, chunk, a, b, j.R));
+    j.idx += chunk.length;
+    budget -= Math.max(1, chunk.length);
+    if (last) { j.done = true; P.i++; }
+  }
+  if (P.i >= P.jobs.length) v.pending = null;
+}
+function finishRender(v) { if (v.pending) renderSome(v, Infinity); }
+function pumpRender(v, tok) {
+  if (v.pendingTok !== tok || !v.pending) return;
+  const t = performance.now();
+  while (v.pending && performance.now() - t < 6) renderSome(v, 6);
+  if (v.pending) setTimeout(() => pumpRender(v, tok), 12);
 }
 
 // Fill everything on (or just off) screen right away, so the first painted frame already shows the pages.
@@ -1514,11 +1643,12 @@ function renderView(v, { keepScroll = true } = {}) {
     return;
   }
   if (!v.list.length) { v.root.append(noResults(scope.length)); done(); return; }
-  const frag = document.createDocumentFragment();
-  for (const R of v.list) frag.append(sectionEl(v, R.doc, R));
-  v.root.append(frag);
+  v.pending = { jobs: v.list.map((R) => sectionJob(v, R.doc, R)), i: 0 };
+  const tok = v.pendingTok;
+  renderSome(v, keepScroll ? Infinity : 24); // keeping the place needs every page there; a fresh search needs a screenful
   if (!keepScroll) window.scrollTo({ top: 0, behavior: 'instant' });
   done();
+  if (v.pending) setTimeout(() => pumpRender(v, tok), 30);
 }
 
 // Re-highlight without rebuilding the page list (keeps the reader where it is).
@@ -1596,7 +1726,7 @@ function noResults(n) {
 function locate(v, k) {
   for (const R of v.list) {
     if (k < R.hitStart || k >= R.hitStart + R.hits) continue;
-    for (const p of R.pages) if (k >= p.h0 && k < p.h0 + p.ranges.length) return { R, p };
+    for (const p of R.pages) if (k >= p.h0 && k < p.h0 + p.count) return { R, p };
   }
   return null;
 }
@@ -1835,7 +1965,7 @@ function updateOutline() {
     return;
   }
   setHTML(box, `<div class="ol-title">${v.kind === 'reader' ? 'Pages with hits' : 'Jump to'}</div>` + v.list.map((R) => {
-    const chips = R.pages.slice(0, 500).map((p) => `<button class="ol-p" data-doc="${R.doc.id}" data-n="${p.n}" title="Page ${p.n + 1} · ${plural(p.ranges.length, 'hit')}">${p.n + 1}${p.ranges.length > 1 ? `<sup>${p.ranges.length}</sup>` : ''}</button>`).join('');
+    const chips = R.pages.slice(0, 500).map((p) => `<button class="ol-p" data-doc="${R.doc.id}" data-n="${p.n}" title="Page ${p.n + 1} · ${plural(p.count, 'hit')}">${p.n + 1}${p.count > 1 ? `<sup>${p.count}</sup>` : ''}</button>`).join('');
     const more = R.pages.length > 500 ? `<span class="ol-more">+${fmt(R.pages.length - 500)}</span>` : '';
     const name = v.kind === 'reader' ? '' : `<button class="ol-doc" data-doc="${R.doc.id}" data-n="${R.pages[0].n}"><span>${esc(R.doc.name)}</span><em>${fmt(R.hits)}</em></button>`;
     return `<div class="ol-group">${name}<div class="ol-pages">${chips}${more}</div></div>`;
@@ -5182,10 +5312,10 @@ function bind() {
     if (!b) return;
     const v = active;
     const info = v.info.get(pkey(b.dataset.doc, Number(b.dataset.n)));
-    if (!info || !info.ranges.length) { if (innerWidth <= 1240) setPanel(false); scrollToPage(v, b.dataset.doc, Number(b.dataset.n)); return; }
+    if (!info || !info.count) { if (innerWidth <= 1240) setPanel(false); scrollToPage(v, b.dataset.doc, Number(b.dataset.n)); return; }
     // First click lands on the page's first hit; clicking the same page again steps through its hits.
-    const onPage = v.cur >= info.h0 && v.cur < info.h0 + info.ranges.length;
-    const k = onPage && b.matches('.ol-p, .ol-row') ? info.h0 + ((v.cur - info.h0 + 1) % info.ranges.length) : info.h0;
+    const onPage = v.cur >= info.h0 && v.cur < info.h0 + info.count;
+    const k = onPage && b.matches('.ol-p, .ol-row') ? info.h0 + ((v.cur - info.h0 + 1) % info.count) : info.h0;
     if (innerWidth <= 1240) setPanel(false); // the panel covers the page on smaller screens: get out of the way
     goTo(v, k);
   });
@@ -5270,7 +5400,17 @@ const MODE_TINY = { any: 'Any', all: 'All', phrase: '“ ”', near: 'Near', boo
 // ---------- zoom ----------
 const BASE_W = 840; // page width at 100%
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+// measured once per frame: it reads layout, and a results list asks for it once per page
+let zoomMemo = null;
 function zoomValue() {
+  const key = `${prefs.zoom}|${S.pageAspect}`; // (window size isn't part of the key: reading it forces a layout; the memo only lives one frame)
+  if (zoomMemo?.key === key) return zoomMemo.v;
+  const v = zoomValueNow();
+  zoomMemo = { key, v };
+  requestAnimationFrame(() => { zoomMemo = null; });
+  return v;
+}
+function zoomValueNow() {
   const z = prefs.zoom;
   if (z === 'width') {
     const w = $('.col')?.clientWidth || BASE_W;
@@ -5328,14 +5468,14 @@ function zoomBy(dir) {
 // ---------- smart navigation ----------
 function hitPages(v) {
   const arr = [];
-  for (const R of v.list) for (const p of R.pages) if (p.ranges.length) arr.push({ R, p });
+  for (const R of v.list) for (const p of R.pages) if (p.count) arr.push({ R, p });
   return arr;
 }
 // Which hit page is "current": the one holding the current hit, or the one on screen if you've scrolled away.
 function pageCursor(v, arr) {
   const moved = v.navY == null || Math.abs(scrollY - v.navY) > innerHeight * 0.8;
   if (v.cur >= 0 && !moved) {
-    return { i: arr.findIndex((x) => v.cur >= x.p.h0 && v.cur < x.p.h0 + x.p.ranges.length), inside: true };
+    return { i: arr.findIndex((x) => v.cur >= x.p.h0 && v.cur < x.p.h0 + x.p.count), inside: true };
   }
   const top = topOffset() + ($('.doc-head')?.offsetHeight || 0);
   let lo = 0, hi = arr.length - 1, idx = arr.length;
