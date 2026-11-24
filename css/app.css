@@ -551,13 +551,25 @@ mark.m.cur { background: var(--cur); color: var(--cur-ink); box-shadow: 0 0 0 2p
 .gap-row { display: flex; align-items: center; gap: 8px; }
 .gap-tab {
   pointer-events: auto; position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 4px;
-  height: 28px; padding: 0 12px 0 9px; background: var(--tab-bg); border: 0; --r: 9px; --tab-bg: var(--tab-text, var(--card));
+  height: 28px; padding: 0 12px 0 9px; border: 0; --r: 9px;
   font-size: 12.5px; font-weight: 600; color: var(--ink-2); white-space: nowrap; transition: color 0.15s;
 }
-/* the tab is cut from the page it belongs to: no outline, and the page's own colour (a PDF's paper as the
-   theme tints it, or the card behind a text page), so tab and page read as one sheet */
-.page:has(.pdf-frame) + .gap .gap-tab.down, .gap:has(+ .page .pdf-frame) .gap-tab.up { --tab-bg: var(--tab-pdf, var(--pdf-edge)); }
-.page.extra:not(:has(.pdf-frame)) + .gap .gap-tab.down, .gap:has(+ .page.extra:not(:has(.pdf-frame))) .gap-tab.up { --tab-bg: var(--card-2); }
+/* The tab is cut from the page it belongs to: no outline, and painted with the page's own layers, bottom
+   to top: the page colour (a PDF's own paper colour, read from the page itself), the theme's tint as the
+   PDF gets it, and the same paper grain. --e is set per tab by the app; the rest comes from the theme. */
+.gap-tab, .gap-tab::before, .gap-tab::after {
+  --base: var(--card); --tintc: transparent; --grainimg: var(--tab-grain, none);
+  background: var(--grainimg) 0 0 / var(--tab-gsize, auto) repeat, linear-gradient(var(--tintc), var(--tintc)), linear-gradient(var(--base), var(--base));
+  background-blend-mode: var(--tab-gblend, normal), multiply, normal;
+}
+.gap-tab.pdf, .gap-tab.pdf::before, .gap-tab.pdf::after { --base: var(--e, #fff); --grainimg: none; }
+html.doc-tint .gap-tab.pdf, html.doc-tint .gap-tab.pdf::before, html.doc-tint .gap-tab.pdf::after {
+  --tintc: color-mix(in srgb, var(--doc-page) calc(var(--tint) * 100%), transparent); --grainimg: var(--tab-grain, none);
+}
+/* dark themes invert the PDF (the tint layer sits under the page there, so it doesn't show) */
+html.doc-tint.doc-dark .gap-tab.pdf, html.doc-tint.doc-dark .gap-tab.pdf::before, html.doc-tint.doc-dark .gap-tab.pdf::after { --base: var(--ed, #0a0a0a); --tintc: transparent; }
+html:not(.paper) .gap-tab, html:not(.paper) .gap-tab::before, html:not(.paper) .gap-tab::after { --grainimg: none; }
+.gap-tab.extra, .gap-tab.extra::before, .gap-tab.extra::after { --base: var(--card-2); }
 .gap-tab svg { width: 14px; height: 14px; stroke-width: 2.3; }
 .gap-tab.down { border-radius: 0 0 12px 12px; transform: translateY(-1px); }
 .gap-tab.up { border-radius: 12px 12px 0 0; transform: translateY(1px); }
@@ -565,12 +577,12 @@ mark.m.cur { background: var(--cur); color: var(--cur-ink); box-shadow: 0 0 0 2p
 .gap-tab::before, .gap-tab::after { content: ""; position: absolute; width: var(--r); height: var(--r); pointer-events: none; }
 .gap-tab.down::before, .gap-tab.down::after { top: 0; }
 .gap-tab.up::before, .gap-tab.up::after { bottom: 0; }
-.gap-tab::before { left: calc(-1 * var(--r) + 0.5px); }
+.gap-tab::before { left: calc(-1 * var(--r) + 0.5px); background-position: calc(var(--r) - 0.5px) 0, 0 0, 0 0; }
 .gap-tab::after { right: calc(-1 * var(--r) + 0.5px); }
-.gap-tab.down::before { background: radial-gradient(circle at 0 100%, transparent calc(var(--r) - 0.75px), var(--tab-bg) var(--r)); }
-.gap-tab.down::after { background: radial-gradient(circle at 100% 100%, transparent calc(var(--r) - 0.75px), var(--tab-bg) var(--r)); }
-.gap-tab.up::before { background: radial-gradient(circle at 0 0, transparent calc(var(--r) - 0.75px), var(--tab-bg) var(--r)); }
-.gap-tab.up::after { background: radial-gradient(circle at 100% 0, transparent calc(var(--r) - 0.75px), var(--tab-bg) var(--r)); }
+.gap-tab.down::before { -webkit-mask: radial-gradient(circle at 0 100%, transparent calc(var(--r) - 0.75px), #000 var(--r)); mask: radial-gradient(circle at 0 100%, transparent calc(var(--r) - 0.75px), #000 var(--r)); }
+.gap-tab.down::after { -webkit-mask: radial-gradient(circle at 100% 100%, transparent calc(var(--r) - 0.75px), #000 var(--r)); mask: radial-gradient(circle at 100% 100%, transparent calc(var(--r) - 0.75px), #000 var(--r)); }
+.gap-tab.up::before { -webkit-mask: radial-gradient(circle at 0 0, transparent calc(var(--r) - 0.75px), #000 var(--r)); mask: radial-gradient(circle at 0 0, transparent calc(var(--r) - 0.75px), #000 var(--r)); }
+.gap-tab.up::after { -webkit-mask: radial-gradient(circle at 100% 0, transparent calc(var(--r) - 0.75px), #000 var(--r)); mask: radial-gradient(circle at 100% 0, transparent calc(var(--r) - 0.75px), #000 var(--r)); }
 .gap-tab:hover { color: var(--accent); }
 .gap-all { pointer-events: auto; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
 .gap-all svg { width: 13px; height: 13px; }
@@ -1035,10 +1047,7 @@ body.compact .search-box:focus-within #clearBtn:not([hidden]) { display: inline-
 .mp-row.three .pk-tog { gap: 5px; padding: 0 6px; }
 
 /* Pages in the reading theme: light themes tint the white paper, dark themes turn the page dark */
-:root { --doc-page: #ffffff; --doc-ink: #1b1b1d; --tint: 0.85; --pdf-edge: #fff; }
-/* the colour a (white) PDF page ends up as on screen, for the page tabs */
-html.doc-tint { --pdf-edge: color-mix(in srgb, var(--doc-page) calc(var(--tint) * 100%), #fff); }
-html.doc-tint.doc-dark { --pdf-edge: #0a0a0a; }
+:root { --doc-page: #ffffff; --doc-ink: #1b1b1d; --tint: 0.85; }
 :root[data-theme="dark"], :root:not([data-theme]) { }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --doc-page: #1e1f23; --doc-ink: #ecebe8; } }
 :root[data-theme="dark"]:not([style*="--doc-page"]) { --doc-page: #1e1f23; --doc-ink: #ecebe8; }

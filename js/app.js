@@ -566,6 +566,7 @@ function fill(art) {
         if (token !== art._token) { r.cleanup(); return; }
         r.show();
         art._cleanup = r.cleanup;
+        art._edge = pageEdge(body);
         swapped();
         const fr = body.querySelector('.pdf-page');
         if (fr && !r.trimmed) S.pageAspect = fr.offsetHeight / fr.offsetWidth || S.pageAspect;
@@ -583,6 +584,8 @@ function fill(art) {
       swapped();
     }
     body.style.height = '';
+    if (mode !== 'original') art._edge = null;
+    tabsBeside(art);
     applyCrop(art);
     if (mode === 'text' && text.length > 600) {
       const ratio = (body.offsetHeight - 40) / text.length / zoomValue();
@@ -592,6 +595,56 @@ function fill(art) {
   })();
   return art._filled;
 }
+
+// The page tabs are painted as part of their page, so each one needs its page's own paper colour: read
+// from the rendered PDF's corners (the page's margin), plus that colour as dark themes show it.
+function pageEdge(body) {
+  const c = body.querySelector('.pdf-frame:not(.clone) canvas');
+  if (!c || !c.width) return null;
+  try {
+    const x = c.getContext('2d'), w = c.width, h = c.height, k = 3;
+    const px = [[k, k], [w - k - 1, k], [k, h - k - 1], [w - k - 1, h - k - 1]].map(([a, b]) => [...x.getImageData(a, b, 1, 1).data.slice(0, 3)]);
+    // the colour most corners agree on (a picture running to one corner doesn't count)
+    const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 10);
+    const rgb = px.map((p) => [p, px.filter((q) => near(p, q)).length]).sort((a, b) => b[1] - a[1])[0][0];
+    const hx = (c) => '#' + c.map((v) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join('');
+    // dark themes: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.92), as the CSS does
+    let [r, g, b] = rgb.map((v) => 1 - v / 255);
+    const cs = -1, sn = 0; // cos/sin of 180°
+    const m = [0.213 + cs * 0.787 - sn * 0.213, 0.715 - cs * 0.715 - sn * 0.715, 0.072 - cs * 0.072 + sn * 0.928,
+      0.213 - cs * 0.213 + sn * 0.143, 0.715 + cs * 0.285 + sn * 0.140, 0.072 - cs * 0.072 - sn * 0.283,
+      0.213 - cs * 0.213 - sn * 0.787, 0.715 - cs * 0.715 + sn * 0.715, 0.072 + cs * 0.928 + sn * 0.072];
+    const hr = [m[0] * r + m[1] * g + m[2] * b, m[3] * r + m[4] * g + m[5] * b, m[6] * r + m[7] * g + m[8] * b]
+      .map((v) => Math.max(0, Math.min(1, v)) * 0.92).map((v) => Math.max(0, Math.min(1, (v - 0.5) * 0.92 + 0.5)));
+    return { e: hx(rgb), d: hx(hr.map((v) => v * 255)) };
+  } catch { return null; }
+}
+function paintTab(tab, art) {
+  if (!tab) return;
+  const pdf = !!art?.querySelector('.pdf-frame:not(.clone)');
+  tab.classList.toggle('pdf', pdf);
+  tab.classList.toggle('extra', !pdf && !!art?.classList.contains('extra'));
+  const e = pdf ? art._edge : null;
+  if (e) { tab.style.setProperty('--e', e.e); tab.style.setProperty('--ed', e.d); }
+  else { tab.style.removeProperty('--e'); tab.style.removeProperty('--ed'); }
+}
+function paintGap(g) {
+  paintTab(g.querySelector('.gap-tab.down'), g.previousElementSibling?.classList.contains('page') ? g.previousElementSibling : null);
+  paintTab(g.querySelector('.gap-tab.up'), g.nextElementSibling?.classList.contains('page') ? g.nextElementSibling : null);
+}
+function tabsBeside(art) {
+  for (const g of [art.previousElementSibling, art.nextElementSibling]) if (g?.classList.contains('gap')) paintGap(g);
+}
+// gaps come and go as pages unfold; a MutationObserver keeps every new tab painted
+const gapMO = new MutationObserver((recs) => {
+  for (const r of recs) for (const n of r.addedNodes) {
+    if (n.nodeType !== 1) continue;
+    if (n.classList.contains('gap')) paintGap(n);
+    else if (n.classList.contains('page')) tabsBeside(n);
+    else n.querySelectorAll?.('.gap').forEach(paintGap);
+  }
+});
+queueMicrotask(() => { for (const id of ['results', 'reader']) { const r = document.getElementById(id); if (r) gapMO.observe(r, { childList: true, subtree: true }); } });
 
 function unfill(art) {
   art._plan = null;

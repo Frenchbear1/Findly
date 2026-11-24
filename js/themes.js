@@ -149,51 +149,47 @@ export function applyReadingTheme(p) {
   return dark;
 }
 
-// The page tabs between results are drawn in the colour a page actually ends up on screen, so a tab
-// reads as part of its page: the PDF's white paper after the theme's tint (and, in dark themes, the
-// inversion), with the paper grain's average effect folded in. Worked out from the same steps the CSS
-// uses (see .pdf-page::before/::after in app.css).
-const grainAvg = new Map(); // paper url -> { m: average of the multiply layer, s: of the screen layer }, per channel
-function paperAverages(url) {
-  if (grainAvg.has(url)) return grainAvg.get(url);
+// The page tabs between results are drawn with exactly the layers their page has: the page's own
+// colour, the theme's tint over a PDF, and the same paper grain. The grain layer on a page is the paper
+// image with brightness, contrast and opacity filters and a blend; a background layer can't take filters,
+// so the filtered texture is baked once into an image here and the tab blends it the same way.
+const baked = new Map();
+function bakeGrain(url, g, dark) {
+  const key = url + '|' + g + '|' + dark;
+  if (baked.has(key)) return baked.get(key);
   const job = new Promise((res) => {
     const img = new Image();
     img.onload = () => {
       try {
-        const n = 128, c = document.createElement('canvas'); c.width = c.height = n;
-        const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0, n, n);
-        const d = x.getImageData(0, 0, n, n).data, m = [0, 0, 0], sc = [0, 0, 0], k = d.length / 4;
+        const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+        const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0);
+        const im = x.getImageData(0, 0, c.width, c.height), d = im.data;
         for (let i = 0; i < d.length; i += 4) for (let j = 0; j < 3; j++) {
           const v = d[i + j] / 255;
-          m[j] += Math.min(1, v * 1.8); // brightness(1.8)
-          sc[j] += Math.max(0, Math.min(1, v * 0.42 * 1.7 + (1 - 1.7) / 2)); // brightness(0.42) contrast(1.7)
+          // light: multiply by brightness(1.8) at opacity g = multiply by 1 - g(1 - p')
+          // dark: screen with brightness(0.42) contrast(1.7) at opacity g = screen with g·q
+          const out = dark ? g * Math.max(0, Math.min(1, v * 0.714 - 0.35)) : 1 - g * (1 - Math.min(1, v * 1.8));
+          d[i + j] = Math.round(out * 255);
         }
-        res({ m: m.map((v) => v / k), s: sc.map((v) => v / k) });
+        x.putImageData(im, 0, 0);
+        c.toBlob((bl) => res(bl ? { url: URL.createObjectURL(bl), w: c.width, h: c.height } : null));
       } catch { res(null); }
     };
     img.onerror = () => res(null);
     img.src = url;
   });
-  grainAvg.set(url, job);
+  baked.set(key, job);
   return job;
 }
 let tabJob = 0;
 async function tabColours(root, o) {
   const job = ++tabJob;
-  const page = hex(o.page).map((v) => v / 255), card = hex(o.card).map((v) => v / 255);
-  // a white PDF page: light themes multiply the theme's page colour over it; dark themes invert it to
-  // near-black (invert, brightness 0.92, contrast 0.92 leave white at 0.04)
-  let pdf = !o.tint ? [1, 1, 1] : o.dark ? [0.04, 0.04, 0.04] : page.map((v) => 1 - o.amt * (1 - v));
-  let text = card;
-  const av = o.url ? await paperAverages(o.url) : null;
+  const set = (k, v) => (v == null ? root.style.removeProperty(k) : root.style.setProperty(k, v));
+  const tex = o.url && o.grain > 0 ? await bakeGrain(o.url, Math.round(o.grain * 1000) / 1000, o.dark) : null;
   if (job !== tabJob) return;
-  if (av) {
-    const grainy = (c, i) => (o.dark ? c + o.grain * av.s[i] * (1 - c) : c * (1 - o.grain * (1 - av.m[i])));
-    if (o.tint) pdf = pdf.map(grainy); // the PDF pages get grain only while they take on the theme
-    text = text.map(grainy);
-  }
-  root.style.setProperty('--tab-pdf', toHex(pdf.map((v) => v * 255)));
-  root.style.setProperty('--tab-text', toHex(text.map((v) => v * 255)));
+  set('--tab-grain', tex ? `url("${tex.url}")` : null);
+  set('--tab-gsize', tex ? `${tex.w}px ${tex.h}px` : null);
+  set('--tab-gblend', tex ? (o.dark ? 'screen' : 'multiply') : null);
 }
 
 // ---- the theme bar: a row of cards along the bottom, so you can watch the results change ----
