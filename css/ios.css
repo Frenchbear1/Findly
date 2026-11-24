@@ -46,7 +46,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
     background: var(--fill);
     transition: background 0.2s, box-shadow 0.25s;
   }
-  .search-box:focus-within { border: 0; background: var(--card); box-shadow: 0 0 0 1px var(--sep), 0 6px 22px -10px rgba(0, 0, 0, 0.25); }
+  .search-box:focus-within { border: 0; background: var(--card); box-shadow: 0 0 0 1px var(--sep), 0 4px 14px -8px rgba(0, 0, 0, 0.14); }
   .menu { width: 40px; height: 40px; border-radius: 50%; background: var(--fill); }
   .menu svg { width: 20px; height: 20px; }
   .mode-pill { border-radius: 9px; }
@@ -80,7 +80,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
     padding: max(14px, env(safe-area-inset-top)) 14px max(12px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
     background: var(--bg); border-right: 0;
     border-radius: 0 26px 26px 0;
-    box-shadow: 0 0 0 0.5px var(--sep), 18px 0 50px -20px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 0 0 0.5px var(--sep), 6px 0 28px -10px rgba(0, 0, 0, 0.16);
     transition: transform 0.42s var(--spring);
   }
   .scrim { background: rgba(0, 0, 0, 0.32); transition: opacity 0.35s var(--spring); }
@@ -103,7 +103,29 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   .folder { margin: 0; border-radius: 0; }
   .folder-row { min-height: 50px; border-radius: 0; }
   .fname { font-size: 15px; }
-  .folder-docs { margin-left: 12px !important; }
+  /* a folder's documents sit one tier in: a strip of the background runs down their left, and every corner
+     where the tiers meet is rounded: concave where the card turns inward, convex where it turns outward */
+  .folder-docs { --tier: 14px; --tr: 12px; margin-left: var(--tier) !important; padding-left: 0 !important; }
+  .folder-docs::before {
+    display: block !important; content: ""; position: absolute; z-index: 1; pointer-events: none;
+    left: calc(-1 * var(--tier)); top: 0; bottom: 0; width: var(--tier); border: 0;
+    background: var(--bg); border-radius: 0 var(--tr) var(--tr) 0;
+  }
+  /* convex: the folder row's lower-left corner, and the lower-left corner of the documents block when it ends the card */
+  .folder:not(.collapsed) > .folder-row::after, .lib > .folder:last-child:not(.collapsed) > .folder-docs::after {
+    content: ""; position: absolute; z-index: 1; pointer-events: none; width: 12px; height: 12px;
+    background: radial-gradient(circle at 100% 0, transparent 11.5px, var(--bg) 12px);
+  }
+  .folder:not(.collapsed) > .folder-row::after { left: 0; bottom: 0; }
+  .folder:not(.collapsed) > .folder-row { position: relative; }
+  .lib > .folder:last-child:not(.collapsed) > .folder-docs::after { left: 0; bottom: 0; }
+  .lib > .folder:last-child:not(.collapsed) > .folder-docs::before { border-bottom-right-radius: 0; }
+  /* convex: the top-left corner of whatever comes after an open folder */
+  .lib > .folder:not(.collapsed) + li { position: relative; }
+  .lib > .folder:not(.collapsed) + li::before {
+    content: ""; position: absolute; z-index: 1; left: 0; top: 0; width: 12px; height: 12px; pointer-events: none;
+    background: radial-gradient(circle at 100% 100%, transparent 11.5px, var(--bg) 12px);
+  }
   .folder-docs::before { display: none; }
   /* round iOS-style checkmarks */
   .chk span { width: 22px; height: 22px; border-radius: 50%; border-width: 1.5px; transition: background 0.2s, border-color 0.2s, transform 0.3s var(--pop); }
@@ -120,7 +142,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   }
   .doc-head h2 { font-size: 17px; font-weight: 700; letter-spacing: -0.015em; }
   .page { margin-bottom: 18px; }
-  .page-body { border-radius: 18px; border: 0; box-shadow: 0 0 0 0.5px var(--sep), 0 8px 26px -14px rgba(0, 0, 0, 0.28); }
+  .page-body { border-radius: 18px; border: 0; box-shadow: 0 0 0 0.5px var(--sep), 0 2px 10px -4px rgba(0, 0, 0, 0.08); }
   .page-head { min-height: 32px; padding: 0 6px 7px 8px; font-size: 13px; }
   .pno { font-size: 14px; font-weight: 700; }
   .phits { padding: 2px 9px; font-size: 12px; font-weight: 700; }
@@ -133,7 +155,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
     padding: 6px; gap: 2px; border-radius: 26px; border: 0;
     background: var(--glass-card);
     -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
-    box-shadow: 0 0 0 0.5px var(--sep), 0 14px 40px -14px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 0 0 0.5px var(--sep), 0 6px 22px -8px rgba(0, 0, 0, 0.16);
     animation: bar-up 0.45s var(--spring);
   }
   .mb { width: 42px; height: 44px; border-radius: 50%; }
@@ -146,7 +168,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
     border-radius: 22px; padding: 11px 14px 11px 18px; font-size: 14px; font-weight: 500;
     background: color-mix(in srgb, #1c1c1e 88%, transparent); color: #fff;
     -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
-    box-shadow: 0 12px 34px -12px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 6px 20px -8px rgba(0, 0, 0, 0.28);
     animation: toastIn 0.42s var(--spring);
   }
   .toasts { bottom: max(18px, calc(env(safe-area-inset-bottom) + 8px)); }
@@ -158,7 +180,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   .pop-menu {
     min-width: 236px; padding: 0; border-radius: 15px; border: 0;
     background: var(--glass-card); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
-    box-shadow: 0 0 0 0.5px var(--sep), 0 22px 60px -16px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 0 0 0.5px var(--sep), 0 10px 30px -10px rgba(0, 0, 0, 0.2);
     animation: menu-pop 0.34s var(--pop); transform-origin: top right;
   }
   .menu-item { min-height: 46px; padding: 0 16px; gap: 12px; border-radius: 0; font-size: 16px; }
@@ -167,7 +189,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   .menu-item:hover:not(:disabled) { background: transparent; }
   .menu-item:active:not(:disabled), .menu-item.hot { background: var(--fill-2); color: var(--ink); }
   .menu-item.hot svg { color: var(--ink-2); }
-  .menu-sep { height: 7px; margin: 0; background: var(--fill); }
+  .menu-sep { height: 0.5px; margin: 6px 14px; background: var(--sep); } /* a hairline, not a slab */
   .menu-head { padding: 10px 16px 6px; font-size: 12.5px; letter-spacing: 0; text-transform: none; font-weight: 500; }
   .pop-menu.picker { padding: 6px; border-radius: 18px; }
 }
@@ -180,7 +202,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
     max-height: calc(100dvh - max(44px, env(safe-area-inset-top) + 10px));
     border-radius: 26px 26px 0 0; border: 0;
     padding-bottom: env(safe-area-inset-bottom);
-    box-shadow: 0 -10px 40px -12px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 -4px 24px -8px rgba(0, 0, 0, 0.14);
     animation: sheet-up 0.42s var(--spring);
   }
   dialog:modal:not(.bv-item):not(.xfer):not(.set-dlg)::before {
@@ -205,9 +227,9 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   .bv-search:focus-within { background: var(--card); box-shadow: 0 0 0 1px var(--sep); }
   .bv-filters .seg { background: var(--fill); }
   .bv-filters select { border: 0; background-color: var(--fill); height: 36px; border-radius: 10px; }
-  .bv-card, .bv-board { border: 0 !important; border-radius: 18px !important; box-shadow: 0 0 0 0.5px var(--sep), 0 8px 24px -14px rgba(0, 0, 0, 0.3) !important; }
+  .bv-card, .bv-board { border: 0 !important; border-radius: 18px !important; box-shadow: 0 0 0 0.5px var(--sep), 0 2px 10px -4px rgba(0, 0, 0, 0.08) !important; }
   .bv-fab { bottom: max(14px, env(safe-area-inset-bottom)) !important; }
-  .bv-fab .btn { height: 50px; border-radius: 25px; padding: 0 20px; font-size: 15.5px; box-shadow: 0 10px 28px -10px rgba(0, 0, 0, 0.4); }
+  .bv-fab .btn { height: 50px; border-radius: 25px; padding: 0 20px; font-size: 15.5px; box-shadow: 0 4px 16px -6px rgba(0, 0, 0, 0.2); }
   .bv-fab .btn:not(.primary) { border: 0; background: var(--glass-card); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
 }
 
@@ -225,10 +247,11 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
 /* the top bar slides with the scroll (--bar-off, set from app.js); the sticky headers ride along under it.
    When it's all the way out, its top padding still covers the status bar / Dynamic Island. */
 @media (max-width: 900px) {
-  .topbar { transform: translateY(calc(-1 * var(--bar-off, 0px))); transition: none; will-change: transform; }
-  .doc-head { top: max(env(safe-area-inset-top), calc(var(--top-h) - var(--bar-off, 0px))); }
-  .page-head { top: calc(max(env(safe-area-inset-top), calc(var(--top-h) - var(--bar-off, 0px))) + 48px); }
-  #reader .page-head, .doc-sec.same-doc .page-head { top: max(env(safe-area-inset-top), calc(var(--top-h) - var(--bar-off, 0px))); }
+  /* app.js moves the bar and sets the top of the headers near it (inline, once per frame) */
+  .topbar { transition: none; will-change: transform; }
+  .doc-head { top: max(env(safe-area-inset-top), var(--top-h)); }
+  .page-head { top: calc(max(env(safe-area-inset-top), var(--top-h)) + 48px); }
+  #reader .page-head, .doc-sec.same-doc .page-head { top: max(env(safe-area-inset-top), var(--top-h)); }
   /* the status bar / Dynamic Island strip stays frosted once the bar has slid away */
   body::after {
     content: ""; position: fixed; z-index: 19; left: 0; right: 0; top: 0; height: env(safe-area-inset-top); pointer-events: none;
@@ -245,7 +268,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
       inset 0 1px 0 rgba(255, 255, 255, 0.55),          /* light catching the top edge */
       inset 0 -1px 0 rgba(255, 255, 255, 0.12),
       0 0 0 0.5px color-mix(in srgb, var(--ink) 14%, transparent),
-      0 14px 40px -14px rgba(0, 0, 0, 0.35);
+      0 6px 22px -8px rgba(0, 0, 0, 0.16);
   }
   :root[data-theme="dark"] .mbar:not([hidden]) {
     background: color-mix(in srgb, var(--card) 34%, transparent);
@@ -301,7 +324,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
     width: min(340px, 88vw); background: var(--bg); border-left: 0;
     border-radius: 26px 0 0 26px;
     padding-right: max(12px, env(safe-area-inset-right));
-    box-shadow: 0 0 0 0.5px var(--sep), -18px 0 50px -20px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 0 0 0.5px var(--sep), -6px 0 28px -10px rgba(0, 0, 0, 0.16);
     transition: transform 0.42s var(--spring), visibility 0s linear 0.42s;
   }
   body.panel .content > .outline { transition: transform 0.42s var(--spring); }
@@ -331,3 +354,10 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
 .set-seg button { transition: background 0.2s, box-shadow 0.2s, color 0.2s; }
 /* phones: the document's name gets the room, not its folder */
 @media (max-width: 600px) { .doc-head .dfolder { display: none; } }
+
+/* softer base shadows everywhere: small, short and faint, nothing that reads as a hard edge */
+:root { --shadow: 0 0 0 0.5px rgba(30, 25, 15, 0.06), 0 2px 10px -4px rgba(30, 25, 15, 0.1); --shadow-lg: 0 12px 36px -12px rgba(20, 15, 5, 0.2); }
+:root[data-theme="dark"] { --shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 2px 12px -4px rgba(0, 0, 0, 0.45); --shadow-lg: 0 14px 40px -12px rgba(0, 0, 0, 0.55); }
+/* the row buttons don't float on phones, so their fade has nothing to fade into: without this it drifted out
+   to the folder's edge and showed up as a grey streak beside nested documents */
+@media (max-width: 900px) { .lib-acts::before { display: none; } }

@@ -440,7 +440,8 @@ body[data-view="reader"] .crop-ctl { display: none; }
 .page.extra .crop-clip { --fade: var(--card-2); }
 
 .menu-range { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px 0 34px; font-size: 13px; color: var(--ink-2); }
-.menu-range span { flex: 1; white-space: nowrap; }
+.menu-range > span:first-child { flex: 1; white-space: nowrap; }
+.menu-range .stepper { flex: none; }
 .menu-range input { width: 88px; }
 body.has-dock .toasts { bottom: 76px; }
 body.has-dock .content { padding-bottom: 50vh; }

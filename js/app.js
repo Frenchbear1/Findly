@@ -416,6 +416,7 @@ function webEl(v, doc, R) {
   art.append(el('header', 'page-head', webHeadHtml(v, doc)), body);
   v.pageEls.set(pkey(doc.id, WEB), art);
   io.observe(art);
+  nearTopIO.observe(art);
   ioFar.observe(art);
   return art;
 }
@@ -497,6 +498,7 @@ function pageEl(v, doc, n, R) {
   art.append(head, body);
   v.pageEls.set(ctx ? `${pkey(doc.id, n)}@${groupKey(R, doc)}` : pkey(doc.id, n), art);
   io.observe(art);
+  nearTopIO.observe(art);
   ioFar.observe(art);
   return art;
 }
@@ -6504,15 +6506,26 @@ let lastScrollY = 0;
 // beneath it); until then it's see-through, so the tabs and arrows beside it show and can be tapped.
 let stuckRaf = 0;
 const stuckNow = new Set();
+// Only pages crossing the top of the screen can have a stuck header, so only those are measured each frame
+// (measuring every page above the screen made scrolling heavier the further down you went).
+const nearTop = new Set();
+const nearTopIO = new IntersectionObserver((es) => {
+  for (const e of es) {
+    if (e.isIntersecting) { nearTop.add(e.target); if (barMax) placeHeads(e.target, Math.round(barOff)); } // catch up as it arrives
+    else nearTop.delete(e.target);
+  }
+}, { rootMargin: '0px 0px -55% 0px' });
 function markStuck() {
   if (stuckRaf) return;
   stuckRaf = requestAnimationFrame(() => {
     stuckRaf = 0;
     const view = document.body.dataset.view === 'reader' ? $('#reader') : $('#results');
     const now = new Set();
-    for (const art of view.querySelectorAll('.page:not([hidden])')) {
+    for (const art of nearTop) {
+      if (!art.isConnected) { nearTop.delete(art); continue; }
+      if (art.hidden || !view.contains(art)) continue;
       const a = art.getBoundingClientRect();
-      if (a.top > 320) break;
+      if (a.top > 320) continue;
       if (a.bottom < 0) continue;
       const head = art.firstElementChild;
       if (head?.classList.contains('page-head') && head.getBoundingClientRect().top - a.top > 0.5) now.add(head);
@@ -6538,15 +6551,40 @@ const safeProbe = () => {
   if (!p) { p = el('div'); p.id = 'safeProbe'; p.style.cssText = 'position:fixed;top:0;left:0;width:0;height:env(safe-area-inset-top);visibility:hidden;pointer-events:none'; document.body.append(p); }
   return p.offsetHeight;
 };
+let barSafe = 0;
 function measureBar() {
+  barSafe = safeProbe();
   const t = $('.topbar');
   barMax = t ? t.offsetHeight + 2 : 0; // all the way out; the sticky headers stop under the status bar (see ios.css)
 }
-function putBar(v) {
-  barOff = Math.max(0, Math.min(barMax, v));
-  document.documentElement.style.setProperty('--bar-off', `${barOff.toFixed(1)}px`);
+// Smoothness: the offset is drawn once per frame, in whole pixels (half pixels make the bar and its text
+// shimmer), and only on what moves: the bar and the headers of the few pages at the top of the screen.
+// (A shared CSS variable made every element in the results restyle each frame, thousands on PDF pages.)
+let barDrawn = -1, barRaf = 0;
+function placeHeads(art, px) {
+  if (!isPhone()) return;
+  const safe = barSafe, topH = Math.max(0, barMax - 2);
+  const t = Math.max(safe, topH - px);
+  const sec = art.closest('.doc-sec');
+  const dh = sec?.querySelector(':scope > .doc-head');
+  if (dh) dh.style.top = `${t}px`;
+  const ph = art.firstElementChild;
+  if (ph?.classList.contains('page-head')) ph.style.top = `${active === reader || sec?.classList.contains('same-doc') ? t : t + 48}px`;
+}
+function drawBar() {
+  barRaf = 0;
+  const px = Math.round(barOff);
+  if (px === barDrawn) return;
+  barDrawn = px;
+  const tb = $('.topbar');
+  if (tb) tb.style.transform = px ? `translateY(${-px}px)` : '';
+  for (const art of nearTop) placeHeads(art, px);
   document.body.classList.toggle('bar-hidden', barMax > 0 && barOff >= barMax - 0.5);
   markStuck();
+}
+function putBar(v) {
+  barOff = Math.max(0, Math.min(barMax, v));
+  if (!barRaf) barRaf = requestAnimationFrame(drawBar);
 }
 function glideBar(to, ms = 240) {
   cancelAnimationFrame(barAnim);
@@ -6556,6 +6594,8 @@ function glideBar(to, ms = 240) {
   const step = (t) => {
     const k = Math.min(1, (t - t0) / ms);
     putBar(from + (to - from) * (1 - Math.pow(1 - k, 3)));
+    cancelAnimationFrame(barRaf);
+    drawBar(); // already inside a frame: draw now, not next frame
     if (k < 1) barAnim = requestAnimationFrame(step);
   };
   barAnim = requestAnimationFrame(step);
