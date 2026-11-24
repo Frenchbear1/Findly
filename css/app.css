@@ -1650,3 +1650,63 @@ article.page.dragging .col-nav, article.page.dragging .col-drag:not(.on) { opaci
 
 /* the app keeps the reading position itself as pages settle (sizeRO in app.js); the browser's own anchoring would double it */
 html, body { overflow-anchor: none; }
+
+/* Settings: how often to check for updates */
+.set-every .stepper { flex: none; }
+.set-every .stepper output { min-width: 24px; }
+@media (max-width: 900px) {
+  /* the number sits beside "How often"; days, weeks or months on the line under it */
+  .set-row.static.set-every .set-t { flex: 1 1 auto; }
+  .set-row.static.set-every .set-seg { margin-left: 42px; }
+  .set-row.set-every .set-units button { flex: 1; }
+  .set-row.set-every .set-units { flex: 1 1 calc(100% - 42px); display: flex; }
+}
+
+/* Review sheet (pick what to remove, what to update…): grouped cards, round checks, a footer that stays */
+.review { overflow-x: clip; display: flex; flex-direction: column; padding-bottom: 0; }
+.review > header h3 { font-size: 21px; font-weight: 750; letter-spacing: -0.02em; }
+.review > p.muted { margin: 4px 0 14px; line-height: 1.4; }
+.review-bulk { margin: 0 0 2px; gap: 8px; }
+.review-bulk .link { height: 30px; padding: 0 12px; border-radius: 15px; font-size: 13px; font-weight: 600; background: var(--accent-soft); color: var(--accent); }
+.review-bulk .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.review-bulk .link:not(:focus-visible) { outline: 0; }
+.review-bulk .muted { font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.review-list h4 { margin: 18px 4px 7px; font-size: 12px; font-weight: 650; }
+.rgroup { border-radius: 14px; background: color-mix(in srgb, var(--bg) 70%, var(--card)); overflow: hidden; }
+.rgroup:empty { display: none; }
+.rgroup .rrow { margin: 0; padding: 12px 14px; border-radius: 0; gap: 12px; align-items: center; }
+.rgroup .rrow + .rrow { box-shadow: inset 0 0.5px 0 var(--line); }
+.rgroup .rrow:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.rgroup .rrow:active { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.rgroup .rrow.info { padding-left: 14px; }
+.rtext b { font-size: 15px; font-weight: 600; line-height: 1.3; }
+.rtext span { font-size: 13px; line-height: 1.35; }
+/* round checks, iOS style */
+.rrow input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none; flex: none; width: 23px; height: 23px; margin: 0; border-radius: 50%;
+  border: 1.6px solid color-mix(in srgb, var(--ink) 28%, transparent); background: transparent; display: grid; place-items: center;
+  transition: background 0.18s, border-color 0.18s, transform 0.18s var(--pop, ease);
+}
+.rrow input[type="checkbox"]::after {
+  content: ""; width: 11px; height: 6px; margin-top: -3px; border: solid #fff; border-width: 0 0 2.2px 2.2px; transform: rotate(-45deg) scale(0); transition: transform 0.2s cubic-bezier(0.3, 1.5, 0.5, 1);
+}
+.rrow input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+.rrow input[type="checkbox"]:checked::after { transform: rotate(-45deg) scale(1); }
+.rrow input[type="checkbox"]:active { transform: scale(0.9); }
+.rrow.warn input[type="checkbox"]:checked { background: var(--danger); border-color: var(--danger); }
+.review-opts { border-top: 0; margin-top: 14px; padding: 12px 14px; border-radius: 14px; background: color-mix(in srgb, var(--bg) 70%, var(--card)); }
+.review-opts .check-row { margin: 0; align-items: flex-start; font-size: 13.5px; line-height: 1.4; }
+.review-opts .check-row input { flex: none; margin-top: 2px; accent-color: var(--accent); width: 17px; height: 17px; }
+/* the buttons stay at the bottom while the list scrolls under them */
+.review .link-actions {
+  position: sticky; bottom: 0; z-index: 2; margin: 14px -22px 0; padding: 12px 22px max(14px, env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--card) 82%, transparent); -webkit-backdrop-filter: saturate(180%) blur(18px); backdrop-filter: saturate(180%) blur(18px);
+  box-shadow: inset 0 0.5px 0 var(--line);
+}
+/* phones: a full-width sheet from the bottom (an id rule was holding it narrower, off to one side) */
+@media (max-width: 600px) {
+  #reviewDlg, #linkDlg { max-width: none; }
+  #reviewDlg { overflow-y: auto; overscroll-behavior: contain; padding-bottom: 0; }
+  .review { padding: 14px 20px 0; }
+  .review .link-actions { margin: 14px -20px 0; padding-left: 20px; padding-right: 20px; }
+}

@@ -3669,17 +3669,20 @@ function review({ title, intro = '', rows, options = [], apply = 'Apply', cancel
     $('#reviewIntro').innerHTML = intro;
     const boxes = rows.filter((r) => !r.header && !r.info).length;
     $('#reviewBulk').hidden = boxes < 3;
+    let inGroup = false;
     $('#reviewList').innerHTML = rows.map((r, i) => {
       if (r.header) {
         let n = 0;
         for (let j = i + 1; j < rows.length && !rows[j].header; j++) if (!rows[j].info) n++;
         const bulk = n >= 2 && boxes > n ? `<span class="sec-bulk"><button type="button" data-sec="all">All</button><button type="button" data-sec="none">None</button></span>` : '';
-        return `<h4>${esc(r.header)}${bulk}</h4>`;
+        const close = inGroup ? '</div>' : '';
+        inGroup = true;
+        return `${close}<h4>${esc(r.header)}${bulk}</h4><div class="rgroup">`;
       }
       const body = `<span class="rtext"><b>${esc(r.title)}</b><span>${r.detail || ''}</span></span>`;
       if (r.info) return `<div class="rrow info ${r.tone || ''}">${body}</div>`;
       return `<label class="rrow ${r.tone || ''}"><input type="checkbox" data-i="${i}" ${r.checked ? 'checked' : ''}>${body}</label>`;
-    }).join('');
+    }).join('') + (inGroup ? '</div>' : '');
     $('#reviewOpts').innerHTML = options.map((o) => o.choices
       ? `<div class="choice" role="radiogroup" aria-label="${esc(o.label || '')}">${o.label ? `<div class="choice-title">${esc(o.label)}</div>` : ''}${o.choices.map((c) => `<label class="choice-card"><input type="radio" name="opt-${o.id}" data-c="${o.id}" value="${c.value}" ${c.value === o.value ? 'checked' : ''}><span><b>${esc(c.label)}</b><em>${esc(c.hint || '')}</em></span></label>`).join('')}</div>`
       : `<label class="check-row"><input type="checkbox" data-o="${o.id}" ${o.checked ? 'checked' : ''}> ${esc(o.label)}</label>`).join('');
@@ -3721,10 +3724,8 @@ function review({ title, intro = '', rows, options = [], apply = 'Apply', cancel
       const b = e.target.closest('[data-sec]');
       if (!b) return;
       e.preventDefault();
-      for (let n = b.closest('h4').nextElementSibling; n && n.tagName !== 'H4'; n = n.nextElementSibling) {
-        const box = n.querySelector('input');
-        if (box) box.checked = b.dataset.sec === 'all';
-      }
+      const grp = b.closest('h4').nextElementSibling;
+      if (grp) for (const box of grp.querySelectorAll('input')) box.checked = b.dataset.sec === 'all';
       count();
     };
     $('#reviewApply').onclick = () => finish(true);
@@ -4703,6 +4704,17 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
 // ---------- backup ----------
 // One file with everything (documents, folders, linked pages, boards, themes, settings, shortcuts, helper),
 // to save to Files and import on another device.
+// How often linked documents are checked for newer editions: every N days, weeks or months.
+const CHECK_UNITS = { day: 864e5, week: 7 * 864e5, month: 30.44 * 864e5 };
+const checkEvery = () => ({ n: Math.max(1, Math.min(99, Number(prefs.checkN) || 1)), unit: CHECK_UNITS[prefs.checkUnit] ? prefs.checkUnit : 'day' });
+function checkEveryText() {
+  const { n, unit } = checkEvery();
+  if (n === 1) return unit === 'day' ? 'Once a day' : unit === 'week' ? 'Once a week' : 'Once a month';
+  return `Every ${n} ${unit}s`;
+}
+// due a few hours early, so opening the app at a slightly earlier time of day still counts
+const checkDue = () => { const { n, unit } = checkEvery(); return Date.now() - (prefs.lastAutoCheck || 0) > n * CHECK_UNITS[unit] - 4 * 3600e3; };
+
 // ---------- settings: one tidy sheet for everything that isn't searching or reading ----------
 function openSettings() {
   closeMenu();
@@ -4749,7 +4761,8 @@ function openSettings() {
         ${group('Documents from websites', [
           row('helper', bolt, 'Download helper', helper.get() ? 'Set up' : 'Not set up · needed for sites like faa.gov'),
           linked && row('check', refresh, 'Check for updates now', 'Looks for newer editions of linked documents'),
-          row('auto', refresh, 'Check daily', 'When you open the app, once a day', sw(prefs.autoCheck)),
+          row('auto', refresh, 'Check automatically', prefs.autoCheck ? `${checkEveryText()}, when you open the app` : 'Off', sw(prefs.autoCheck)),
+          `<div class="set-row static set-every"${prefs.autoCheck ? '' : ' hidden'}><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg></span><span class="set-t"><b>How often</b></span><span class="stepper set-step"><button type="button" data-s="cn-" aria-label="Less often">${I.minus}</button><output>${checkEvery().n}</output><button type="button" data-s="cn+" aria-label="More">${I.plus}</button></span><span class="seg small set-seg set-units">${['day', 'week', 'month'].map((u) => `<button type="button" data-s="cu-${u}" aria-pressed="${checkEvery().unit === u}">${u[0].toUpperCase() + u.slice(1)}${checkEvery().n === 1 ? '' : 's'}</button>`).join('')}</span></div>`,
         ])}
         ${group('Sync & backup', [
           platform === 'ios' && row('cloud', cloud, 'iCloud sync', cloudOn ? 'On · your Apple devices share one library' : 'Keep iPhone, iPad and Mac in step', sw(cloudOn)),
@@ -4815,7 +4828,20 @@ function openSettings() {
       rowEl.querySelector('small').textContent = k === 'ub' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar: right to undo, left to redo';
       return;
     }
-    if (k === 'auto') { prefs.autoCheck = !prefs.autoCheck; savePrefs(); $('#autoCheck') && ($('#autoCheck').checked = prefs.autoCheck); b.querySelector('.set-sw').classList.toggle('on', prefs.autoCheck); return; }
+    const syncEvery = () => { // the toggle's line and the "how often" row, updated in place
+      const auto = d.querySelector('[data-s="auto"]');
+      auto.querySelector('small').textContent = prefs.autoCheck ? `${checkEveryText()}, when you open the app` : 'Off';
+      auto.querySelector('.set-sw').classList.toggle('on', !!prefs.autoCheck);
+      const ev = d.querySelector('.set-every');
+      ev.hidden = !prefs.autoCheck;
+      const { n, unit } = checkEvery();
+      ev.querySelector('output').textContent = n;
+      ev.querySelector('[data-s="cn-"]').disabled = n <= 1;
+      ev.querySelectorAll('.set-units button').forEach((x) => { const u = x.dataset.s.slice(3); x.setAttribute('aria-pressed', String(u === unit)); x.textContent = u[0].toUpperCase() + u.slice(1) + (n === 1 ? '' : 's'); });
+    };
+    if (k === 'auto') { prefs.autoCheck = !prefs.autoCheck; savePrefs(); $('#autoCheck') && ($('#autoCheck').checked = prefs.autoCheck); syncEvery(); return; }
+    if (k === 'cn-' || k === 'cn+') { prefs.checkN = Math.max(1, Math.min(99, checkEvery().n + (k === 'cn+' ? 1 : -1))); savePrefs(); syncEvery(); return; }
+    if (k.startsWith('cu-')) { prefs.checkUnit = k.slice(3); savePrefs(); syncEvery(); return; }
     if (k === 'cloud') { await toggleCloud(); render(); return; }
     if (k === 'theme') return then(openThemes);
     if (k === 'helper') return then(openHelper);
@@ -6835,7 +6861,7 @@ async function start() {
   nativeSetup();
   const sendTo_ = location.hash.match(/send-to=([A-Z0-9]{6})/i);
   if (sendTo_) { history.replaceState(null, '', location.pathname + location.search); sendTo({ code: sendTo_[1] }); }
-  if (prefs.autoCheck && hasSources() && Date.now() - (prefs.lastAutoCheck || 0) > 20 * 3600e3) {
+  if (prefs.autoCheck && hasSources() && checkDue()) {
     prefs.lastAutoCheck = Date.now();
     savePrefs();
     setTimeout(() => checkSources({ quiet: true }), 1500);
