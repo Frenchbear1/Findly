@@ -142,10 +142,58 @@ export function applyReadingTheme(p) {
   root.style.setProperty('--grain', String(((p.grain ?? 50) / 100) * (dark ? 0.7 : 1)));
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = t.bg;
+  tabColours(root, { page: tokens['--doc-page'], card: tokens['--card'], dark, tint, amt: (p.tintAmt ?? 85) / 100, url, grain: ((p.grain ?? 50) / 100) * (dark ? 0.7 : 1) });
   const extra = [['--paper-img', url ? `url("${url}")` : 'none'], ['--grain', root.style.getPropertyValue('--grain')], ['--tint', root.style.getPropertyValue('--tint')]];
   const css = [...Object.entries(tokens), ...extra].map(([k, v]) => `${k}:${v}`).join(';');
   try { localStorage.setItem(CACHE, JSON.stringify({ css, dark, tint, paper: !!url, auto: (p.rtheme || 'auto') === 'auto' })); } catch {}
   return dark;
+}
+
+// The page tabs between results are drawn in the colour a page actually ends up on screen, so a tab
+// reads as part of its page: the PDF's white paper after the theme's tint (and, in dark themes, the
+// inversion), with the paper grain's average effect folded in. Worked out from the same steps the CSS
+// uses (see .pdf-page::before/::after in app.css).
+const grainAvg = new Map(); // paper url -> { m: average of the multiply layer, s: of the screen layer }, per channel
+function paperAverages(url) {
+  if (grainAvg.has(url)) return grainAvg.get(url);
+  const job = new Promise((res) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const n = 128, c = document.createElement('canvas'); c.width = c.height = n;
+        const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0, n, n);
+        const d = x.getImageData(0, 0, n, n).data, m = [0, 0, 0], sc = [0, 0, 0], k = d.length / 4;
+        for (let i = 0; i < d.length; i += 4) for (let j = 0; j < 3; j++) {
+          const v = d[i + j] / 255;
+          m[j] += Math.min(1, v * 1.8); // brightness(1.8)
+          sc[j] += Math.max(0, Math.min(1, v * 0.42 * 1.7 + (1 - 1.7) / 2)); // brightness(0.42) contrast(1.7)
+        }
+        res({ m: m.map((v) => v / k), s: sc.map((v) => v / k) });
+      } catch { res(null); }
+    };
+    img.onerror = () => res(null);
+    img.src = url;
+  });
+  grainAvg.set(url, job);
+  return job;
+}
+let tabJob = 0;
+async function tabColours(root, o) {
+  const job = ++tabJob;
+  const page = hex(o.page).map((v) => v / 255), card = hex(o.card).map((v) => v / 255);
+  // a white PDF page: light themes multiply the theme's page colour over it; dark themes invert it to
+  // near-black (invert, brightness 0.92, contrast 0.92 leave white at 0.04)
+  let pdf = !o.tint ? [1, 1, 1] : o.dark ? [0.04, 0.04, 0.04] : page.map((v) => 1 - o.amt * (1 - v));
+  let text = card;
+  const av = o.url ? await paperAverages(o.url) : null;
+  if (job !== tabJob) return;
+  if (av) {
+    const grainy = (c, i) => (o.dark ? c + o.grain * av.s[i] * (1 - c) : c * (1 - o.grain * (1 - av.m[i])));
+    if (o.tint) pdf = pdf.map(grainy); // the PDF pages get grain only while they take on the theme
+    text = text.map(grainy);
+  }
+  root.style.setProperty('--tab-pdf', toHex(pdf.map((v) => v * 255)));
+  root.style.setProperty('--tab-text', toHex(text.map((v) => v * 255)));
 }
 
 // ---- the theme bar: a row of cards along the bottom, so you can watch the results change ----
