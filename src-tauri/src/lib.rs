@@ -16,12 +16,60 @@ fn config_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("library-folder.txt"))
 }
 
-/// The library folder: the one you picked, or Documents\Findly until you pick one.
+/// Where the library goes until you pick a folder: a "Findly Library" folder next to Findly.exe, if the app can
+/// write there (an install under Program Files can't), otherwise Documents\Findly.
+fn default_root(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("Findly Library"))) {
+        let probe = dir.join(".findly-write-test");
+        if fs::create_dir_all(&dir).is_ok() && fs::write(&probe, b"").is_ok() {
+            let _ = fs::remove_file(&probe);
+            return Ok(dir);
+        }
+    }
+    Ok(app.path().document_dir().map_err(|e| e.to_string())?.join("Findly"))
+}
+
+fn has_files(dir: &Path) -> bool {
+    fs::read_dir(dir).map(|mut r| r.any(|e| e.is_ok())).unwrap_or(false)
+}
+
+/// Moves everything in `from` into `to` (folders too), copying where a plain move can't (another drive).
+fn move_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for e in fs::read_dir(from)? {
+        let e = e?;
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        if dst.exists() { continue; }
+        if fs::rename(&src, &dst).is_err() {
+            if e.file_type()?.is_dir() { move_tree(&src, &dst)?; let _ = fs::remove_dir_all(&src); }
+            else { fs::copy(&src, &dst)?; fs::remove_file(&src)?; }
+        }
+    }
+    Ok(())
+}
+
+static ROOT_READY: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+/// The library folder: the one you picked, or the default (see default_root) until you pick one.
 fn root(app: &AppHandle) -> Result<PathBuf, String> {
     let saved = fs::read_to_string(config_file(app)?).ok().map(|s| PathBuf::from(s.trim())).filter(|p| p.is_dir());
     let dir = match saved {
         Some(p) => p,
-        None => app.path().document_dir().map_err(|e| e.to_string())?.join("Findly"),
+        None => {
+            let dir = default_root(app)?;
+            // once: a library the app used to keep in Documents\Findly (which can sit in OneDrive) moves to the
+            // new place, and that place is remembered from then on
+            ROOT_READY.get_or_init(|| {
+                if let Ok(docs) = app.path().document_dir() {
+                    let old = docs.join("Findly");
+                    if old != dir && old.is_dir() && has_files(&old) && !has_files(&dir) && move_tree(&old, &dir).is_ok() {
+                        let _ = fs::remove_dir(&old); // only if it's now empty
+                        if let Ok(cf) = config_file(app) { let _ = fs::write(cf, dir.to_string_lossy().as_bytes()); }
+                    }
+                }
+            });
+            dir
+        }
     };
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
