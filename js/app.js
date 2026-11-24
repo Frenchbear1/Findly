@@ -452,6 +452,29 @@ function estimate(doc, n, mode = pageMode(doc, n)) {
   return Math.max(150, Math.round(chars * S.pxPerChar * z) + 80);
 }
 
+// Pages start at an estimated height and settle to their real one once drawn (and cropped). When that
+// happens to a page above where you're reading, everything below would jump; instead the scroll moves by
+// the same amount in the same frame, so what's on screen stays still however fast you go. (Done here
+// rather than with the browser's scroll anchoring, which Safari lacks.)
+let anchorQuiet = false;
+function quietAnchor() { anchorQuiet = true; requestAnimationFrame(() => requestAnimationFrame(() => { anchorQuiet = false; })); }
+const sizeRO = new ResizeObserver((es) => {
+  let line = null, shift = 0;
+  for (const e of es) {
+    const art = e.target;
+    const h = e.borderBoxSize?.[0]?.blockSize ?? art.offsetHeight;
+    const was = art._h;
+    art._h = h;
+    if (was == null || !h || Math.abs(h - was) < 0.5 || !art._settling || anchorQuiet || dragging || kept(art) || !art.isConnected) continue;
+    if (line == null) line = Math.max(safeTop(), $('.topbar')?.getBoundingClientRect().bottom || 0);
+    if (art.getBoundingClientRect().top < line - 1) shift += h - was;
+  }
+  if (Math.abs(shift) >= 0.5) {
+    autoScrollUntil = performance.now() + 120; // the top bar isn't moved by our own correction
+    window.scrollBy({ top: shift, behavior: 'instant' });
+  }
+});
+
 // A result that's sliding off sideways, or waiting behind a page you swiped to, keeps what it has drawn.
 const kept = (art) => art.hidden || !!art._visit || !!art._busy || art.style.position === 'absolute';
 const io = new IntersectionObserver(
@@ -499,6 +522,7 @@ function pageEl(v, doc, n, R) {
   art.append(head, body);
   v.pageEls.set(ctx ? `${pkey(doc.id, n)}@${groupKey(R, doc)}` : pkey(doc.id, n), art);
   io.observe(art);
+  sizeRO.observe(art);
   nearTopIO.observe(art);
   ioFar.observe(art);
   return art;
@@ -516,6 +540,7 @@ function fill(art) {
   const mode = art._flat && doc.kind === 'html' ? 'text' : pageMode(doc, n);
   const ranges = pageRanges(v, doc.id, n, text, art._ctx);
   const token = (art._token = (art._token || 0) + 1);
+  art._settling = true; // its height is about to settle from the estimate (see sizeRO)
   // The old content (if any) stays on screen until the new one is ready, then gets released.
   const swapped = () => { art._prevCleanup?.(); art._prevCleanup = null; };
   const showLoading = () => { if (!body.childElementCount) body.classList.add('loading'); };
@@ -588,11 +613,13 @@ function fill(art) {
     if (mode !== 'original') art._edge = null;
     tabsBeside(art);
     applyCrop(art);
+    noteCropHeight(art, mode === 'original');
     if (mode === 'text' && text.length > 600) {
       const ratio = (body.offsetHeight - 40) / text.length / zoomValue();
       if (ratio > 0.05 && ratio < 2) S.pxPerChar = S.pxPerChar * 0.8 + ratio * 0.2;
     }
     if (v.cur >= 0) markCurrent(v);
+    requestAnimationFrame(() => requestAnimationFrame(() => { if (token === art._token) art._settling = false; }));
   })();
   return art._filled;
 }
@@ -1378,8 +1405,22 @@ function bodyEstimate(art, doc, n) {
   if (!cropWanted(art)) return full;
   const z = zoomValue();
   const orig = pageMode(doc, n) === 'original';
+  // once a few cropped pages have been drawn, their real heights are the best guess for the rest
+  const seen = cropSeen[orig ? 'o' : 't'];
+  if (seen.n >= 2 && seen.key === cropKey()) return Math.min(full, Math.round(seen.avg * z));
   const line = (orig ? (BASE_W * z * S.pageAspect) / 52 : 16.5 * 1.66 * z) * (orig && prefs.columns ? 2 : 1);
   return Math.min(full, Math.round(line * (2 * (Number(prefs.cropLines) || 3) + 2) + 70));
+}
+const cropSeen = { o: { n: 0, avg: 0, key: '' }, t: { n: 0, avg: 0, key: '' } };
+const cropKey = () => `${prefs.cropLines}|${!!prefs.columns}|${!!prefs.trim}`;
+function noteCropHeight(art, orig) {
+  if (!art._band || !cropWanted(art)) return;
+  const h = art.lastElementChild.offsetHeight / zoomValue();
+  if (!h) return;
+  const s = cropSeen[orig ? 'o' : 't'], k = cropKey();
+  if (s.key !== k) { s.key = k; s.n = 0; s.avg = 0; }
+  s.avg = s.n ? s.avg + (h - s.avg) / Math.min(s.n + 1, 30) : h;
+  s.n++;
 }
 let recropT = 0;
 function recropAll() {
@@ -1684,8 +1725,8 @@ function gapEl(doc, a, b, count, R) {
   // Tabs on the right, like a notebook's: "next page" hangs off the bottom of the page above, "page before"
   // sticks up from the top of the page below. (Pages past the end of the document have no tab.)
   const unfold = '<svg viewBox="0 0 24 24"><path d="M8 7l4-4 4 4M8 17l4 4 4-4"/></svg>';
-  const down = a >= 0 ? `<button class="gap-tab down" data-act="after" title="Show page ${esc(plabel(doc, a + 1))}">${I.down}Page ${esc(plabel(doc, a + 1))}</button>` : '';
-  const up = b < count && (hidden > 1 || a < 0) ? `<button class="gap-tab up" data-act="before" title="Show page ${esc(plabel(doc, b - 1))}">${I.up}Page ${esc(plabel(doc, b - 1))}</button>` : '';
+  const down = a >= 0 ? `<button class="gap-tab down" data-act="after" title="Show page ${esc(plabel(doc, a + 1))}">${I.down}${esc(plabel(doc, a + 1))}</button>` : '';
+  const up = b < count && (hidden > 1 || a < 0) ? `<button class="gap-tab up" data-act="before" title="Show page ${esc(plabel(doc, b - 1))}">${I.up}${esc(plabel(doc, b - 1))}</button>` : '';
   const all = '';
   g.classList.toggle('has-down', !!down);
   g.classList.toggle('has-up', !!up);
@@ -5792,6 +5833,7 @@ function captureAnchor() {
   return { art, y, ratio: (y - r.top) / Math.max(1, r.height) };
 }
 function restoreAnchor(a) {
+  quietAnchor();
   if (!a || !a.art.isConnected) return;
   const r = a.art.getBoundingClientRect();
   window.scrollBy({ top: r.top + a.ratio * r.height - a.y, behavior: 'instant' });
@@ -6596,7 +6638,8 @@ const BAR_EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
 // The top bar follows your finger: it slides up by exactly as much as you scroll down (and back down as you
 // scroll up), the sticky headers move with it, and nothing jumps. When you let go a half-out bar finishes the
 // way you were going: scrolling down tucks it away, pulling back up brings it all the way in.
-let barOff = 0, barMax = 0, barAnim = 0, barSnapT = 0, touching = false, barDir = 1;
+let barOff = 0, barMax = 0, barAnim = 0, barSnapT = 0, touching = false, barDir = 1, barRun = 0, barGoal = 0;
+const BAR_MS = 320; // how long the bar takes to glide out or in
 const safeProbe = () => {
   let p = $('#safeProbe');
   if (!p) { p = el('div'); p.id = 'safeProbe'; p.style.cssText = 'position:fixed;top:0;left:0;width:0;height:env(safe-area-inset-top);visibility:hidden;pointer-events:none'; document.body.append(p); }
@@ -6645,13 +6688,15 @@ function putBar(v) {
   if (!barRaf) barRaf = requestAnimationFrame(drawBar);
 }
 function glideBar(to, ms = 240) {
+  barGoal = to;
   cancelAnimationFrame(barAnim);
   const from = barOff;
   if (Math.abs(to - from) < 0.5) { putBar(to); return; }
   const t0 = performance.now();
   const step = (t) => {
     const k = Math.min(1, (t - t0) / ms);
-    putBar(from + (to - from) * (1 - Math.pow(1 - k, 3)));
+    const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2; // ease in and out
+    putBar(from + (to - from) * e);
     cancelAnimationFrame(barRaf);
     drawBar(); // already inside a frame: draw now, not next frame
     if (k < 1) barAnim = requestAnimationFrame(step);
@@ -6659,6 +6704,7 @@ function glideBar(to, ms = 240) {
   barAnim = requestAnimationFrame(step);
 }
 function settleBar() {
+  return; // the bar glides on its own now (see onScrollBars)
   if (touching) return; // wait until the finger is off and the scroll has come to rest
   if (barOff > 0 && barOff < barMax) glideBar(barDir < 0 ? 0 : barMax);
 }
@@ -6676,16 +6722,16 @@ function onScrollBars() {
   lastScrollY = y;
   if (performance.now() < autoScrollUntil) return;
   if (!isPhone() || document.activeElement === q || document.body.classList.contains('drawer') || $('.pop-menu')) {
-    if (barOff) glideBar(0);
+    if (barOff && barGoal !== 0) glideBar(0);
     return;
   }
   if (!barMax || barView !== (document.body.dataset.view || '')) measureBar();
-  cancelAnimationFrame(barAnim);
-  if (Math.abs(dy) >= 2) barDir = Math.sign(dy);
-  // near the top the bar can't be further out than the page has scrolled, so it's fully back by the time you get there
-  putBar(Math.min(barOff + dy, Math.max(0, y)));
-  clearTimeout(barSnapT);
-  barSnapT = setTimeout(settleBar, 160);
+  // The bar doesn't follow your finger: once you've scrolled a little one way it glides all the way out
+  // (or back in) at an easy pace, and stays put until you turn around.
+  if (Math.sign(dy) !== Math.sign(barRun)) barRun = 0;
+  barRun += dy;
+  const want = y <= 4 ? 0 : barRun > 14 ? barMax : barRun < -14 ? 0 : null;
+  if (want != null && want !== barGoal) { barGoal = want; glideBar(want, BAR_MS); }
 }
 
 // ---------- scrubbers: glass bars standing in for the scroll bars ----------
