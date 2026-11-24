@@ -2,7 +2,7 @@
 // A theme is a background, a page colour, an ink colour, an accent and a paper; everything else is derived.
 
 export const THEMES = [
-  { id: 'auto', name: 'Match system', auto: true },
+  { id: 'auto', name: 'System', auto: true },
   { id: 'daylight', name: 'Daylight', bg: '#f5f4f1', page: '#ffffff', ink: '#1b1b1d', accent: '#2f54eb', paper: 'smooth' },
   { id: 'paper', name: 'Paper', bg: '#ece8df', page: '#f9f7f1', ink: '#25231f', accent: '#3a5bd9', paper: 'fine' },
   { id: 'cream', name: 'Cream', bg: '#e9dfc6', page: '#f6eed9', ink: '#2f281d', accent: '#a0612a', paper: 'book' },
@@ -21,7 +21,7 @@ export const THEMES = [
 // Real paper: scanned textures (Subtle Patterns, CC BY-SA 3.0 — see vendor/paper/LICENSE.txt), evened out
 // around mid-grey so they give any page colour its grain.
 export const PAPERS = [
-  { id: 'theme', name: 'Theme’s paper' },
+  { id: 'theme', name: 'Automatic' },
   { id: 'smooth', name: 'Smooth' },
   { id: 'fine', name: 'Fine' },
   { id: 'book', name: 'Book' },
@@ -34,7 +34,9 @@ export const PAPERS = [
   { id: 'felt', name: 'Felt' },
   { id: 'card', name: 'Cardstock' },
 ];
-export const THEME_DEFAULTS = { rtheme: 'auto', tint: true, tintAmt: 85, pageLift: null, paper: 'theme', grain: 50, custom: { h: 38, s: 32, b: 86 } };
+export const THEME_DEFAULTS = { rtheme: 'auto', tint: true, tintAmt: 85, pageLift: null, paper: 'theme', grain: 50, accent: null, custom: { h: 38, s: 32, b: 86 } };
+// accent colours to pick from (null = the theme's own); lifted a little on dark themes so they stay readable
+export const ACCENTS = ['#2f54eb', '#5e5ce6', '#9b51e0', '#d6457b', '#e0533d', '#d9820f', '#2f9e44', '#0e9aa7', '#5f6b7a'];
 // absolute, because a url() inside a CSS variable resolves against the stylesheet that uses it
 const paperUrl = (id) => (id && id !== 'smooth' ? new URL(`vendor/paper/${id}.webp`, document.baseURI).href : '');
 
@@ -66,6 +68,11 @@ export function customTheme({ h = 38, s = 32, b = 86 } = {}) {
 
 const systemDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
 export function resolveTheme(p) {
+  const t = baseTheme(p);
+  if (!p.accent) return t;
+  return { ...t, accent: t.dark ? mix(p.accent, '#ffffff', 0.3) : p.accent };
+}
+function baseTheme(p) {
   const id = p.rtheme || 'auto';
   if (id === 'custom') return customTheme(p.custom || THEME_DEFAULTS.custom);
   if (id === 'auto') return THEMES.find((t) => t.id === (systemDark() ? 'night' : 'daylight'));
@@ -173,28 +180,44 @@ export function openThemeBar(prefs, { save }) {
     const lift = prefs.pageLift ?? themeLift(t);
     const c = prefs.custom || THEME_DEFAULTS.custom;
     let body = '';
+    const field = (label, value, input, ends, extra = '') => `<div class="tb-field"${extra}><div class="tb-lab"><b>${label}</b><output>${value}</output></div>${input}${ends ? `<div class="tb-ends"><span>${ends[0]}</span><span>${ends[1]}</span></div>` : ''}</div>`;
+    const pct = (v) => `${Math.round(v)}%`;
     if (tab === 'colours') {
       body = `<div class="tbar-scroll"><button class="tbar-arrow l" data-scroll="-1" aria-label="Scroll left" hidden>${CHEV}</button><div class="tbar-row">${THEMES.map((x) => themeCard(x, (prefs.rtheme || 'auto') === x.id)).join('')}</div><button class="tbar-arrow r" data-scroll="1" aria-label="Scroll right" hidden>${CHEV}</button></div>
         ${prefs.rtheme === 'custom' ? `<div class="tbar-sliders">
-          <label class="th-slider"><span>Hue</span><input type="range" min="0" max="360" value="${c.h}" data-k="h" class="hue" style="--sat:${Math.max(20, c.s * 1.4)}%"></label>
-          <label class="th-slider"><span>Colour</span><input type="range" min="0" max="60" value="${c.s}" data-k="s"></label>
-          <label class="th-slider"><span>Brightness</span><input type="range" min="0" max="100" value="${c.b}" data-k="b" class="bright"></label></div>` : ''}`;
+          ${field('Hue', `${c.h}°`, `<input type="range" min="0" max="360" value="${c.h}" data-k="h" class="hue" style="--sat:${Math.max(20, c.s * 1.4)}%">`)}
+          ${field('Colour', pct((c.s / 60) * 100), `<input type="range" min="0" max="60" value="${c.s}" data-k="s">`, ['Grey', 'Rich'])}
+          ${field('Brightness', pct(c.b), `<input type="range" min="0" max="100" value="${c.b}" data-k="b" class="bright">`, ['Dark', 'Light'])}</div>`
+        : `<p class="tbar-note">${(prefs.rtheme || 'auto') === 'auto' ? 'Light by day, dark by night: follows your phone’s appearance setting.' : 'Pick <b>Custom</b> at the end of the row to mix your own.'}</p>`}`;
     } else if (tab === 'paper') {
+      const eff = (prefs.paper || 'theme') === 'theme' ? t.paper || 'smooth' : prefs.paper;
+      const effName = PAPERS.find((x) => x.id === eff)?.name || 'Smooth';
+      const g = prefs.grain ?? 50;
       body = `<div class="tbar-scroll"><button class="tbar-arrow l" data-scroll="-1" aria-label="Scroll left" hidden>${CHEV}</button><div class="tbar-row">${PAPERS.map((pp) => paperCard(pp, (prefs.paper || 'theme') === pp.id, t)).join('')}</div><button class="tbar-arrow r" data-scroll="1" aria-label="Scroll right" hidden>${CHEV}</button></div>
-        <div class="tbar-sliders"><label class="th-slider"><span>Grain</span><input type="range" min="0" max="100" value="${prefs.grain ?? 50}" data-grain></label></div>
-        <p class="tbar-credit">Paper textures: Subtle Patterns, CC BY-SA 3.0</p>`;
+        <div class="tbar-sliders">
+          ${eff === 'smooth'
+            ? `<p class="tbar-note">${(prefs.paper || 'theme') === 'theme' ? `Automatic picks <b>Smooth</b> for this theme: plain pages, no texture.` : 'Smooth pages have no texture.'} Pick another paper to add grain.</p>`
+            : `${(prefs.paper || 'theme') === 'theme' ? `<p class="tbar-note">Automatic picks <b>${effName}</b> for this theme.</p>` : ''}${field('Grain', g ? pct(g) : 'Off', `<input type="range" min="0" max="100" value="${g}" data-grain>`, ['Faint', 'Strong'])}`}
+        </div>
+        <p class="tbar-credit">Paper textures from Subtle Patterns (CC BY-SA 3.0)</p>`;
     } else {
+      const tint = prefs.tint !== false;
+      const liftWord = (v) => (v === 0 ? 'Same' : v > 0 ? `Lighter ${v}` : `Darker ${-v}`);
+      const changed = prefs.pageLift != null || prefs.accent || !tint || (prefs.tintAmt ?? 85) !== 85;
       body = `<div class="tbar-sliders">
-        <label class="th-slider lift"><span>Page vs background</span><input type="range" min="-100" max="100" value="${lift}" data-lift><button class="link-btn" data-lift-reset ${prefs.pageLift == null ? 'hidden' : ''}>Reset</button></label>
-        <p class="tbar-hint"><span>← darker than the background</span><span>lighter →</span></p>
-        <label class="th-switch"><span><b>Theme the pages</b><small>PDF pages take on the theme’s colour and paper (dark themes turn pages dark)</small></span><input type="checkbox" data-tint ${prefs.tint !== false ? 'checked' : ''}><i></i></label>
-        <label class="th-slider"${prefs.tint !== false ? '' : ' hidden'}><span>Strength</span><input type="range" min="10" max="100" value="${prefs.tintAmt ?? 85}" data-amt></label>
+        ${field('Page brightness', `${liftWord(lift)}${prefs.pageLift == null ? ' · theme’s' : ''}`, `<input type="range" min="-100" max="100" value="${lift}" data-lift>`, ['Darker than background', 'Lighter'])}
+        <div class="tb-field"><div class="tb-lab"><b>Accent colour</b><output>${prefs.accent ? 'Custom' : 'Theme’s'}</output></div>
+          <div class="tb-dots" role="group" aria-label="Accent colour"><button class="tb-dot auto${prefs.accent ? '' : ' on'}" data-accent="" style="--c:${baseTheme(prefs).accent}" aria-label="Theme’s accent"></button>${ACCENTS.map((a) => `<button class="tb-dot${prefs.accent === a ? ' on' : ''}" data-accent="${a}" style="--c:${t.dark ? mix(a, '#ffffff', 0.3) : a}" aria-label="Accent ${a}"></button>`).join('')}</div></div>
+        <label class="th-switch"><span><b>Colour the PDF pages</b><small>Pages take on the theme’s colour and paper${t.dark ? '. Dark themes turn them dark.' : ''}</small></span><input type="checkbox" data-tint ${tint ? 'checked' : ''}><i></i></label>
+        ${field('How much', pct(prefs.tintAmt ?? 85), `<input type="range" min="10" max="100" value="${prefs.tintAmt ?? 85}" data-amt>`, ['A hint', 'Fully'], tint ? '' : ' hidden')}
+        <button class="tb-reset" data-reset ${changed ? '' : 'disabled'}>Reset these</button>
       </div>`;
     }
     bar.innerHTML = `<div class="tbar-head">
         <div class="seg small tbar-tabs">${[['colours', 'Colours'], ['paper', 'Paper'], ['adjust', 'Adjust']].map(([k, l]) => `<button data-tab="${k}" aria-pressed="${tab === k}">${l}</button>`).join('')}</div>
-        <button class="icon-btn sm" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        <button class="tbar-done" data-close>Done</button>
       </div><div class="tbar-body">${body}</div>`;
+    bar.querySelectorAll('.tb-field input[type="range"]').forEach(fillTrack);
     if (centre) bar.querySelector('.tcard.on')?.scrollIntoView({ block: 'nearest', inline: 'center' });
     scrollable(bar.querySelector('.tbar-row'));
   };
@@ -208,16 +231,30 @@ export function openThemeBar(prefs, { save }) {
     if (th) { prefs.rtheme = th.dataset.theme; apply(); keepScroll(() => render()); return; }
     const pp = e.target.closest('.tcard[data-paper]');
     if (pp) { prefs.paper = pp.dataset.paper; apply(); keepScroll(() => render()); return; }
-    if (e.target.closest('[data-lift-reset]')) { prefs.pageLift = null; apply(); render(); }
+    const ac = e.target.closest('[data-accent]');
+    if (ac) { prefs.accent = ac.dataset.accent || null; apply(); render(); return; }
+    if (e.target.closest('[data-reset]')) { prefs.pageLift = null; prefs.accent = null; prefs.tint = true; prefs.tintAmt = 85; apply(); render(); }
   };
   bar.oninput = (e) => {
     const t = e.target;
     if (t.dataset.k) { prefs.custom = { ...(prefs.custom || THEME_DEFAULTS.custom), [t.dataset.k]: Number(t.value) }; prefs.rtheme = 'custom'; }
     else if (t.hasAttribute('data-grain')) prefs.grain = Number(t.value);
-    else if (t.hasAttribute('data-lift')) { prefs.pageLift = Number(t.value); bar.querySelector('[data-lift-reset]').hidden = false; }
+    else if (t.hasAttribute('data-lift')) prefs.pageLift = Number(t.value);
     else if (t.hasAttribute('data-amt')) prefs.tintAmt = Number(t.value);
-    else if (t.hasAttribute('data-tint')) { prefs.tint = t.checked; bar.querySelector('[data-amt]').closest('label').hidden = !t.checked; }
+    else if (t.hasAttribute('data-tint')) { prefs.tint = t.checked; bar.querySelector('[data-amt]').closest('.tb-field').hidden = !t.checked; }
     else return;
+    if (t.type === 'range') fillTrack(t);
+    // the value beside the label follows the slider
+    const out = t.closest('.tb-field')?.querySelector('output');
+    if (out) {
+      const v = Number(t.value);
+      out.textContent = t.dataset.k === 'h' ? `${v}°` : t.dataset.k === 's' ? `${Math.round((v / 60) * 100)}%`
+        : t.hasAttribute('data-lift') ? (v === 0 ? 'Same' : v > 0 ? `Lighter ${v}` : `Darker ${-v}`)
+        : t.hasAttribute('data-grain') ? (v ? `${v}%` : 'Off') : `${v}%`;
+    }
+    if (t.dataset.k === 'h' || t.dataset.k === 's') { const hue = bar.querySelector('input.hue'); if (hue) hue.style.setProperty('--sat', `${Math.max(20, (prefs.custom.s || 0) * 1.4)}%`); }
+    const rs = bar.querySelector('[data-reset]');
+    if (rs) rs.disabled = false;
     applyReadingTheme(prefs);
     commit();
   };
@@ -226,6 +263,7 @@ export function openThemeBar(prefs, { save }) {
   document.body.classList.add('tbar-open');
   bar.animate([{ transform: 'translateY(105%)' }, { transform: 'none' }], { duration: 300, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
 }
+const fillTrack = (r) => r.style.setProperty('--fillpct', `${((r.value - r.min) / (r.max - r.min)) * 100}%`);
 const CHEV = '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
 // A row of cards you can move with the mouse wheel, by dragging, or with the arrows at its ends.
 function scrollable(row) {
