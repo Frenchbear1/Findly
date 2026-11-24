@@ -1065,6 +1065,8 @@ function colPlan(art, content) {
     if (g) { g.bot = Math.max(g.bot, h.bot); g.top = Math.min(g.top, h.top); }
     else groups.push({ ...h });
   }
+  // one crop per page: hits in more than one place (or column) get one band around them all, full width
+  if (groups.length > 1) return null;
   // reading order: down the left column, then the next one
   groups.sort((a, b) => (a.cols ? a.cols[a.k][0] : 0) - (b.cols ? b.cols[b.k][0] : 0) || a.top - b.top);
   const opened = art._colOpen || {};

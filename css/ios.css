@@ -375,3 +375,23 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
   .jump input { height: 34px; border-radius: 10px; }
   .back-btn { height: 34px; border-radius: 10px; }
 }
+
+/* drag bars and page tabs are glass like the bars: they follow Glass › Transparency and Blur */
+.edge-drag i, .col-drag i {
+  background: color-mix(in srgb, color-mix(in srgb, var(--card) 62%, var(--ink)) var(--a-head, 78%), transparent);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--ink) 18%, transparent), 0 1px 4px rgba(0, 0, 0, 0.1);
+  opacity: 1;
+}
+.edge-drag i { height: 7px; border-radius: 4px; }
+.col-drag i { width: 7px; border-radius: 4px; }
+.edge-drag.on i, .col-drag.on i { background: color-mix(in srgb, color-mix(in srgb, var(--card) 45%, var(--ink)) var(--a-head, 78%), transparent); }
+.gap-tab { background: color-mix(in srgb, var(--card) var(--a-head, 78%), transparent); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+
+/* the page tabs meet the page edge exactly: the spacing below a page and the header's height are fixed to
+   what the tabs' offsets assume */
+@media (max-width: 900px) {
+  .page { margin-bottom: 14px; }
+  .page-head { box-sizing: border-box; height: 40px; min-height: 40px; padding-bottom: 6px !important; }
+  .gap.has-up { margin-bottom: -40px; }
+}
