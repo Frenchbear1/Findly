@@ -397,3 +397,9 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
   /* clear of the page's rounded corner, so the tab's flare lands on the straight edge */
   .gap { padding-right: 28px; }
 }
+/* a swipe on the bottom bar that started on a button: that button slides with the rest and lets go of its
+   pressed look (the press shrink would otherwise replace the slide and hold it in place) */
+@media (max-width: 900px) {
+  .mbar.swiping > :not(.swipe-hint), .mbar.swiping > :not(.swipe-hint):active { transform: translateX(var(--swx, 0px)) !important; }
+  .mbar.swiping > :active, .mbar.swiping .m-mode:active, .mbar.swiping .m-undo:active, .mbar.swiping .m-count:active { background: transparent !important; }
+}
