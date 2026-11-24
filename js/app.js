@@ -4265,7 +4265,7 @@ function openSettings() {
   const disk = '<svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>';
   const render = () => {
     const linked = hasSources();
-    d.innerHTML = `<div class="set-sheet">
+    d.innerHTML = `<div class="set-sheet" tabindex="-1" autofocus>
       <i class="set-grab" aria-hidden="true"></i>
       <header class="set-head"><h3>Settings</h3><button class="icon-btn sm" data-s="x" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
       <div class="set-body">
