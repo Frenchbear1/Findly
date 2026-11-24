@@ -1644,3 +1644,32 @@ article.page.dragging .col-nav, article.page.dragging .col-drag:not(.on) { opaci
   box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--ink) 12%, transparent), 0 6px 18px -8px rgba(0, 0, 0, 0.25);
 }
 .page-head.stuck { padding-top: 6px; }
+
+/* Scrubbers: glass bars standing in for the scroll bars (see scrub.js) */
+html, .lib-zone, #outlineList { scrollbar-width: none; }
+html::-webkit-scrollbar, body::-webkit-scrollbar, .lib-zone::-webkit-scrollbar, #outlineList::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.scrub { position: fixed; z-index: 25; width: 64px; pointer-events: none; opacity: 0; transition: opacity 0.35s; }
+.scrub.on { opacity: 0.6; }
+.scrub.on.awake, .scrub.on.held { opacity: 1; }
+.scrub-fill, .scrub-line { position: absolute; inset: 0; width: 100%; height: 100%; }
+.scrub-fill {
+  background: color-mix(in srgb, var(--card) var(--a-head, 78%), transparent);
+  -webkit-backdrop-filter: var(--blur, saturate(180%) blur(22px)); backdrop-filter: var(--blur, saturate(180%) blur(22px));
+}
+.scrub-line { overflow: visible; }
+.scrub-line path { fill: none; stroke: color-mix(in srgb, var(--ink) 16%, transparent); stroke-width: 0.75; vector-effect: non-scaling-stroke; }
+/* a finger-wide strip to grab, over the bar */
+.scrub-hit { position: absolute; top: 34px; bottom: 34px; right: 0; width: 26px; touch-action: none; }
+.scrub.on .scrub-hit { pointer-events: auto; cursor: grab; }
+.scrub.held .scrub-hit { cursor: grabbing; }
+.scrub-tag {
+  position: fixed; top: 0; z-index: 26; display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+  max-width: 62vw; padding: 7px 13px; border-radius: 14px; pointer-events: none;
+  background: color-mix(in srgb, var(--card) var(--a-head, 78%), transparent);
+  -webkit-backdrop-filter: var(--blur, saturate(180%) blur(22px)); backdrop-filter: var(--blur, saturate(180%) blur(22px));
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--ink) 16%, transparent), 0 6px 20px -8px rgba(0, 0, 0, 0.25);
+  opacity: 0; scale: 0.92; transform-origin: right center; transition: opacity 0.18s, scale 0.25s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+.scrub-tag.on { opacity: 1; scale: 1; }
+.scrub-tag b { font-size: 17px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.scrub-tag small { font-size: 11.5px; font-weight: 500; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
