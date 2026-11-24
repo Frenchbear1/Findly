@@ -50,36 +50,51 @@ export function lineSizes(text, map, items) {
   while (i < text.length) {
     let e = text.indexOf('\n', i);
     if (e < 0) e = text.length;
-    let h = 0;
+    let h = 0, font = undefined;
     while (k < map.length && map[k][0] < e) {
-      if (map[k][0] + map[k][2] > i) { const tr = items[map[k][1]].transform; h = Math.max(h, Math.hypot(tr[2], tr[3]) || items[map[k][1]].height || 0); }
+      if (map[k][0] + map[k][2] > i) {
+        const it = items[map[k][1]], tr = it.transform;
+        h = Math.max(h, Math.hypot(tr[2], tr[3]) || it.height || 0);
+        // the line's font, if the whole line is in one (a bold heading is; a sentence with a bold word isn't)
+        if (it.str.trim()) font = font === undefined ? it.fontName : font === it.fontName ? font : null;
+      }
       k++;
     }
-    if (e > i && h) lines.push([i, e, Math.round(h * 4) / 4]);
+    if (e > i && h) lines.push([i, e, Math.round(h * 4) / 4, font || null]);
     i = e + 1;
   }
   return lines;
 }
 // From every page's lines, the marks for each page: [kind, start, end, …] with kind 1 a heading, 2 a caption.
-export const MARKS_V = 1;
+export const MARKS_V = 2;
 export function marksFrom(pageLines, texts) {
-  // the body size: the type size most of the document's characters are set in
-  const tally = new Map();
-  for (const lines of pageLines) for (const [s, e, h] of lines || []) tally.set(h, (tally.get(h) || 0) + (e - s));
-  let body = 0, most = 0;
-  for (const [h, n] of tally) if (n > most) { most = n; body = h; }
+  // the body: the type size, and the font, most of the document's characters are set in
+  const sizes = new Map(), fonts = new Map();
+  for (const lines of pageLines) for (const [s, e, h, f] of lines || []) {
+    sizes.set(h, (sizes.get(h) || 0) + (e - s));
+    if (f) fonts.set(f, (fonts.get(f) || 0) + (e - s));
+  }
+  const top = (m) => { let best = null, most = 0; for (const [k, n] of m) if (n > most) { most = n; best = k; } return [best, most]; };
+  const [body] = top(sizes);
+  const [bodyFont, bodyChars] = top(fonts);
   return pageLines.map((lines, n) => {
     if (!lines) return null;
     const t = texts[n] || '';
     const out = [];
-    for (const [s, e, h] of lines) {
+    for (const [s, e, h, f] of lines) {
       const str = t.slice(s, e).trim();
       if (!/[A-Za-z]{2}/.test(str) || str.length > 160) continue;
       if (/^(figure|fig\.|table|exhibit|chart|diagram)\s*[A-Z]?[\d.-]+/i.test(str)) { out.push(2, s, e); continue; }
-      const big = body && h >= body * 1.15;
+      if (/\.{4,}|…{2,}/.test(str)) continue; // a contents line with dot leaders
+      const big = body && h >= body * 1.15 && str.length <= 120 && !/^\d+([.-]\d+)*$/.test(str);
       // a short line all in capitals, at body size, reads as a heading too
       const caps = str.length <= 70 && str.length >= 4 && /[A-Z]{3}/.test(str) && str === str.toUpperCase() && !/[.,;]$/.test(str);
-      if ((big && str.length <= 120 && !/^\d+([.-]\d+)*$/.test(str)) || caps) out.push(1, s, e);
+      // a whole line in another font than the text (bold, a different face), short, not a sentence carrying on:
+      // the second- and third-level headings set at body size
+      const own = f && bodyFont && f !== bodyFont && (fonts.get(f) || 0) < bodyChars * 0.25
+        && h >= body * 0.95 && str.length >= 3 && str.length <= 100 && /^[A-Z0-9§(]/.test(str) && !/[,;:]$/.test(str)
+        && str.split(/\s+/).length <= 14;
+      if (big || caps || own) out.push(1, s, e);
     }
     return out.length ? out : null;
   });
