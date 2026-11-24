@@ -4429,7 +4429,11 @@ function openSettings() {
       <i class="set-grab" aria-hidden="true"></i>
       <header class="set-head"><h3>Settings</h3><button class="icon-btn sm" data-s="x" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
       <div class="set-body">
-        ${group('Appearance', [row('theme', palette, 'Reading theme', 'Colours, paper and textures')])}
+        ${group('Appearance', [
+          row('theme', palette, 'Reading theme', 'Colours, paper and textures'),
+          `<div class="set-row static set-slide"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18" opacity=".5"/></svg></span><span class="set-t"><b>Transparency</b><small>Search bar, bottom bar, headers and menus</small>
+            <input type="range" min="0" max="100" value="${prefs.glassT ?? 50}" data-glass aria-label="Transparency"><span class="set-ends"><span>Solid</span><span>Clear</span></span></span></div>`,
+        ])}
         ${group('Reading', [
           `<div class="set-row static"><span class="set-ic">${I.undo}</span><span class="set-t"><b>Undo &amp; redo</b><small>${prefs.undoStyle === 'buttons' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar: right to undo, left to redo'}</small></span><span class="seg small set-seg"><button type="button" data-s="ug" aria-pressed="${prefs.undoStyle !== 'buttons'}">Gestures</button><button type="button" data-s="ub" aria-pressed="${prefs.undoStyle === 'buttons'}">Buttons</button></span></div>`,
         ])}
@@ -4457,6 +4461,13 @@ function openSettings() {
         ])}
       </div>
     </div>`;
+  };
+  d.oninput = (e) => {
+    if (!e.target.hasAttribute('data-glass')) return;
+    prefs.glassT = Number(e.target.value);
+    applyGlass();
+    clearTimeout(d._gt);
+    d._gt = setTimeout(savePrefs, 250);
   };
   d.onclick = async (e) => {
     if (e.target === d) return shut();
@@ -4982,6 +4993,18 @@ function bindBarSwipe(el) {
 // ---------- theme ----------
 function applyTheme() {
   applyReadingTheme(prefs);
+  applyGlass();
+}
+// How see-through the bars, buttons and menus are: 0 = solid, 50 = as designed, 100 = nearly clear.
+// Each surface keeps its own designed opacity at 50 and scales from there in both directions.
+const GLASS = { '--a-top': 76, '--a-bar': 40, '--a-menu': 80, '--a-head': 74, '--a-dock': 88 };
+function applyGlass() {
+  const t = Math.max(0, Math.min(100, prefs.glassT ?? 50)) / 100;
+  const root = document.documentElement.style;
+  for (const [k, base] of Object.entries(GLASS)) {
+    const a = t <= 0.5 ? 100 + (base - 100) * (t / 0.5) : base + (6 - base) * ((t - 0.5) / 0.5);
+    root.setProperty(k, `${a.toFixed(1)}%`);
+  }
 }
 function openThemes() {
   closeMenu();
