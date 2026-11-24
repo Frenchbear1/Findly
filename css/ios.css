@@ -228,3 +228,29 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   body.bar-hidden .page-head { top: calc(48px + env(safe-area-inset-top)); }
   body.bar-hidden #reader .page-head, body.bar-hidden .doc-sec.same-doc .page-head { top: env(safe-area-inset-top); }
 }
+
+/* the bottom bar in the results: clear Apple-style glass, every control the same plain glyph on glass */
+@media (max-width: 900px) {
+  .mbar:not([hidden]) {
+    background: color-mix(in srgb, var(--card) 38%, transparent);
+    -webkit-backdrop-filter: saturate(200%) blur(26px) brightness(1.04); backdrop-filter: saturate(200%) blur(26px) brightness(1.04);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.55),          /* light catching the top edge */
+      inset 0 -1px 0 rgba(255, 255, 255, 0.12),
+      0 0 0 0.5px color-mix(in srgb, var(--ink) 14%, transparent),
+      0 14px 40px -14px rgba(0, 0, 0, 0.35);
+  }
+  :root[data-theme="dark"] .mbar:not([hidden]) {
+    background: color-mix(in srgb, var(--card) 34%, transparent);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 0 0 0.5px rgba(255, 255, 255, 0.1), 0 14px 40px -14px rgba(0, 0, 0, 0.6);
+  }
+  .mbar .m-undo { background: transparent; color: var(--ink); font-weight: 650; }
+  .mbar .m-mode { background: transparent; color: var(--ink); font-weight: 650; }
+  .mbar .m-mode:hover { background: transparent; }
+  .m-count { background: transparent; color: var(--ink); }
+  .mb, .mbar .m-mode, .mbar .m-undo, .m-count { transition: background 0.15s, transform 0.3s var(--pop); }
+  .mb:active:not(:disabled), .mb.holding, .mb.menu-open,
+  .mbar .m-mode:active, .mbar .m-mode.pressing, .mbar .m-mode.menu-open,
+  .mbar .m-undo:active, .m-count:active:not(:disabled) { background: color-mix(in srgb, var(--ink) 9%, transparent); color: var(--ink); }
+  .m-count.jogging { background: color-mix(in srgb, var(--ink) 12%, transparent); color: var(--ink); }
+}
