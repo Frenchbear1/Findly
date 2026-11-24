@@ -296,7 +296,7 @@ export function initBoards(api) {
   function itemCard(it, showWhere) {
     const title = it.title || (it.kind === 'note' ? 'Note' : `${it.docName || 'Page'}`);
     // the document's name shows once: as the title when there's no title of your own, or under it
-    const meta = it.kind === 'page' ? `${it.title && it.docName ? `${esc(it.docName)} · ` : ''}Page ${(it.n ?? 0) + 1}` : `Note · ${when(it.updated)}`;
+    const meta = it.kind === 'page' ? `${it.title && it.docName ? `${esc(it.docName)} · ` : ''}Page ${esc(api.pageLabel(it.docId, it.n ?? 0))}` : `Note · ${when(it.updated)}`;
     const body = it.image
       ? `<img src="${imgUrl(it)}" alt="" loading="lazy" width="${it.w || ''}" height="${it.h || ''}">`
       : it.kind === 'note'
@@ -436,7 +436,7 @@ export function initBoards(api) {
           <button class="icon-btn" data-x aria-label="Back">${I.arrowLeft}</button>
           <div class="bi-head">
             <button class="bi-title-t${x.title ? '' : ' def'}" data-edit="title" title="Tap to rename">${esc(x.title || defTitle(x))}</button>
-            ${x.kind === 'page' ? `<div class="bi-sub">${x.title ? `<span>${esc(x.docName || 'Document')}</span> · ` : ''}<button data-edit="page" title="Tap to change the page">Page ${(x.n ?? 0) + 1}</button></div>` : `<div class="bi-sub"><span>Note · ${when(x.updated)}</span></div>`}
+            ${x.kind === 'page' ? `<div class="bi-sub">${x.title ? `<span>${esc(x.docName || 'Document')}</span> · ` : ''}<button data-edit="page" title="Tap to change the page">Page ${esc(api.pageLabel(x.docId, x.n ?? 0))}</button></div>` : `<div class="bi-sub"><span>Note · ${when(x.updated)}</span></div>`}
           </div>
           ${order.length > 1 && at >= 0 ? `<div class="bi-step"><button class="icon-btn sm" data-step="-1" aria-label="Previous post" ${at <= 0 ? 'disabled' : ''}>${I.arrowLeft}</button><small>${at + 1}/${order.length}</small><button class="icon-btn sm nx" data-step="1" aria-label="Next post" ${at >= order.length - 1 ? 'disabled' : ''}>${I.arrowLeft}</button></div>` : ''}
         </header>

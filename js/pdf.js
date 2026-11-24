@@ -52,6 +52,8 @@ export async function extractPdf(bytes, onProgress) {
       page.cleanup();
       onProgress?.(n, doc.numPages);
     }
+    // the page numbers the PDF's maker gave it ("i", "ii", "1-1"…), if any; the caller decides whether to use them
+    try { pages.labels = await doc.getPageLabels(); } catch {}
   } finally {
     doc.destroy();
   }

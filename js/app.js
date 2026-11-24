@@ -3,6 +3,7 @@ import { store, stuckStorage, setDiskPath } from './store.js';
 import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary, diskFile } from './native.js';
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
+import { detectLabels, cleanPdfLabels } from './pagelabels.js';
 import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION } from './pdf.js';
 import { renderHtmlPage, forgetHtml, renderedText } from './htmlview.js';
 import { remoteFetch, remoteInfo, remoteChanged, download, documentLinks, looksLikeDocument, fileNameFor, editionKey, linkKey, linkSimilarity, SAME_DOC_SCORE, helper, NeedsHelper } from './remote.js';
@@ -164,6 +165,26 @@ function orderedDocs() {
   return out;
 }
 const pkey = (docId, n) => `${docId}:${n}`;
+// A page's number as the document prints it ("2-4", "iv"), or its position when it doesn't say.
+const plabel = (doc, n) => doc?.labels?.[n] || String(n + 1);
+const LABELS_V = 1;
+function docLabels(kind, pages, fromPdf) {
+  if (kind !== 'pdf') return null;
+  return cleanPdfLabels(fromPdf, pages.length) || detectLabels(pages);
+}
+// Documents added before page labels existed: read them from the text once, in the background.
+function labelOlderDocs() {
+  const todo = S.docs.filter((d) => d.kind === 'pdf' && !d.status && d.labelsV !== LABELS_V && S.texts.has(d.id));
+  if (!todo.length) return;
+  const step = () => {
+    const d = todo.shift();
+    if (!d) { store.updateDocs(S.docs.filter((x) => x.labelsV === LABELS_V && !x.status).map(stripMeta)).catch(() => {}); return; }
+    d.labels = detectLabels(S.texts.get(d.id) || []);
+    d.labelsV = LABELS_V;
+    setTimeout(step, 0);
+  };
+  setTimeout(step, 1500);
+}
 // A group is one section: a whole document, or (when ranking pages) a single hit page and the pages opened around it.
 const groupKey = (R, doc) => (R?.flat ? pkey(doc.id, R.pages[0].n) : doc.id);
 const searchable = (d) => !d.status;
@@ -457,7 +478,8 @@ function headHtml(v, doc, n, ctx, flat = false) {
     const i = v.list.findIndex((r) => r.flat && r.doc.id === doc.id && r.pages[0].n === n);
     if (i >= 0) rank = `<span class="rank" title="Ranked ${fmt(i + 1)} by hits">${fmt(i + 1)}</span>`;
   }
-  return `${rank}<span class="pno">Page ${n + 1}</span>${badge}<span class="grow"></span>`;
+  const lab = plabel(doc, n);
+  return `${rank}<span class="pno"${lab !== String(n + 1) ? ` title="Page ${lab} · ${fmt(n + 1)} of ${fmt(S.texts.get(doc.id)?.length || 0)} in the file"` : ''}>Page ${esc(lab)}</span>${badge}<span class="grow"></span>`;
 }
 
 function pageEl(v, doc, n, R) {
@@ -533,6 +555,10 @@ function fill(art) {
       showLoading();
       try {
         const pdf = await getPdf(doc.id, () => store.file(doc.id));
+        if (!doc.labelsPdf) { // the PDF's own labels beat ones read from the text
+          doc.labelsPdf = 1;
+          pdf.getPageLabels().then((l) => { const c = cleanPdfLabels(l, pdf.numPages); if (c) doc.labels = c; store.updateDoc(stripMeta(doc)).catch(() => {}); }).catch(() => {});
+        }
         if (token !== art._token) return;
         const r = await renderPdfPage(pdf, n, body, ranges, BASE_W * zoomValue(), { trim: !!prefs.trim, columns: !!prefs.columns && v.kind === 'results' });
         if (token !== art._token) { r.cleanup(); return; }
@@ -1155,7 +1181,7 @@ function visitEl(home, n) {
   art._home = home;
   const info = v.info.get(pkey(doc.id, n));
   const hn = Number(home.dataset.n);
-  const head = el('header', 'page-head', `<span class="pno">Page ${n + 1}</span>${info ? `<span class="phits">${fmt(info.count)}</span>` : ''}<span class="grow"></span><button class="visit-back" data-act="visit-back" title="Back to the result">${I.undo}Page ${hn + 1}</button>`);
+  const head = el('header', 'page-head', `<span class="pno">Page ${esc(plabel(doc, n))}</span>${info ? `<span class="phits">${fmt(info.count)}</span>` : ''}<span class="grow"></span><button class="visit-back" data-act="visit-back" title="Back to the result">${I.undo}Page ${esc(plabel(doc, hn))}</button>`);
   const body = el('div', 'page-body');
   body.style.minHeight = Math.round(home.lastElementChild.offsetHeight) + 'px';
   art.append(head, body);
@@ -1185,7 +1211,7 @@ async function goVisit(home, n, dir, rec = true, prepped = null) {
     if (!reduceMotion()) shown.animate([{ transform: 'none' }, { transform: `translateX(${-dir * 18}px)` }, { transform: 'none' }], { duration: 260, easing: 'ease-out' });
     return;
   }
-  if (rec) recordCustom(`Page ${n + 1}`, () => goVisit(home, curN, -dir, false), () => goVisit(home, n, dir, false));
+  if (rec) recordCustom(`Page ${plabel(docById(home.dataset.doc), n)}`, () => goVisit(home, curN, -dir, false), () => goVisit(home, n, dir, false));
   shown._busy = true;
   let next = home;
   if (n !== homeN) {
@@ -1391,8 +1417,8 @@ function gapEl(doc, a, b, count, R) {
   // Tabs on the right, like a notebook's: "next page" hangs off the bottom of the page above, "page before"
   // sticks up from the top of the page below. (Pages past the end of the document have no tab.)
   const unfold = '<svg viewBox="0 0 24 24"><path d="M8 7l4-4 4 4M8 17l4 4 4-4"/></svg>';
-  const down = a >= 0 ? `<button class="gap-tab down" data-act="after" title="Show page ${a + 2}">${I.down}Page ${a + 2}</button>` : '';
-  const up = b < count && (hidden > 1 || a < 0) ? `<button class="gap-tab up" data-act="before" title="Show page ${b}">${I.up}Page ${b}</button>` : '';
+  const down = a >= 0 ? `<button class="gap-tab down" data-act="after" title="Show page ${esc(plabel(doc, a + 1))}">${I.down}Page ${esc(plabel(doc, a + 1))}</button>` : '';
+  const up = b < count && (hidden > 1 || a < 0) ? `<button class="gap-tab up" data-act="before" title="Show page ${esc(plabel(doc, b - 1))}">${I.up}Page ${esc(plabel(doc, b - 1))}</button>` : '';
   const all = '';
   g.classList.toggle('has-down', !!down);
   g.classList.toggle('has-up', !!up);
@@ -1931,7 +1957,7 @@ function updateSummary() {
     const count = S.texts.get(v.docId)?.length || 0;
     html += `<button class="back-btn" data-act="back" title="Back to results">${I.arrowLeft}<span>Results</span></button>
       <span class="reader-title" title="${esc(doc?.name || '')}"><span class="ftype ${doc?.kind}">${KIND_LABEL[doc?.kind] || ''}</span><b>${esc(doc?.name || '')}</b></span>
-      <label class="jump" title="Go to page"><span class="jl">Page</span><input id="jumpInput" type="number" min="1" max="${count}" value="${curPageN + 1}" inputmode="numeric" aria-label="Page number"><span>/ ${fmt(count)}</span></label>`;
+      <label class="jump" title="Go to page"><span class="jl">Page</span><input id="jumpInput" type="text" value="${esc(plabel(doc, curPageN))}" inputmode="${doc?.labels ? 'text' : 'numeric'}" autocomplete="off" spellcheck="false" aria-label="Page number"><span>/ ${fmt(count)}</span></label>`;
   }
   else if (linkOnly && docById(linkOnly)) {
     html += `<span class="link-scope">${I.link}<span>Only <b>${esc(docById(linkOnly).name)}</b></span><button type="button" data-act="unscope">Search all</button></span>`;
@@ -1957,7 +1983,7 @@ function updateOutline() {
   if (v.list[0]?.flat) {
     const rows = v.list.slice(0, 400).map((R, i) => {
       const p = R.pages[0];
-      return `<button class="ol-row" data-doc="${R.doc.id}" data-n="${p.n}" title="${esc(R.doc.name)} · page ${p.n + 1}"><span class="ol-rank">${i + 1}</span><span class="ol-where"><b>p. ${p.n + 1}</b><span>${esc(R.doc.name)}</span></span><em>${fmt(R.hits)}</em></button>`;
+      return `<button class="ol-row" data-doc="${R.doc.id}" data-n="${p.n}" title="${esc(R.doc.name)} · page ${esc(plabel(R.doc, p.n))}"><span class="ol-rank">${i + 1}</span><span class="ol-where"><b>p. ${esc(plabel(R.doc, p.n))}</b><span>${esc(R.doc.name)}</span></span><em>${fmt(R.hits)}</em></button>`;
     }).join('');
     const more = v.list.length > 400 ? `<span class="ol-more">+${fmt(v.list.length - 400)} more pages</span>` : '';
     setHTML(box, `<div class="ol-title">Pages by hits</div><div class="ol-rows">${rows}${more}</div>`);
@@ -1965,7 +1991,7 @@ function updateOutline() {
     return;
   }
   setHTML(box, `<div class="ol-title">${v.kind === 'reader' ? 'Pages with hits' : 'Jump to'}</div>` + v.list.map((R) => {
-    const chips = R.pages.slice(0, 500).map((p) => `<button class="ol-p" data-doc="${R.doc.id}" data-n="${p.n}" title="Page ${p.n + 1} · ${plural(p.count, 'hit')}">${p.n + 1}${p.count > 1 ? `<sup>${p.count}</sup>` : ''}</button>`).join('');
+    const chips = R.pages.slice(0, 500).map((p) => `<button class="ol-p" data-doc="${R.doc.id}" data-n="${p.n}" title="Page ${esc(plabel(R.doc, p.n))} · ${plural(p.count, 'hit')}">${esc(plabel(R.doc, p.n))}${p.count > 1 ? `<sup>${p.count}</sup>` : ''}</button>`).join('');
     const more = R.pages.length > 500 ? `<span class="ol-more">+${fmt(R.pages.length - 500)}</span>` : '';
     const name = v.kind === 'reader' ? '' : `<button class="ol-doc" data-doc="${R.doc.id}" data-n="${R.pages[0].n}"><span>${esc(R.doc.name)}</span><em>${fmt(R.hits)}</em></button>`;
     return `<div class="ol-group">${name}<div class="ol-pages">${chips}${more}</div></div>`;
@@ -2151,7 +2177,7 @@ function trackPosition() {
     if (!art) { $$('#outline .on').forEach((b) => b.classList.remove('on')); return; }
     if (active === reader) curPageN = Number(art.dataset.n);
     const jump = $('#jumpInput');
-    if (jump && !jump._editing && active === reader) jump.value = curPageN + 1;
+    if (jump && !jump._editing && active === reader) jump.value = plabel(docById(reader.docId), curPageN);
     if (!changed && $('#outline .on')) return;
     $$('#outline .on').forEach((b) => b.classList.remove('on'));
     const chip = $(`#outline :is(.ol-p, .ol-row)[data-doc="${art.dataset.doc}"][data-n="${art.dataset.n}"]`);
@@ -2910,9 +2936,12 @@ async function ingest(file, meta) {
       const plain = pages.join('\n').trim();
       if (shown.length > plain.length * 1.15 + 80) pages = paginate(shown);
     }
+    const pdfLabels = pages.labels;
     if (hasLiveText && meta.kind === 'pdf' && bytes) pages = await liveText(bytes, pages, meta);
     const chars = pages.reduce((a, p) => a + p.trim().length, 0);
     meta.pages = pages.length;
+    meta.labels = docLabels(meta.kind, pages, pdfLabels);
+    meta.labelsV = LABELS_V;
     meta.hash = textHash(pages);
     meta.noText = meta.kind === 'pdf' && chars < pages.length * 25;
     if (meta.kind === 'html' && bytes) meta.hasOriginal = true;
@@ -3300,6 +3329,7 @@ async function replaceDoc(doc, { pages, bytes, size, name, source }, keepOld) {
   const chars = pages.reduce((a, p) => a + p.trim().length, 0);
   Object.assign(doc, {
     pages: pages.length, size: size || doc.size, updatedAt: Date.now(), hash: textHash(pages),
+    labels: docLabels(doc.kind, pages, pages.labels), labelsV: LABELS_V,
     noText: doc.kind === 'pdf' && chars < pages.length * 25,
   });
   if (name) doc.name = name;
@@ -4527,6 +4557,7 @@ async function refreshLibrary() {
   runSearch({ keepScroll: true });
   updateStorage();
   if (isNative) { scheduleState(); indexSpotlight(); }
+  labelOlderDocs();
 }
 async function importBackup(file) {
   let b;
@@ -5299,9 +5330,13 @@ function bind() {
   $('#summary').addEventListener('change', (e) => {
     if (e.target.id !== 'jumpInput') return;
     const count = S.texts.get(reader.docId)?.length || 1;
-    const n = Math.max(1, Math.min(count, Number(e.target.value) || 1));
-    e.target.value = n;
-    scrollToPage(reader, reader.docId, n - 1);
+    const doc = docById(reader.docId);
+    const typed = e.target.value.trim().replace(/[–—]/g, '-');
+    // the document's own number first ("2-4", "iv"), then a plain position
+    let i = doc?.labels ? doc.labels.findIndex((l) => l && l.toLowerCase() === typed.toLowerCase()) : -1;
+    if (i < 0) i = Math.max(1, Math.min(count, Number(typed) || 1)) - 1;
+    e.target.value = plabel(doc, i);
+    scrollToPage(reader, reader.docId, i);
   });
   $('#summary').addEventListener('keydown', (e) => { if (e.target.id === 'jumpInput' && e.key === 'Enter') e.target.blur(); });
   // while you type a page number it isn't overwritten; once you're done it follows the scroll again
@@ -5915,7 +5950,7 @@ function togglePageMode(art) {
   const sec = art.closest('.doc-sec');
   const doc = docById(art.dataset.doc);
   const n = Number(art.dataset.n);
-  record(pageMode(doc, n) === 'original' ? `Page ${n + 1} as text` : `Page ${n + 1} original`);
+  record(pageMode(doc, n) === 'original' ? `Page ${plabel(doc, n)} as text` : `Page ${plabel(doc, n)} original`);
   if (doc.kind === 'html') {
     override.set(pkey(doc.id, WEB), pageMode(doc, n) === 'original' ? 'text' : 'original');
     const v = art._v;
@@ -5939,7 +5974,7 @@ function pageItems(art) {
   const v = art._v;
   const doc = docById(art.dataset.doc);
   const n = Number(art.dataset.n);
-  const items = [{ header: art._web ? doc.name : `Page ${n + 1}` }];
+  const items = [{ header: art._web ? doc.name : `Page ${plabel(doc, n)}` }];
   if (v.kind === 'results' && !art._web) {
     const prev = art.previousElementSibling || art.closest('.doc-sec')?.previousElementSibling?.querySelector(':scope > .doc-pages')?.lastElementChild;
     const next = art.nextElementSibling;
@@ -5996,6 +6031,7 @@ async function boardSeed(art) {
   return base;
 }
 const boards = initBoards({
+  pageLabel: (docId, n) => plabel(docById(docId), n),
   esc, el, I, toast, recordCustom,
   pinIcon: I.pin,
   searchIcon: I.search,
@@ -6039,7 +6075,7 @@ function saveBlob(blob, name) {
 function saveItems(art) {
   const doc = docById(art.dataset.doc);
   const n = Number(art.dataset.n);
-  const stem = `${fileStem(doc.name)} p${n + 1}`;
+  const stem = `${fileStem(doc.name)} p${plabel(doc, n).replace(/[\\/:*?"<>|]/g, "-")}`;
   const items = [];
   if (doc.kind === 'pdf') {
     const cut = !!art.querySelector('.pdf-frame') && art.lastElementChild.classList.contains('cropped');
@@ -6356,6 +6392,7 @@ async function start() {
   runSearch();
   applyZoom();
   updateStorage();
+  labelOlderDocs();
   nativeSetup();
   const sendTo_ = location.hash.match(/send-to=([A-Z0-9]{6})/i);
   if (sendTo_) { history.replaceState(null, '', location.pathname + location.search); sendTo({ code: sendTo_[1] }); }
