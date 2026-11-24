@@ -130,3 +130,24 @@ export async function diskFile(path) {
 export const cloudStatus = () => (Files.cloud ? Files.cloud().catch(() => ({ available: false, on: false })) : Promise.resolve({ available: false, on: false }));
 export const setCloud = async (on) => { const r = await Files.setCloud({ on }); rootP = null; return r; }; // the library moved: ask where it is now
 export const listAll = async () => Files.list();
+
+// ---------- pages drawn by Apple's PDF engine (the iPhone) ----------
+const PdfDraw = plugin('ISPdf');
+/** The iPhone draws PDF pages itself (lighter on memory than drawing them in the page). */
+export const nativePdf = !!PdfDraw && platform === 'ios';
+/** A decoded <img> of page n (0-based) of the library file at path: the whole page `width` pixels wide, or the
+ *  part r = [x0, x1, y0, y1] of it (fractions of the page). */
+export async function drawPage(path, n, width, r = [0, 1, 0, 1], quality = 0.82) {
+  const file = (await root()) + enc(path);
+  const res = await PdfDraw.render({ file, page: n, width, x0: r[0], x1: r[1], y0: r[2], y1: r[3], quality });
+  const img = new Image();
+  img.decoding = 'async';
+  img.width = res.width;
+  img.height = res.height;
+  img._path = res.path;
+  img.src = cap.convertFileSrc(res.path);
+  try { await img.decode(); } catch { PdfDraw.forget({ paths: [res.path] }).catch(() => {}); throw new Error('page image'); }
+  return img;
+}
+/** Page images no longer shown (their files are deleted). */
+export const forgetPages = (paths) => { if (paths.length) PdfDraw?.forget({ paths }).catch(() => {}); };

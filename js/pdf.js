@@ -147,13 +147,14 @@ function fraction(str, i, family) {
 
 const openDocs = new Map(); // docId -> Promise<PDFDocumentProxy>
 
-export function getPdf(docId, loadBytes) {
+export function getPdf(docId, loadBytes, { fonts = true } = {}) {
   if (!openDocs.has(docId)) {
     openDocs.set(
       docId,
       loadBytes().then((bytes) => {
         if (!bytes) throw new Error('Original file not stored');
-        return pdfjsLib.getDocument({ data: bytes.slice(0), isEvalSupported: false }).promise;
+        // fonts are only needed to draw the page; when the iPhone draws it, only the text's positions are read
+        return pdfjsLib.getDocument({ data: bytes.slice(0), isEvalSupported: false, disableFontFace: !fonts }).promise;
       })
     );
     openDocs.get(docId).catch(() => openDocs.delete(docId));
@@ -204,7 +205,7 @@ function textBox(items, base) {
 // Text positions alone can lie: official PDFs (eCFR, GPO) carry invisible print-shop text out in the margins,
 // which made a blank margin look used. The ink tells the truth, so trimming never keeps an empty side.
 const inkCache = new Map();
-async function inkBox(page, base, key) {
+async function inkBox(page, base, key, draw) {
   if (inkCache.has(key)) return inkCache.get(key);
   let out = null;
   try {
@@ -213,8 +214,10 @@ async function inkBox(page, base, key) {
     const c = document.createElement('canvas');
     c.width = W;
     c.height = Math.max(1, Math.round(vp.height));
-    const ctx = c.getContext('2d', { alpha: false });
-    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    const ctx = c.getContext('2d', { alpha: false, willReadFrequently: true });
+    let drawn = false;
+    if (draw) try { const img = await draw(W, [0, 1, 0, 1], 0.7); ctx.drawImage(img, 0, 0, c.width, c.height); draw.forget?.([img._path]); drawn = true; } catch {}
+    if (!drawn) await page.render({ canvasContext: ctx, viewport: vp }).promise;
     const { data } = ctx.getImageData(0, 0, c.width, c.height);
     // the paper's colour: what most of the page's outer edge is (not always white)
     const tally = new Map();
@@ -380,7 +383,9 @@ function slot(prio) {
   return new Promise((res) => { waiting.push({ prio, res }); pump(); });
 }
 
-export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false, columns = false, prio = () => 0 } = {}) {
+// draw: on the iPhone, (widthPx, [x0, x1, y0, y1], quality) → a decoded <img> of the page (or that part of
+// it) drawn by Apple's PDF engine; without it pdf.js draws into canvases. If it fails, pdf.js takes over.
+export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false, columns = false, prio = () => 0, draw = null } = {}) {
   const got = await slot(prio);
   if (!got) return null; // called off while waiting
   let freed = false;
@@ -392,7 +397,7 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   const content = await page.getTextContent();
   // "wide view": cut the side margins so the text fills the width (top and bottom margins are trimmed by the app)
   let box = trim ? textBox(content.items, base) : { x: null, y: null };
-  if (trim) box = tighten(box, await inkBox(page, base, `${pdf.fingerprints?.[0] || ''}:${n}`));
+  if (trim) box = tighten(box, await inkBox(page, base, `${pdf.fingerprints?.[0] || ''}:${n}`, draw));
   const span = box.x;
   const ts = span ? 1 / (span[1] - span[0]) : 1;
   // in column view a column fills the width, so draw sharper (columns are found around each hit by the app)
@@ -416,10 +421,15 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   if (span) { frame.style.setProperty('--ts', ts.toFixed(4)); frame.style.setProperty('--tx0', span[0].toFixed(4)); frame.dataset.tx = span.join(','); }
   if (box.y) frame.dataset.ty = box.y.join(','); // where the text starts and ends down the page
   frame._lines = textLines(content.items, base); // where each piece of text sits, for finding columns
-  const canvas = document.createElement('canvas');
+  let canvas = null;
+  if (draw) try { canvas = await draw(Math.floor(pvp.width), [0, 1, 0, 1], 0.72); } catch { draw = null; }
+  const nativeSoft = !!canvas;
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    canvas.width = Math.floor(pvp.width);
+    canvas.height = Math.floor(pvp.height);
+  }
   canvas.className = 'soft';
-  canvas.width = Math.floor(pvp.width);
-  canvas.height = Math.floor(pvp.height);
   const layer = document.createElement('div');
   layer.className = 'pdf-hits';
   sheet.append(canvas, layer, textLayer(content.items, content.styles, base));
@@ -428,7 +438,7 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   sizer.observe(sheet);
   // Draw off-screen first; whatever is showing now (the old render, or text) stays until this is ready.
 
-  const task = page.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport: pvp });
+  const task = nativeSoft ? { promise: Promise.resolve(), cancel() {} } : page.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport: pvp });
 
   if (ranges.length) {
     const { map } = textFromItems(content.items);
@@ -482,6 +492,8 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   // sharpen([y0, y1], [x0, x1]) asks for it; asking again for more (opening the crop) draws the larger part
   // and swaps it in when ready, the soft copy showing meanwhile. Fractions of the page.
   let sharp = null, have = null, want = null, busy = false, dead = false, sharpTask = null;
+  // let a drawing go: a canvas's pixels freed, an image's file deleted
+  const drop = (el) => { if (el.tagName === 'IMG') { draw?.forget?.([el._path]); el.removeAttribute('src'); } else el.width = el.height = 0; };
   const covers = (a, b) => a && a[0] <= b[0] + 1e-3 && a[1] >= b[1] - 1e-3 && a[2] <= b[2] + 1e-3 && a[3] >= b[3] - 1e-3;
   const sharpen = (y, x) => {
     if (y) {
@@ -499,23 +511,28 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
         if (!go) break;
         const [x0, x1, y0, y1] = want;
         try {
-          const c = document.createElement('canvas');
-          c.className = 'sharp';
           const sx = Math.floor(x0 * vp.width), sy = Math.floor(y0 * vp.height);
-          c.width = Math.max(1, Math.ceil(x1 * vp.width) - sx);
-          c.height = Math.max(1, Math.ceil(y1 * vp.height) - sy);
-          sharpTask = page.render({ canvasContext: c.getContext('2d', { alpha: false }), viewport: vp, transform: [1, 0, 0, 1, -sx, -sy] });
-          await sharpTask.promise;
-          if (dead) { c.width = c.height = 0; break; }
+          let c = null;
+          if (draw) try { c = await draw(Math.floor(vp.width), [x0, x1, y0, y1], 0.85); } catch { c = null; }
+          if (!c) {
+            c = document.createElement('canvas');
+            c.width = Math.max(1, Math.ceil(x1 * vp.width) - sx);
+            c.height = Math.max(1, Math.ceil(y1 * vp.height) - sy);
+            sharpTask = page.render({ canvasContext: c.getContext('2d', { alpha: false }), viewport: vp, transform: [1, 0, 0, 1, -sx, -sy] });
+            await sharpTask.promise;
+          }
+          c.className = 'sharp';
+          const cw = c.naturalWidth || c.width, ch = c.naturalHeight || c.height;
+          if (dead) { drop(c); break; }
           // margins in % are of the page's width: pull the strip up over the soft copy, to where it belongs
           const ar = vp.height / vp.width;
           c.style.marginTop = `${((sy / vp.height) - 1) * ar * 100}%`;
           c.style.marginLeft = `${(sx / vp.width) * 100}%`;
-          c.style.width = `${(c.width / vp.width) * 100}%`;
+          c.style.width = `${(cw / vp.width) * 100}%`;
           try { page.cleanup(); } catch {}
-          if (sharp) { sharp.replaceWith(c); sharp.width = sharp.height = 0; } else canvas.after(c);
+          if (sharp) { sharp.replaceWith(c); drop(sharp); } else canvas.after(c);
           sharp = c;
-          have = [sx / vp.width, (sx + c.width) / vp.width, sy / vp.height, (sy + c.height) / vp.height];
+          have = [sx / vp.width, (sx + cw) / vp.width, sy / vp.height, (sy + ch) / vp.height];
           frame._onSharp?.();
         } catch (e) { if (e?.name !== 'RenderingCancelledException') break; }
         finally { go(); }
@@ -528,8 +545,8 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
     task.cancel();
     sharpTask?.cancel();
     sizer.disconnect();
-    canvas.width = canvas.height = 0;
-    if (sharp) sharp.width = sharp.height = 0;
+    drop(canvas);
+    if (sharp) drop(sharp);
     frame.remove();
     try { page.cleanup(); } catch {}
   };

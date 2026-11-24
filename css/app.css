@@ -533,7 +533,9 @@ mark.m.cur { background: var(--cur); color: var(--cur-ink); box-shadow: 0 0 0 2p
 .pdf-frame { position: relative; width: max(100%, calc(840px * var(--z) - 2px)); background: #fff; overflow: hidden; }
 /* the whole page; when the margins are trimmed it's drawn larger and shifted so the text fills the box */
 .pdf-page { position: relative; width: calc(100% * var(--ts, 1)); margin-left: calc(-100% * var(--ts, 1) * var(--tx0, 0)); }
-.pdf-frame canvas { display: block; width: 100%; height: 100%; }
+.pdf-frame canvas, .pdf-page > img { display: block; width: 100%; height: 100%; max-width: none; }
+/* the iPhone's page images: no image long-press menu or dragging */
+.pdf-page > img { -webkit-user-select: none; user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; pointer-events: none; }
 .pdf-hits { position: absolute; inset: 0; }
 .box { position: absolute; border-radius: 2px; mix-blend-mode: var(--box-blend); }
 .box.m { cursor: pointer; }
@@ -1056,7 +1058,7 @@ body.compact .search-box:focus-within #clearBtn:not([hidden]) { display: inline-
 html.doc-tint .pdf-page::before {
   content: ""; position: absolute; inset: 0; pointer-events: none; background: var(--doc-page); mix-blend-mode: multiply; opacity: var(--tint);
 }
-html.doc-tint.doc-dark .pdf-page canvas { filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.92); }
+html.doc-tint.doc-dark .pdf-page canvas, html.doc-tint.doc-dark .pdf-page > img { filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.92); }
 html.doc-tint.doc-dark .pdf-page::before { mix-blend-mode: lighten; }
 html.doc-tint.doc-dark .pdf-frame { background: var(--doc-page); }
 html.doc-tint.doc-dark .box.m { mix-blend-mode: screen; }
@@ -1728,4 +1730,4 @@ html, body { overflow-anchor: none; }
 /* a PDF page is drawn twice: a soft copy of the whole page at once, then a sharp copy of just the part that
    shows laid over it (see sharpen in pdf.js). Both stay in the normal flow (the sharp one pulled up over the
    soft one by its margins), so the theme's tint and grain and the highlights all sit above them as before. */
-.pdf-frame canvas.sharp { height: auto; }
+.pdf-frame canvas.sharp, .pdf-page > img.sharp { height: auto; }

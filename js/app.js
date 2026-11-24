@@ -1,6 +1,6 @@
 import { compile, MODES, inWhere, WHERE } from './search.js';
 import { store, stuckStorage, setDiskPath } from './store.js';
-import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary, diskFile } from './native.js';
+import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, nativePdf, drawPage, forgetPages, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary, diskFile } from './native.js';
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
 import { detectLabels, cleanPdfLabels } from './pagelabels.js';
@@ -617,13 +617,14 @@ function fill(art) {
     } else if (mode === 'original') {
       showLoading();
       try {
-        const pdf = await getPdf(doc.id, () => store.file(doc.id));
+        const draw = nativePdf ? await pageDrawer(doc.id, n) : null;
+        const pdf = await getPdf(doc.id, () => store.file(doc.id), { fonts: !draw });
         if (!doc.labelsPdf) { // the PDF's own labels beat ones read from the text
           doc.labelsPdf = 1;
           pdf.getPageLabels().then((l) => { const c = cleanPdfLabels(l, pdf.numPages); if (c) doc.labels = c; store.updateDoc(stripMeta(doc)).catch(() => {}); }).catch(() => {});
         }
         if (token !== art._token) return;
-        const r = await renderPdfPage(pdf, n, body, ranges, BASE_W * zoomValue(), { trim: !!prefs.trim, columns: !!prefs.columns && v.kind === 'results', prio: () => (token === art._token && art.isConnected ? screenDistance(art) : null) });
+        const r = await renderPdfPage(pdf, n, body, ranges, BASE_W * zoomValue(), { trim: !!prefs.trim, columns: !!prefs.columns && v.kind === 'results', prio: () => (token === art._token && art.isConnected ? screenDistance(art) : null), draw });
         if (!r) return; // let go before its turn came
         if (token !== art._token) { r.cleanup(); return; }
         r.show();
@@ -666,10 +667,16 @@ function fill(art) {
 // The page tabs are painted as part of their page, so each one needs its page's own paper colour: read
 // from the rendered PDF's corners (the page's margin), plus that colour as dark themes show it.
 function pageEdge(body) {
-  const c = body.querySelector('.pdf-frame:not(.clone) canvas');
+  let c = body.querySelector('.pdf-frame:not(.clone) .soft');
+  if (c?.tagName === 'IMG') { // a page drawn by the iPhone: read its corners from a small copy
+    const s = document.createElement('canvas');
+    s.width = 64; s.height = Math.max(8, Math.round((64 * c.naturalHeight) / Math.max(1, c.naturalWidth)));
+    try { s.getContext('2d', { willReadFrequently: true }).drawImage(c, 0, 0, s.width, s.height); } catch { return null; }
+    c = s;
+  }
   if (!c || !c.width) return null;
   try {
-    const x = c.getContext('2d'), w = c.width, h = c.height, k = 3;
+    const x = c.getContext('2d', { willReadFrequently: true }), w = c.width, h = c.height, k = 1;
     const px = [[k, k], [w - k - 1, k], [k, h - k - 1], [w - k - 1, h - k - 1]].map(([a, b]) => [...x.getImageData(a, b, 1, 1).data.slice(0, 3)]);
     // the colour most corners agree on (a picture running to one corner doesn't count)
     const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 10);
@@ -753,6 +760,19 @@ async function sweep() {
   await Promise.all([lane(), lane()]);
 }
 
+// On the iPhone, Apple's PDF engine draws the pages (straight from the library's files); pdf.js only reads
+// where the text is. A document without a file falls back to pdf.js.
+let libPathsP = null;
+async function pageDrawer(docId, n) {
+  if (!libPathsP) libPathsP = store.paths().catch(() => new Map());
+  let path = (await libPathsP).get(docId);
+  if (!path) { libPathsP = store.paths().catch(() => new Map()); path = (await libPathsP).get(docId); }
+  if (!path) return null;
+  const draw = (w, r, q) => drawPage(path, n, w, r, q);
+  draw.forget = forgetPages;
+  return draw;
+}
+
 // how far a page is from the screen, in pixels (0 when any of it shows): pages are drawn nearest first
 function screenDistance(art) {
   const r = art.getBoundingClientRect();
@@ -791,6 +811,7 @@ function unfill(art) {
   art._filled = null;
   art._token = (art._token || 0) + 1;
   for (const c of body.querySelectorAll('canvas')) c.width = c.height = 0; // copies for cropped pieces too: free them now, not whenever
+  for (const im of body.querySelectorAll('.pdf-page > img')) im.removeAttribute('src');
   body.replaceChildren();
   drawn.delete(art);
 }
@@ -1329,14 +1350,13 @@ function columnRun(lines, cols, k, k2, top, bot, ty, line) {
   return [Math.max(a, up - line * 0.4), Math.min(z, down + line * 0.4)];
 }
 function copyCanvases(frame, c) {
-  const src = [...frame.querySelectorAll('canvas')];
-  for (const old of c.querySelectorAll('canvas')) { old.width = old.height = 0; old.remove(); }
+  const src = [...frame.querySelectorAll('.pdf-page > canvas, .pdf-page > img')];
+  for (const old of c.querySelectorAll('.pdf-page > canvas, .pdf-page > img')) { if (old.tagName === 'CANVAS') old.width = old.height = 0; old.remove(); }
   const sheet = c.querySelector('.pdf-page');
   const first = sheet.firstChild;
   for (const s of src) {
     const d = s.cloneNode(false);
-    d.width = s.width; d.height = s.height;
-    if (s.width) d.getContext('2d').drawImage(s, 0, 0);
+    if (s.tagName === 'CANVAS') { d.width = s.width; d.height = s.height; if (s.width) d.getContext('2d').drawImage(s, 0, 0); }
     sheet.insertBefore(d, first);
   }
 }

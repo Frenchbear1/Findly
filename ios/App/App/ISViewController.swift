@@ -8,6 +8,7 @@ class ISViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(ISFilesPlugin())
         bridge?.registerPluginInstance(ISTextPlugin())
         bridge?.registerPluginInstance(ISLinkPlugin())
+        bridge?.registerPluginInstance(ISPdfPlugin())
     }
 
     override open func viewDidLoad() {
