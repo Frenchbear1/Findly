@@ -66,7 +66,7 @@ export function lineSizes(text, map, items) {
   return lines;
 }
 // From every page's lines, the marks for each page: [kind, start, end, …] with kind 1 a heading, 2 a caption.
-export const MARKS_V = 2;
+export const MARKS_V = 3;
 export function marksFrom(pageLines, texts) {
   // the body: the type size, and the font, most of the document's characters are set in
   const sizes = new Map(), fonts = new Map();
@@ -81,10 +81,12 @@ export function marksFrom(pageLines, texts) {
     if (!lines) return null;
     const t = texts[n] || '';
     const out = [];
-    for (const [s, e, h, f] of lines) {
+    let byFont = 0;
+    for (let li = 0; li < lines.length; li++) {
+      const [s, e, h, f] = lines[li];
       const str = t.slice(s, e).trim();
       if (!/[A-Za-z]{2}/.test(str) || str.length > 160) continue;
-      if (/^(figure|fig\.|table|exhibit|chart|diagram)\s*[A-Z]?[\d.-]+/i.test(str)) { out.push(2, s, e); continue; }
+      if (/^(figure|fig\.|table|exhibit|chart|diagram)\s*[A-Z]?[\d.-]+/i.test(str)) { out.push(2, s, e, 0); continue; }
       if (/\.{4,}|…{2,}/.test(str)) continue; // a contents line with dot leaders
       const big = body && h >= body * 1.15 && str.length <= 120 && !/^\d+([.-]\d+)*$/.test(str);
       // a short line all in capitals, at body size, reads as a heading too
@@ -93,10 +95,19 @@ export function marksFrom(pageLines, texts) {
       // the second- and third-level headings set at body size
       const own = f && bodyFont && f !== bodyFont && (fonts.get(f) || 0) < bodyChars * 0.25
         && h >= body * 0.95 && str.length >= 3 && str.length <= 100 && /^[A-Z0-9§(]/.test(str) && !/[,;:]$/.test(str)
-        && str.split(/\s+/).length <= 14;
-      if (big || caps || own) out.push(1, s, e);
+        && str.split(/\s+/).length <= 14
+        // …and introduces text: the body font follows within the next two lines (an index or contents
+        // entry is followed by more entries, not by paragraphs)
+        && lines.slice(li + 1, li + 3).some((l) => l[3] === bodyFont)
+        && !/\s\d+([-–]\d+)?([,\s]+\d+([-–]\d+)?)*$/.test(str); // ends in page numbers: an index line
+      if (own && !big && !caps) byFont++;
+      if (big || caps || own) out.push(1, s, e, own && !big && !caps ? 1 : 0);
     }
-    return out.length ? out : null;
+    // a page where many lines are set apart only by their font is a list, table or index, not headings
+    const tooMany = byFont > 6 && byFont > lines.length * 0.3;
+    const kept = [];
+    for (let i = 0; i < out.length; i += 4) if (!(tooMany && out[i + 3])) kept.push(out[i], out[i + 1], out[i + 2]);
+    return kept.length ? kept : null;
   });
 }
 
