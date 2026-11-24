@@ -1486,3 +1486,20 @@ dialog.helper-dlg::backdrop { background: rgba(10, 12, 20, 0.45); -webkit-backdr
 .hs-box { margin: 4px 0 12px; padding: 12px 14px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); }
 .hs-box p { margin: 2px 0 6px; font-size: 13px; }
 .hs-foot { display: flex; justify-content: space-between; gap: 8px; padding: 12px 22px max(16px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
+
+/* one quiet status line at the top of the library: update checks, imports, transfers */
+.lib-status { position: relative; display: flex; align-items: baseline; gap: 8px; margin: 6px 6px 4px; padding: 0 0 7px; font-size: 12.5px; color: var(--ink-2); opacity: 0; transform: translateY(-3px); transition: opacity 0.25s ease, transform 0.25s ease; }
+.lib-status.on { opacity: 1; transform: none; }
+.lib-status .ls-text { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lib-status .ls-pct { flex: none; font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; }
+.lib-status .ls-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.lib-status .ls-bar b { position: absolute; inset: 0; background: var(--accent); transform-origin: left; transform: scaleX(0); transition: transform 0.45s cubic-bezier(.25,.8,.3,1); }
+.lib-status.busy .ls-bar b { width: 30%; transform: none; animation: ls-sweep 1.3s ease-in-out infinite; }
+@keyframes ls-sweep { from { left: -30%; } to { left: 100%; } }
+.lib-status.ok .ls-bar b { background: #1f9d55; }
+/* when the library is out of view (phone), the same progress as a hairline at the top of the screen */
+.top-progress { position: fixed; z-index: 90; left: 0; right: 0; top: env(safe-area-inset-top); height: 2px; pointer-events: none; opacity: 0; transition: opacity 0.3s; }
+.top-progress.on { opacity: 1; }
+.top-progress b { position: absolute; inset: 0; background: var(--accent); transform-origin: left; transform: scaleX(0); transition: transform 0.45s cubic-bezier(.25,.8,.3,1); }
+.top-progress.busy b { width: 30%; transform: none; animation: ls-sweep 1.3s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .lib-status .ls-bar b, .top-progress b { transition: none; } }

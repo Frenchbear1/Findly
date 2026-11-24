@@ -82,17 +82,20 @@ const b64 = (u8) => {
   return btoa(s);
 };
 /** Saves bytes as a new file in the library folder (a free name is picked); returns its path. */
-export async function saveBytes(name, data, folder = '') {
+export async function saveBytes(name, data, folder = '', onPart) {
   const { path } = await Files.freeName({ name, folder });
-  await writeBytes(path, data);
+  await writeBytes(path, data, onPart);
   return path;
 }
 /** Writes bytes to a path, a few MB at a time. */
-export async function writeBytes(path, data) {
+export async function writeBytes(path, data, onPart) {
   const u8 = data instanceof Uint8Array ? data : typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data instanceof Blob ? await data.arrayBuffer() : data);
   const step = 3 * 1024 * 1024;
   if (!u8.length) return Files.write({ path, data: '', append: false });
-  for (let i = 0; i < u8.length; i += step) await Files.write({ path, data: b64(u8.subarray(i, i + step)), append: i > 0 });
+  for (let i = 0; i < u8.length; i += step) {
+    await Files.write({ path, data: b64(u8.subarray(i, i + step)), append: i > 0 });
+    onPart?.(Math.min(1, (i + step) / u8.length));
+  }
 }
 export const removeFile = (path) => Files.remove({ path }).catch(() => {});
 export const listFiles = async () => (await Files.list()).files || [];

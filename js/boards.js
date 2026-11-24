@@ -521,5 +521,11 @@ export function initBoards(api) {
   }
 
   load();
-  return { open, close, isOpen, postOpen, menuItems, pick, addTo, load };
+  // after an import: read the boards again and redraw if they're showing
+  async function reload() {
+    B.loaded = null;
+    await load();
+    if (isOpen()) render();
+  }
+  return { open, close, isOpen, postOpen, menuItems, pick, addTo, load, reload };
 }

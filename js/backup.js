@@ -44,6 +44,18 @@ function pack(v, parts) {
   if (v && typeof v === 'object') { const o = {}; for (const k in v) o[k] = pack(v[k], parts); return o; }
   return v;
 }
+// big pieces are read 8 MB at a time so the import's progress can move while a large document comes in
+async function readAll(b, count) {
+  const size = b.data.size;
+  if (size < 16e6 || !count?.part) return b.data.arrayBuffer();
+  const out = new Uint8Array(size);
+  const STEP = 8 * 1024 * 1024;
+  for (let i = 0; i < size; i += STEP) {
+    out.set(new Uint8Array(await b.data.slice(i, Math.min(size, i + STEP)).arrayBuffer()), i);
+    count.part(Math.min(size, i + STEP) / size);
+  }
+  return out.buffer;
+}
 async function unpack(v, bins, count) {
   if (Array.isArray(v)) { const out = []; for (const x of v) out.push(await unpack(x, bins, count)); return out; }
   if (v && typeof v === 'object') {
@@ -53,8 +65,8 @@ async function unpack(v, bins, count) {
       if (count) count.bytes += b.size;
       // copy the bytes out of the picked file first: Safari can't store a piece of a file you picked
       // (it fails with "an internal error in the Indexed Database server")
-      if (b.kind === 'blob') { const bytes = await b.data.arrayBuffer(); return b.name ? new File([bytes], b.name, { type: b.type || '' }) : new Blob([bytes], { type: b.type || '' }); }
-      const buf = await b.data.arrayBuffer();
+      if (b.kind === 'blob') { const bytes = await readAll(b, count); return b.name ? new File([bytes], b.name, { type: b.type || '' }) : new Blob([bytes], { type: b.type || '' }); }
+      const buf = await readAll(b, count);
       if (b.kind === 'ab') return buf;
       const T = globalThis[b.kind];
       return typeof T === 'function' ? new T(buf) : buf;
@@ -198,7 +210,20 @@ export async function readBackup(file) {
     boards: (header.dbs['instant-search-boards']?.stores?.boards || []).length,
     size: file.size,
   };
-  const total = Object.values(header.dbs).reduce((t, d) => t + Object.values(d.stores).reduce((u, r) => u + r.length, 0), 0);
+  // progress goes by bytes, not rows: a 200 MB manual moves the bar 200 MB worth, a settings row barely at all
+  const weigh = (v) => {
+    if (Array.isArray(v)) return v.reduce((t, x) => t + weigh(x), 0);
+    if (v && typeof v === 'object') {
+      if ('__bin' in v) return bins[v.__bin]?.size || 0;
+      if ('__json' in v) return bins[v.__json]?.size || 0;
+      let t = 0;
+      for (const k in v) t += weigh(v[k]);
+      return t;
+    }
+    return 0;
+  };
+  const ROW = 2048; // a little for every row, so many small rows still move the bar
+  const total = Object.values(header.dbs).reduce((t, d) => t + Object.values(d.stores).reduce((u, rows) => u + rows.reduce((w, r) => w + ROW + weigh(r), 0), 0), 0) || 1;
   let done = 0;
   // merge: add what's new and update what changed, keep everything else here (and this device's settings)
   async function restore(onProgress, { merge = false } = {}) {
@@ -240,21 +265,27 @@ export async function readBackup(file) {
         const names = new Map((await unpack(stores.docs || [], bins)).map((d) => [d.id, d.name]));
         for (let i = 0; i < rows.length; i++) {
           const docRow = name === 'instant-search' && DOC_STORES.has(s);
-          if (merge && docRow && rows[i].id != null && skip.has(rows[i].id)) { onProgress?.(++done, total); continue; }
+          const w = ROW + weigh(rows[i]);
+          const step = () => { done += w; onProgress?.(Math.min(done, total), total); };
+          if (merge && docRow && rows[i].id != null && skip.has(rows[i].id)) { step(); continue; }
+          const readShare = isNative && s === 'files' ? 0.45 : 0.9; // in the app, writing the file is the other half
+          count.part = (f) => onProgress?.(Math.min(done + w * readShare * f, total), total);
           let row = await unpack(rows[i], bins, count);
-          if (merge && docRow && skip.has(row.id)) { onProgress?.(++done, total); continue; }
+          count.part = null;
+          if (merge && docRow && skip.has(row.id)) { step(); continue; }
           // in the iPhone app, documents go back into the library folder as real files
           if (isNative && s === 'files' && row.bytes != null) {
             const text = typeof row.bytes === 'string';
             let path = existing.get(row.id); // an update to a document already here: same file, new contents
-            if (path) await writeBytes(path, row.bytes);
-            else path = await saveBytes(names.get(row.id) || `${row.id}.pdf`, row.bytes);
+            const part = (f) => onProgress?.(Math.min(done + w * (readShare + (1 - readShare) * f), total), total); // a big file moves the bar as it's written
+            if (path) await writeBytes(path, row.bytes, part);
+            else path = await saveBytes(names.get(row.id) || `${row.id}.pdf`, row.bytes, '', part);
             row = { id: row.id, path, text };
             count.bytes = 0;
           }
           batch.push(row);
           if (count.bytes > 8e6 || batch.length >= 100) await flush();
-          onProgress?.(++done, total);
+          step();
         }
         await flush();
       }

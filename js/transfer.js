@@ -207,9 +207,14 @@ export async function receive({ reload }) {
             c.send(JSON.stringify({ t: 'ok' }));
             sink.drop();
             unwatch();
-            t.finish('<p class="xf-big">All here.</p><p class="xf-sub">Load it now, or keep going and load it later.</p><div class="xf-btns"><button class="btn primary" data-load>Load my library</button></div>',
-              { pillText: 'Received · tap to load', onTap: reload });
-            t.body.querySelector('[data-load]').onclick = reload;
+            if (mode === 'merge') { // just bring the library up to date, no reload
+              await Promise.resolve(reload('merge')).catch(() => {});
+              t.finish('<p class="xf-big">All here.</p><p class="xf-sub">Your library is up to date.</p>', { pillText: 'Received ✓' });
+            } else {
+              t.finish('<p class="xf-big">All here.</p><p class="xf-sub">Load it now, or keep going and load it later.</p><div class="xf-btns"><button class="btn primary" data-load>Load my library</button></div>',
+                { pillText: 'Received · tap to load', onTap: () => reload('replace') });
+              t.body.querySelector('[data-load]').onclick = () => reload('replace');
+            }
             setTimeout(() => peer.destroy(), 1500);
           } catch (e) {
             c.send(JSON.stringify({ t: 'fail', why: e?.message || String(e) }));

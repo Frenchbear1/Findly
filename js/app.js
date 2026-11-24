@@ -2998,7 +2998,7 @@ async function syncFolder() {
       byDir.get(dir).push(file);
     }
     for (const [dir, list] of byDir) addFiles(list.sort(byName), dir ? folderNamed(dir).id : null, { quietSkip: true });
-    if (fresh.length) toast(`Added ${plural(fresh.length, 'document')} from the Findly folder`);
+    if (fresh.length) libStatus.done(`Added ${plural(fresh.length, 'document')} from the Findly folder`);
     else { renderLibrary(); runSearch({ keepScroll: true }); }
   })().finally(() => { syncing = null; });
   return syncing;
@@ -3271,9 +3271,10 @@ function review({ title, intro = '', rows, options = [], apply = 'Apply', cancel
 
 // ---------- option 3: dropping in a newer copy of a document you already have ----------
 async function offerReplacements(list, folderId) {
-  const t = toast(`Comparing ${plural(list.length, 'file')} with the copies in your library…`, { ms: Infinity });
+  libStatus.show(`Comparing ${plural(list.length, 'file')} with your copies`, 0);
   const rows = [{ header: 'Replace these?' }];
-  for (const item of list) {
+  for (const [k, item] of list.entries()) {
+    libStatus.show(`Comparing ${plural(list.length, 'file')} with your copies`, k / list.length);
     try {
       const { pages, bytes } = await readFile(item.file);
       const c = compareVersions(item.doc, pages, item.file.size);
@@ -3287,7 +3288,7 @@ async function offerReplacements(list, folderId) {
       rows.push({ info: true, tone: 'warn', title: item.file.name, detail: `Couldn’t read it: ${esc(err.message || err)}` });
     }
   }
-  t._hide();
+  libStatus.hide();
   const res = await review({
     title: 'Newer copies of documents you have?',
     intro: 'These look like new versions of documents already in your library. Ticked ones replace your copy (same folder and settings). Unticked ones are added as separate documents.',
@@ -3393,9 +3394,8 @@ function looksLikeWholeBook(link, links) {
 }
 
 async function pickFromPage(pageUrl, links, title, folderId) {
-  const t = toast(`Found ${plural(links.length, 'document')} on the page — checking sizes…`, { ms: Infinity });
-  await fillSizes(links);
-  t._hide();
+  libStatus.show(`Found ${plural(links.length, 'document')} on the page · checking sizes`);
+  await fillSizes(links).finally(() => libStatus.hide());
   const rows = [{ header: title || 'Documents on this page' }];
   for (const l of links) {
     const book = looksLikeWholeBook(l, links);
@@ -3809,7 +3809,7 @@ async function linkWithAi() {
   }
   $('#linkDlg').close();
   const total = jobs.length + newJobs.length;
-  const t = toast(`Checking ${plural(total, 'link')}…`, { ms: Infinity });
+  libStatus.show(`Checking ${plural(total, 'link')}`, 0);
   const pages = new Map();
   const readPage = (url) => {
     if (!pages.has(url)) pages.set(url, (async () => {
@@ -3954,10 +3954,10 @@ async function linkWithAi() {
     while (i < all.length) {
       await all[i++]();
       done++;
-      t.firstChild.textContent = `Checking links… ${done} of ${total}`;
+      libStatus.show(`Checking links · ${done} of ${total}`, done / total);
     }
   };
-  try { await Promise.all([worker(), worker(), worker(), worker()]); } finally { t._hide(); }
+  try { await Promise.all([worker(), worker(), worker(), worker()]); } finally { libStatus.hide(); }
 
   // two of your files on the same link: keep the one that's the same file (or the first), set the others aside
   const byUrl = new Map();
@@ -4082,13 +4082,13 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
   let failures = 0;
   checking = true;
   $('#checkAllBtn').classList.add('spin');
-  const t = quiet ? null : toast('Checking linked sources…', { ms: Infinity });
-  const status = (msg) => { if (t) t.firstChild.textContent = msg; };
+  const status = (msg, frac) => libStatus.show(msg, frac);
+  status('Checking for updates…');
 
   try {
     // pages that list documents: find new, renamed and removed ones
     for (const w of watchers) {
-      status(`Checking “${w.name}”…`);
+      status('Checking for updates · reading linked pages');
       try {
         const { res, finalUrl } = await remoteFetch(w.src.url);
         if (!res.ok) throw new Error(`the page answered ${res.status}`);
@@ -4149,7 +4149,7 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
     for (const job of jobs) {
       n++;
       const d = job.doc;
-      status(`Checking ${n} of ${jobs.length}: ${d.name}`);
+      status(`Checking for updates · ${n} of ${jobs.length}`, (n - 1) / jobs.length);
       try {
         // files with the year in their address (like govinfo's yearly CFR editions): look for a newer year
         if (!job.renamed && !job.link && !d.source.page) {
@@ -4161,7 +4161,7 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
           if (info?.status >= 400) throw new Error(`the site answered ${info.status}`);
           if (changed === false) { upToDate++; d.source.checkedAt = Date.now(); continue; }
         }
-        status(`Downloading ${n} of ${jobs.length}: ${d.name}`);
+        status(`Downloading updates · ${n} of ${jobs.length}`, (n - 0.5) / jobs.length);
         const dl = await download(job.url);
         if (d.kind !== 'html' && dl.info.type === 'text/html') throw new Error('the link now opens a web page instead of the document');
         const { pages, bytes } = await readFile(new File([dl.bytes], fileNameFor(dl.info.finalUrl || job.url, dl.info.type), { type: dl.info.type }));
@@ -4184,14 +4184,16 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
     // sizes for newly listed documents
     const fresh = rows.filter((r) => r.kind === 'new');
     if (fresh.length) {
-      status('Checking sizes of new documents…');
+      status('Checking for updates · almost done', 0.97);
       await fillSizes(fresh.map((r) => r.link));
       for (const r of fresh) r.detail = `${fmtSize(r.link.shownSize) || 'size unknown'} · ${esc(fileNameFor(r.link.url))}`;
     }
+  } catch (e) {
+    libStatus.hide();
+    throw e;
   } finally {
     checking = false;
     $('#checkAllBtn').classList.remove('spin');
-    t?._hide();
     saveFolders();
     saveWatch();
     store.updateDocs(S.docs.filter((d) => d.source && !d.status).map(stripMeta)).catch(() => {});
@@ -4200,10 +4202,11 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
 
   const actionable = rows.filter((r) => r.kind);
   if (!actionable.length && !rows.length) {
-    if (!quiet) toast(jobs.length || folders.length ? `Everything is up to date (${plural(upToDate, 'document')} checked)` : 'Nothing linked to check yet');
+    libStatus.done(jobs.length || folders.length ? `Everything is up to date · ${plural(upToDate, 'document')} checked` : 'Nothing linked to check yet');
     return;
   }
-  if (quiet && !actionable.length && !failures) return;
+  if (quiet && !actionable.length && !failures) { libStatus.done(`Everything is up to date · ${plural(upToDate, 'document')} checked`); return; }
+  libStatus.hide();
   if (upToDate) rows.push({ header: 'Up to date' }, { info: true, title: plural(upToDate, 'document'), detail: 'No changes on the site.' });
   const res = await review({
     title: actionable.length ? 'Updates found' : 'Check finished',
@@ -4226,7 +4229,7 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
   runSearch({ keepScroll: true });
   updateStorage();
   const added = rows.filter((r) => r.kind === 'new' && res.picked.has(r)).length;
-  if (updated || added) toast([updated && `Updated ${plural(updated, 'document')}`, added && `adding ${plural(added, 'new document')}`].filter(Boolean).join(' · '));
+  if (updated || added) libStatus.done([updated && `Updated ${plural(updated, 'document')}`, added && `adding ${plural(added, 'new document')}`].filter(Boolean).join(' · '), 3500);
 }
 
 // ---------- removing things: pick folders, documents or everything, then confirm ----------
@@ -4239,14 +4242,14 @@ function backupMenu(anchor) {
     ...(platform === 'windows' ? [{ label: 'Library folder…', sub: cloudOn ? 'In iCloud Drive: syncing with your Apple devices' : 'Choose a folder (pick iCloud Drive › Findly to sync with your Apple devices)', icon: I.folder, run: changeLibraryFolder }, { label: 'Show library folder', sub: 'Open it in File Explorer', icon: I.out, run: () => revealLibrary() }, { sep: true }] : []),
     ...(platform === 'ios' ? [{ label: 'iCloud sync', sub: cloudOn ? 'On: your Apple devices share one library (iCloud Drive › Findly)' : 'Keep the same library on your iPhone, iPad and Mac', icon: I.save, checked: cloudOn, run: toggleCloud }, { sep: true }] : []),
     { label: 'Send to another device', sub: 'Straight across Wi-Fi, no file: scan the code on the other device', icon: I.out, run: () => sendTo() },
-    { label: 'Receive from another device', sub: 'Shows a code to scan; adds what’s new, no duplicates', icon: I.upload, run: () => receiveFrom({ reload: () => location.reload() }) },
+    { label: 'Receive from another device', sub: 'Shows a code to scan; adds what’s new, no duplicates', icon: I.upload, run: () => receiveFrom({ reload: (mode) => (mode === 'replace' ? location.reload() : refreshLibrary()) }) },
     { sep: true },
     { label: 'Export everything', sub: 'Documents, folders, links, boards, themes and settings in one file', icon: I.save, run: exportAll },
     { label: 'Import a backup…', sub: 'Adds what’s new, or replaces everything', icon: I.upload, run: () => $('#backupInput').click() },
   ]);
 }
 async function exportAll() {
-  const busy = toast('Making the backup…', { ms: Infinity });
+  libStatus.show('Making the backup', 0);
   if (isNative) { // the iPhone app: written straight into Files › On My iPhone › Instant Search › Backups, a piece at a time
     try {
       const d = new Date();
@@ -4262,12 +4265,12 @@ async function exportAll() {
           await Files.write({ path, data: b64(u8.subarray(i, i + (3 << 20))), append: true });
         }
         done += u8.length;
-        const m = busy.firstChild; if (m) m.textContent = `Making the backup… ${Math.round((done / st.size) * 100)}%`;
+        libStatus.show('Making the backup', done / st.size);
       }
-      busy._hide();
+      libStatus.hide();
       toast(`Backup saved in ${platform === 'windows' ? 'your library folder' : 'Files › On My iPhone › Findly'} › ${path} (${fmtSize(st.size)})`, { ms: 8000 });
     } catch (err) {
-      busy._hide();
+      libStatus.hide();
       toast(`Couldn’t make the backup: ${err?.message || err}`, { ms: 6000 });
     }
     return;
@@ -4276,7 +4279,7 @@ async function exportAll() {
     const blob = await makeBackup();
     const d = new Date();
     const name = `Findly backup ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.isbackup`;
-    busy._hide();
+    libStatus.hide();
     const file = new File([blob], name, { type: 'application/octet-stream' });
     // phones: the share sheet has Save to Files; computers: a normal download
     if (matchMedia('(pointer: coarse)').matches && navigator.canShare?.({ files: [file] })) {
@@ -4285,9 +4288,26 @@ async function exportAll() {
     saveBlob(file, name);
     toast(`Backup saved (${fmtSize(blob.size)})`);
   } catch (err) {
-    busy._hide();
+    libStatus.hide();
     toast(`Couldn’t make the backup: ${err?.message || err}`, { ms: 6000 });
   }
+}
+// Bring the library on screen up to date with what's stored (after an import or a transfer), without reloading.
+async function refreshLibrary() {
+  const [docs, texts, folders] = await Promise.all([store.allDocs(), store.allTexts(), store.allFolders()]);
+  const busyDocs = S.docs.filter((d) => d.status); // still being added: keep them
+  S.folders = folders.sort((a, b) => (a.order || 0) - (b.order || 0));
+  S.texts.clear();
+  for (const t of texts) S.texts.set(t.id, t.pages);
+  S.docs = docs.filter((d) => S.texts.has(d.id)).sort((a, b) => (a.order || 0) - (b.order || 0));
+  for (const d of busyDocs) if (!S.docs.some((x) => x.id === d.id)) S.docs.push(d);
+  try { S.watch = JSON.parse(localStorage.getItem(WATCH_KEY)) || []; } catch {}
+  await boards.reload?.();
+  renderLibrary();
+  syncControls();
+  runSearch({ keepScroll: true });
+  updateStorage();
+  if (isNative) { scheduleState(); indexSpotlight(); }
 }
 async function importBackup(file) {
   let b;
@@ -4304,13 +4324,24 @@ async function importBackup(file) {
   });
   if (!res) return;
   const merge = !res.options?.replace;
-  const busy = toast('Importing…', { ms: Infinity });
+  libStatus.show('Importing · getting ready');
   try {
     navigator.storage?.persist?.().catch(() => {});
-    await b.restore((n, of) => { const m = busy.firstChild; if (m) m.textContent = `Importing… ${Math.round((n / of) * 100)}%`; }, { merge });
-    location.reload();
+    let last = 0;
+    let most = 0;
+    await b.restore((n, of) => {
+      if (n < most) return; // never backwards
+      most = n;
+      const now = performance.now();
+      if (now - last < 80 && n < of) return; // smooth, not hundreds of repaints a second
+      last = now;
+      libStatus.show('Importing', n / of);
+    }, { merge });
+    if (!merge) { location.reload(); return; } // everything replaced, settings too: start fresh
+    await refreshLibrary();
+    libStatus.done(fresh ? `Imported · ${plural(fresh, 'document')} added or updated` : 'Imported · already up to date');
   } catch (err) {
-    busy._hide();
+    libStatus.hide();
     if (stuckStorage(err)) storageStuck('The import stopped because');
     else toast(`Import stopped: ${err?.message || err}. Try again, or free up space on this device.`, { ms: 8000 });
   }
@@ -4386,6 +4417,74 @@ async function openClear() {
 }
 
 // ---------- toasts ----------
+// One quiet status line at the top of the library (and a hairline at the top of the screen when the library is
+// out of view) for long jobs: update checks, imports, transfers. No popups piling up.
+const libStatus = (() => {
+  let hideT = 0;
+  let line = null;
+  let shown = 0, target = 0, raf = 0; // the percentage glides to each new value instead of jumping
+  const fmtPct = (f) => `${(f * 100).toFixed(f < 0.1 ? 1 : 0)}%`;
+  const glide = () => {
+    raf = 0;
+    const pct = $('#libStatus .ls-pct');
+    shown += (target - shown) * 0.18;
+    if (Math.abs(target - shown) < 0.0008) shown = target;
+    if (pct && pct.dataset.on) pct.textContent = fmtPct(shown);
+    if (shown !== target) raf = requestAnimationFrame(glide);
+  };
+  const box = () => $('#libStatus');
+  const hair = () => line || (line = document.body.appendChild(el('div', 'top-progress', '<b></b>')));
+  const paint = (text, frac) => {
+    const b = box();
+    clearTimeout(hideT);
+    b.hidden = false;
+    requestAnimationFrame(() => b.classList.add('on'));
+    b.querySelector('.ls-text').textContent = text;
+    const known = typeof frac === 'number' && isFinite(frac);
+    const f = known ? Math.max(0, Math.min(1, frac)) : 0;
+    const pct = b.querySelector('.ls-pct');
+    if (known) {
+      if (!pct.dataset.on || f < shown) shown = f; // a new job starts from where it is
+      pct.dataset.on = '1';
+      target = f;
+      if (!raf) raf = requestAnimationFrame(glide);
+      if (shown === target) pct.textContent = fmtPct(f);
+    } else { delete pct.dataset.on; pct.textContent = ''; shown = target = 0; }
+    b.classList.toggle('busy', !known);
+    b.querySelector('.ls-bar b').style.transform = known ? `scaleX(${f})` : '';
+    const r = b.getBoundingClientRect();
+    const seen = b.offsetParent && r.width > 0 && r.right > 4 && r.left < innerWidth - 4;
+    const h = hair();
+    h.classList.toggle('on', !seen);
+    h.classList.toggle('busy', !known);
+    h.firstChild.style.transform = known ? `scaleX(${f})` : '';
+  };
+  return {
+    show: paint,
+    done(text, ms = 2600) {
+      const b = box();
+      paint(text, 1);
+      b.classList.add('ok');
+      const pct = b.querySelector('.ls-pct');
+      delete pct.dataset.on;
+      pct.textContent = '';
+      shown = target = 0;
+      line?.classList.remove('on');
+      hideT = setTimeout(() => { b.classList.remove('on', 'ok'); setTimeout(() => { if (!b.classList.contains('on')) b.hidden = true; }, 260); }, ms);
+    },
+    hide() {
+      const b = box();
+      clearTimeout(hideT);
+      b.classList.remove('on', 'ok', 'busy');
+      const pct = b.querySelector('.ls-pct');
+      delete pct.dataset.on;
+      shown = target = 0;
+      line?.classList.remove('on');
+      setTimeout(() => { if (!b.classList.contains('on')) b.hidden = true; }, 260);
+    },
+  };
+})();
+
 function toast(msg, { action, onAction, ms = 4200 } = {}) {
   const t = el('div', 'toast', `<span>${esc(msg)}</span>`);
   if (action) {
