@@ -323,6 +323,7 @@ function runSearch({ keepScroll = false } = {}) {
 }
 
 function showSearch(list, readerList, { keepScroll = false } = {}) {
+  sweepSoon(600); // size the pages above once things settle
   const before = { sig: resultsSig(), cur: results.cur, navY: results.navY, dirty: results.dirty, state: resultsState() };
   assign(results, list);
   if (keepScroll && !before.dirty && before.sig === resultsSig() && before.state === resultsState() && results.list.length) {
@@ -503,8 +504,10 @@ const io = new IntersectionObserver(
   (entries) => {
     for (const e of entries) {
       const art = e.target;
-      if (e.isIntersecting) fill(art);
-      else if (art._cleanup && !kept(art) && Math.abs(e.boundingClientRect.top) > innerHeight * 4) unfill(art);
+      if (e.isIntersecting) {
+        if (art._filled) art.lastElementChild.querySelector('.pdf-frame:not(.clone)')?._sharpen?.(); // its sharp copy, now it's close
+        fill(art);
+      } else if (art._cleanup && !kept(art) && Math.abs(e.boundingClientRect.top) > innerHeight * 4) unfill(art);
     }
   },
   { rootMargin: '1400px 0px' }
@@ -634,6 +637,7 @@ function fill(art) {
       swapped();
     }
     body.style.height = '';
+    body.style.minHeight = '';
     if (mode !== 'original') art._edge = null;
     tabsBeside(art);
     applyCrop(art);
@@ -643,6 +647,7 @@ function fill(art) {
       if (ratio > 0.05 && ratio < 2) S.pxPerChar = S.pxPerChar * 0.8 + ratio * 0.2;
     }
     if (v.cur >= 0) markCurrent(v);
+    art._sized = true;
     requestAnimationFrame(() => requestAnimationFrame(() => { if (token === art._token) art._settling = false; }));
   })();
   return art._filled;
@@ -705,6 +710,39 @@ const drawn = new Set();
 // a page let go while still near the screen is drawn again as it comes into view
 const comeback = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { comeback.unobserve(e.target); fill(e.target); } }, { rootMargin: '300px 0px' });
 const DRAWN_MAX = 16;
+// Pages above the screen are sized ahead of time: while you're not scrolling, the nearest ones above that
+// have never been drawn get their quick soft copy (which settles their height), one after another going up.
+// Scrolling back up then finds them the right size already, instead of the view being nudged as they
+// settle. (Pages below can settle whenever; that never moves what you're looking at.)
+let sweepT = 0, lastScrollAt = 0;
+addEventListener('scroll', () => { lastScrollAt = performance.now(); sweepSoon(); }, { passive: true });
+function sweepSoon(ms = 350) { clearTimeout(sweepT); sweepT = setTimeout(sweep, ms); }
+async function sweep() {
+  const v = active;
+  const busy = new Set();
+  const next = () => {
+    const pages = v.root.querySelectorAll('.page');
+    // the last page whose bottom is above the screen, then upward
+    let lo = 0, hi = pages.length - 1, k = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (pages[m].getBoundingClientRect().bottom <= 0) { k = m; lo = m + 1; } else hi = m - 1; }
+    for (let i = k; i >= 0; i--) { const a = pages[i]; if (!a._sized && !a._filled && !a.hidden && !a._web && !busy.has(a)) return a; }
+    return null;
+  };
+  // two at a time, so it keeps pace with the drawing queue
+  const lane = async () => {
+    for (;;) {
+      if (performance.now() - lastScrollAt < 300) { sweepSoon(); return; } // wait until scrolling stops
+      if (v !== active || document.hidden) return;
+      const target = next();
+      if (!target) return;
+      busy.add(target);
+      await fill(target);
+      busy.delete(target);
+    }
+  };
+  await Promise.all([lane(), lane()]);
+}
+
 // how far a page is from the screen, in pixels (0 when any of it shows): pages are drawn nearest first
 function screenDistance(art) {
   const r = art.getBoundingClientRect();
@@ -725,7 +763,7 @@ function keepBudget(art) {
 function unfill(art) {
   art._plan = null;
   const body = art.lastElementChild;
-  if (body.offsetHeight) body.style.height = body.offsetHeight + 'px';
+  if (body.offsetHeight) { body.style.height = body.offsetHeight + 'px'; body.style.minHeight = '0px'; } // held at exactly its size (a small crop is under the usual minimum)
   art._cropRO?.disconnect();
   body.classList.remove('cropped');
   art._cleanup?.();

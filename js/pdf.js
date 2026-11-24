@@ -477,15 +477,19 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   // and swaps it in when ready, the soft copy showing meanwhile. Fractions of the page.
   let sharp = null, have = null, want = null, busy = false, dead = false, sharpTask = null;
   const covers = (a, b) => a && a[0] <= b[0] + 1e-3 && a[1] >= b[1] - 1e-3 && a[2] <= b[2] + 1e-3 && a[3] >= b[3] - 1e-3;
-  const sharpen = (y = [0, 1], x = span || [0, 1]) => {
-    const pad = 0.04;
-    const r = [Math.max(0, x[0] - 0.01), Math.min(1, x[1] + 0.01), Math.max(0, y[0] - pad), Math.min(1, y[1] + pad)];
-    want = want && !covers(r, want) ? [Math.min(want[0], r[0]), Math.max(want[1], r[1]), Math.min(want[2], r[2]), Math.max(want[3], r[3])] : r;
-    if (covers(have, want) || busy || dead) return;
+  const sharpen = (y, x) => {
+    if (y) {
+      x = x || span || [0, 1];
+      const pad = 0.04;
+      const r = [Math.max(0, x[0] - 0.01), Math.min(1, x[1] + 0.01), Math.max(0, y[0] - pad), Math.min(1, y[1] + pad)];
+      want = want && !covers(r, want) ? [Math.min(want[0], r[0]), Math.max(want[1], r[1]), Math.min(want[2], r[2]), Math.max(want[3], r[3])] : r;
+    }
+    if (!want || covers(have, want) || busy || dead) return;
     busy = true;
     (async () => {
       while (!dead && want && !covers(have, want)) {
-        const go = await slot(() => (dead ? null : (prio() ?? Infinity) + 400));
+        // a page well off the screen waits for its sharp copy until it comes close (sharpen() again then)
+        const go = await slot(() => { if (dead) return null; const d = prio(); return d == null || d > 1800 ? null : d + 400; });
         if (!go) break;
         const [x0, x1, y0, y1] = want;
         try {
