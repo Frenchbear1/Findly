@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 import AppIntents
 
 /// Spotlight and Shortcuts/Siri: documents show up in Spotlight (tap one to open it here), and
-/// "Search Instant Search" runs a search from Shortcuts, Siri or the Action button.
+/// "Search Findly" runs a search from Shortcuts, Siri or the Action button.
 @objc(ISLinkPlugin)
 public class ISLinkPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "ISLinkPlugin"
@@ -79,7 +79,7 @@ public class ISLinkPlugin: CAPPlugin, CAPBridgedPlugin {
 
 struct SearchDocumentsIntent: AppIntent {
     static var title: LocalizedStringResource = "Search Documents"
-    static var description = IntentDescription("Searches your Instant Search library and shows the pages with hits.")
+    static var description = IntentDescription("Searches your Findly library and shows the pages with hits.")
     static var openAppWhenRun = true
 
     @Parameter(title: "Search for", requestValueDialog: "What should I look for?")

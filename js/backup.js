@@ -17,7 +17,7 @@ function openDb(name, version, stores = []) {
     req.onupgradeneeded = () => { for (const s of stores) if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s, { keyPath: 'id' }); };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
-    req.onblocked = () => reject(new Error('close Instant Search in your other tabs and try again'));
+    req.onblocked = () => reject(new Error('close Findly in your other tabs and try again'));
   });
 }
 async function exists(name) {
@@ -148,7 +148,7 @@ export async function backupStream({ have = null } = {}) {
   }
   const lib = dbs['instant-search']?.stores || {};
   const header = JSON.stringify({
-    app: 'Instant Search', v: 1, made: Date.now(),
+    app: 'Findly', v: 1, made: Date.now(),
     localStorage: ls, dbs,
     bins: parts.map((p) => ({ size: p.data ? p.data.size : p.size, kind: p.kind, type: p.type || '', name: p.name || '' })),
   });
@@ -183,7 +183,7 @@ function tx(db, s, fn) {
 /** Reads a backup file; returns a summary and a restore() that replaces everything on this device. */
 export async function readBackup(file) {
   const start = await file.slice(0, MAGIC.length + 12).text();
-  if (!start.startsWith(MAGIC)) throw new Error('this isn’t an Instant Search backup');
+  if (!start.startsWith(MAGIC)) throw new Error('this isn’t a Findly backup');
   const len = Number(start.slice(MAGIC.length));
   const at = new TextEncoder().encode(start).length; // the magic and length are plain ASCII
   const header = JSON.parse(await file.slice(at, at + len).text());

@@ -53,12 +53,12 @@
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<!-- the library is a real folder: Files shows it as On My iPhone › Instant Search -->
+	<!-- the library is a real folder: Files shows it as On My iPhone › Findly -->
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
-	<!-- "Open in Instant Search" from the share sheet, Files, Mail… -->
+	<!-- "Open in Findly" from the share sheet, Files, Mail… -->
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -85,7 +85,7 @@
 			<key>UTTypeIdentifier</key>
 			<string>com.davidlabarre.instantsearch.backup</string>
 			<key>UTTypeDescription</key>
-			<string>Instant Search backup</string>
+			<string>Findly backup</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>
@@ -118,7 +118,7 @@
 	</array>
 	<!-- direct transfer between devices on the same Wi-Fi -->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Instant Search uses your local network to send your library straight to your other devices.</string>
+	<string>Findly uses your local network to send your library straight to your other devices.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan the code on your other device to send or receive your library.</string>
 	<key>UISupportedInterfaceOrientations</key>

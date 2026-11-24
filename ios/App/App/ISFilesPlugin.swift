@@ -3,8 +3,8 @@ import Capacitor
 import UIKit
 
 /// The library as real files: everything lives in the app's Documents folder, which the Files app shows as
-/// "On My iPhone › Instant Search". Files dropped there (from Files, a Mac, or anything else that edits them) are
-/// picked up the next time the app opens or comes back; files opened "in" Instant Search from other apps land there too.
+/// "On My iPhone › Findly". Files dropped there (from Files, a Mac, or anything else that edits them) are
+/// picked up the next time the app opens or comes back; files opened "in" Findly from other apps land there too.
 /// Paths given to the web side are relative to that folder.
 @objc(ISFilesPlugin)
 public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -43,7 +43,7 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         // make the folder show up in Files right away, with a note in it
         let readme = local.appendingPathComponent("Put documents here.txt")
         if !fm.fileExists(atPath: readme.path) {
-            try? "Documents in this folder are your Instant Search library. Add, replace or delete PDFs, Word files, text, Markdown or HTML here and Instant Search picks up the changes when you open it.\n".write(to: readme, atomically: true, encoding: .utf8)
+            try? "Documents in this folder are your Findly library. Add, replace or delete PDFs, Word files, text, Markdown or HTML here and Findly picks up the changes when you open it.\n".write(to: readme, atomically: true, encoding: .utf8)
         }
         // find the iCloud container (this can take a moment, so not on the main thread)
         queue.async {
@@ -63,7 +63,7 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         notifyListeners("changed", data: [:])
     }
 
-    /// A document opened "in" Instant Search from another app (share sheet, Files, Mail…): copy it into the library.
+    /// A document opened "in" Findly from another app (share sheet, Files, Mail…): copy it into the library.
     @objc private func opened(_ note: Notification) {
         guard let info = note.object as? [String: Any], let url = info["url"] as? URL, url.isFileURL else { return }
         queue.async {

@@ -41,16 +41,28 @@ function panel(kind) {
   const title = kind === 'send' ? 'Send to another device' : 'Receive from another device';
   const d = document.createElement('dialog');
   d.className = 'xfer';
-  d.innerHTML = `<div class="xf-head"><h3>${esc(title)}</h3><button class="icon-btn sm" data-x aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div><div class="xf-body"></div><div class="xf-foot" hidden><button class="btn" data-cancel>Cancel transfer</button><button class="btn primary" data-hide>Keep using the app</button></div>`;
+  d.innerHTML = `<div class="xf-head"><h3>${esc(title)}</h3><button class="xf-stop" data-cancel hidden>Stop</button><button class="icon-btn sm" data-x aria-label="Hide"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button></div><div class="xf-body"></div><div class="xf-foot" hidden><button class="btn primary" data-hide>Keep using the app</button></div>`;
   const pill = document.createElement('button');
   pill.className = 'xf-pill';
   pill.hidden = true;
   pill.innerHTML = '<svg class="xf-ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15"/><circle class="v" cx="18" cy="18" r="15" pathLength="100"/></svg><span></span>';
   document.body.append(d, pill);
-  d.showModal();
+  d.show(); // not modal: the app stays usable underneath
   const body = d.querySelector('.xf-body');
   const t = {
-    kind, d, body, pill, active: false, finished: false,
+    kind, d, body, pill, active: false, finished: false, live: false,
+    // the pill's words when the sheet is tucked away and nothing is being sent yet
+    note(text) { if (!t.active) { pill.querySelector('span').textContent = text; pill.querySelector('.v').style.strokeDasharray = '0 100'; } },
+    // something went wrong: say what, and offer to start again
+    fail(msg, retry) {
+      t.active = false;
+      keepAwake(false);
+      d.querySelector('.xf-foot').hidden = true;
+      body.innerHTML = `<p class="xf-err">${esc(msg)}</p>${retry ? '<div class="xf-btns"><button class="btn primary" data-retry>Try again</button></div>' : ''}`;
+      if (retry) body.querySelector('[data-retry]').onclick = () => { t.onCancel?.(); t.destroy(); retry(); };
+      pill.classList.add('paused');
+      pill.querySelector('span').textContent = 'Transfer stopped · tap';
+    },
     onCancel: null, onDone: null,
     set(html) { body.innerHTML = html; },
     // running: the sheet's progress, the pill's ring and words stay in step
@@ -70,7 +82,7 @@ function panel(kind) {
       pill.querySelector('span').textContent = paused ? `Paused · ${pct}%` : `${kind === 'send' ? 'Sending' : 'Receiving'} ${pct}%`;
     },
     hide() { if (d.open) d.close(); pill.hidden = false; },
-    show() { pill.hidden = true; if (!d.open) d.showModal(); },
+    show() { pill.hidden = true; if (!d.open) d.show(); },
     finish(html, { pillText = null, onTap = null } = {}) {
       t.active = false;
       t.finished = true;
@@ -82,10 +94,13 @@ function panel(kind) {
     },
     destroy() { t.active = false; keepAwake(false); if (d.open) d.close(); d.remove(); pill.remove(); if (current === t) current = null; },
   };
-  d.querySelector('[data-x]').onclick = () => (t.active ? t.hide() : t.destroy());
+  // hiding keeps it going (the pill shows how it's doing); Stop ends it and cleans everything up
+  const tuck = () => (t.live && !t.finished ? t.hide() : (t.onCancel?.(), t.destroy()));
+  d.querySelector('[data-x]').onclick = tuck;
   d.querySelector('[data-hide]').onclick = () => t.hide();
   d.querySelector('[data-cancel]').onclick = () => { t.onCancel?.(); t.destroy(); };
-  d.addEventListener('cancel', (e) => { e.preventDefault(); t.active ? t.hide() : t.destroy(); });
+  d.addEventListener('cancel', (e) => { e.preventDefault(); tuck(); });
+  t.goLive = () => { t.live = true; d.querySelector('[data-cancel]').hidden = false; t.note('Getting ready…'); };
   pill.onclick = () => t.show();
   current = t;
   return t;
@@ -124,20 +139,25 @@ export async function receive({ reload }) {
   let writing = Promise.resolve();
   const stop = () => { unwatch(); try { conn?.send(JSON.stringify({ t: 'cancel' })); } catch {} peer?.destroy(); sink?.drop?.(); };
   t.onCancel = stop;
+  const again = () => receive({ reload });
   t.set('<p class="xf-sub">Getting ready…</p>');
   let Peer;
-  try { Peer = await loadPeer(); } catch (e) { t.set(`<p class="xf-err">${esc(e.message)}</p>`); return; }
+  try { Peer = await loadPeer(); } catch (e) { t.fail(`${e.message}. Check your internet connection.`, again); return; }
   const code = newCode();
   peer = new Peer(peerId(code), PEER_OPTS());
+  t.goLive();
   unwatch = watchPeer(peer, t);
+  const slow = setTimeout(() => { if (!peer.open && !t.active) { stop(); t.fail('Couldn’t reach the connection service. Check this device is online and try again.', again); } }, 15000);
   const paused = (why) => { if (t.active && !t.finished) t.status(why, got, expect, { paused: true }); };
   peer.on('error', (e) => {
     if (t.finished) return;
     if (t.active) paused('Paused: reconnecting…');
-    else if (e.type !== 'network' && e.type !== 'disconnected') t.set(`<p class="xf-err">Couldn’t connect (${esc(e.type || e.message)}). Check both devices are online and try again.</p>`);
+    else if (e.type !== 'network' && e.type !== 'disconnected') { stop(); t.fail(`Couldn’t connect (${e.type || e.message}). Check both devices are online and try again.`, again); }
   });
   peer.on('open', () => {
+    clearTimeout(slow);
     if (t.active || t.finished) return; // a reconnect: the code on screen is still the same
+    t.note(`Waiting · code ${code.slice(0, 3)} ${code.slice(3)}`);
     const qr = qrcode(0, 'M');
     qr.addData(`${WEB_URL}#send-to=${code}`);
     qr.make();
@@ -262,6 +282,7 @@ export async function send({ code: given = '' } = {}) {
       if (resume) c.send(JSON.stringify({ t: 'resume', sid }));
       else {
         t.set('<p class="xf-big">Connected</p><p class="xf-sub">Waiting for the other device to accept…</p>');
+        t.note('Waiting for the other device…');
         c.send(JSON.stringify({ t: 'hello', sid, from: device(), docs: stream.summary.docs }));
       }
     });
@@ -334,15 +355,20 @@ export async function send({ code: given = '' } = {}) {
     stopCam();
     target = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (target.length !== 6) return;
+    const again = () => send({ code: target });
     t.set('<p class="xf-sub">Connecting…</p>');
+    t.note('Connecting…');
     let Peer;
-    try { Peer = await loadPeer(); } catch (e) { t.set(`<p class="xf-err">${esc(e.message)}</p>`); return; }
-    try { stream = await backupStream(); } catch (e) { t.set(`<p class="xf-err">Couldn’t read your library: ${esc(e?.message || e)}</p>`); return; }
+    try { Peer = await loadPeer(); } catch (e) { t.fail(`${e.message}. Check your internet connection.`, again); return; }
+    try { stream = await backupStream(); } catch (e) { t.fail(`Couldn’t read your library: ${e?.message || e}`, again); return; }
     peer = new Peer(PEER_OPTS());
+    t.goLive();
     unwatch = watchPeer(peer, t);
+    // nothing back from the other device in time: say so instead of spinning forever
+    setTimeout(() => { if (!conn && !t.finished && !t.active) { t.onCancel?.(); t.fail('The other device didn’t answer. Check the code, that it’s still showing the Receive screen, and that both devices are online.', again); } }, 20000);
     peer.on('error', (e) => {
       if (t.active) { pausedNow('Paused: reconnecting…'); reconnect(); return; }
-      if (!t.finished) t.set(`<p class="xf-err">${e.type === 'peer-unavailable' ? 'That code isn’t showing on any device. Check it and that the other device is still on the Receive screen.' : `Couldn’t connect (${esc(e.type || e.message)}).`}</p>`);
+      if (!t.finished) { t.onCancel?.(); t.fail(e.type === 'peer-unavailable' ? 'That code isn’t showing on any device. Check it, and that the other device is still on the Receive screen.' : `Couldn’t connect (${e.type || e.message}).`, again); }
     });
     let first = true;
     peer.on('open', () => { if (first) { first = false; open(false); } });

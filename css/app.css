@@ -1435,3 +1435,11 @@ body.bar-hidden .xf-pill { top: max(10px, env(safe-area-inset-top)); }
 .folder.drop-into > .folder-row { background: var(--accent-soft); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); border-radius: 10px; }
 body.lib-dragging, body.lib-dragging * { cursor: grabbing !important; user-select: none !important; -webkit-user-select: none !important; }
 .lib .lib-item, .lib .folder-row { -webkit-touch-callout: none; }
+
+/* the transfer sheet doesn't block the app: it floats at the bottom and can be tucked away */
+dialog.xfer[open] { position: fixed; z-index: 90; inset: auto 0 calc(max(12px, env(safe-area-inset-bottom)) + 70px) 0; margin: 0 auto; max-height: calc(100dvh - 140px); overflow-y: auto; }
+@media (min-width: 901px) { dialog.xfer[open] { inset: auto 0 24px 0; } }
+.xf-stop { height: 30px; padding: 0 12px; margin-left: auto; margin-right: 4px; border-radius: 999px; color: var(--danger); font-size: 13px; font-weight: 650; background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.xf-stop[hidden] { display: none; }
+.xf-head h3 { flex: 1; }
+.xf-foot { justify-content: flex-end; }

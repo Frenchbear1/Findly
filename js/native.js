@@ -5,9 +5,14 @@ export const NATIVE_BUILD = '__IS_BUILD__';
 const cap = globalThis.Capacitor;
 const tauri = globalThis.__TAURI__;
 /** 'ios' (the iPhone/iPad app), 'windows' (the desktop app) or 'web' (a browser). */
-export const platform = cap?.isNativePlatform?.() ? 'ios' : tauri?.core ? 'windows' : 'web';
-export const isNative = platform !== 'web';
-const plugin = (name) => (platform === 'ios' && typeof cap.registerPlugin === 'function' ? cap.registerPlugin(name) : null);
+const shell = cap?.isNativePlatform?.() ? 'ios' : tauri?.core ? 'windows' : 'web';
+// The app's own plugins: the native bridge lists them in Capacitor.Plugins (registerPlugin only exists when
+// @capacitor/core is bundled, which this app doesn't do: same as Calfie)
+const plugin = (name) => {
+  if (shell !== 'ios') return null;
+  if (cap.Plugins?.[name]) return cap.Plugins[name];
+  try { return typeof cap.registerPlugin === 'function' ? cap.registerPlugin(name) : null; } catch { return null; }
+};
 
 // The Windows app: the same calls as the iPhone's plugin, answered by the app itself (src-tauri/src/lib.rs).
 const invoke = (cmd, args) => tauri.core.invoke(cmd, args);
@@ -17,7 +22,7 @@ const onFocus = (cb) => {
   addEventListener('focus', go);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) go(); });
 };
-const desktopFiles = platform === 'windows' ? {
+const desktopFiles = shell === 'windows' ? {
   info: () => invoke('info'),
   list: () => invoke('list'),
   write: ({ path, data, append }) => invoke('write', { path, data, append }),
@@ -28,7 +33,8 @@ const desktopFiles = platform === 'windows' ? {
   stat: ({ path }) => invoke('stat', { path }),
   takeIncoming: async () => ({ files: [] }),
   keepAwake: async () => {},
-  cloud: async () => ({ available: false, on: false }),
+  // a library folder inside iCloud Drive (iCloud for Windows) syncs with your Apple devices: folders and order too
+  cloud: async () => { const r = await invoke('info'); const on = /icloud ?drive|iCloud~/i.test(r.root); return { available: on, on, windows: true }; },
   setCloud: async () => { throw new Error('iCloud sync is for Apple devices'); },
   pickFolder: () => invoke('pick_folder'),
   reveal: () => invoke('reveal'),
@@ -37,7 +43,10 @@ const desktopFiles = platform === 'windows' ? {
 } : null;
 const quiet = { index: async () => ({}), takePending: async () => ({}), addListener: () => {} };
 
-export const Files = platform === 'windows' ? desktopFiles : plugin('ISFiles');
+export const Files = shell === 'windows' ? desktopFiles : plugin('ISFiles');
+// if the app's file storage can't be reached, behave like the website (browser storage) rather than fail
+export const platform = shell === 'ios' && !Files ? 'web' : shell;
+export const isNative = platform !== 'web';
 export const Text = plugin('ISText');
 export const Link = plugin('ISLink') || quiet;
 /** Live Text (reading scanned pages) is on the iPhone. */
@@ -58,7 +67,7 @@ export const revealLibrary = () => Files.reveal?.();
 /** The bytes of a file in the library folder. */
 export async function readBytes(path) {
   const r = await fetch(await fileUrl(path));
-  if (!r.ok) throw new Error(`“${path}” is missing from the Instant Search folder`);
+  if (!r.ok) throw new Error(`“${path}” is missing from the Findly folder`);
   return r.arrayBuffer();
 }
 /** The file in the library folder as a File (for reading it like a picked file). */

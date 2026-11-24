@@ -1,6 +1,6 @@
 import { compile, MODES } from './search.js';
 import { store, stuckStorage, setDiskPath } from './store.js';
-import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary } from './native.js';
+import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary, diskFile } from './native.js';
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
 import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION } from './pdf.js';
@@ -2958,6 +2958,15 @@ async function syncFolder() {
       store.deleteDoc(id, { keepFile: true }).catch(() => {});
     }
     const fresh = [];
+    // a backup opened in Findly (or dropped in its folder): offer to bring it in, read from disk a piece at a time
+    for (const f of files) {
+      if (!/\.isbackup$/i.test(f.path) || /^(Backups|\.)/.test(f.path)) continue;
+      const seen = `instant-search:offered:${f.path}:${f.size}`;
+      if (localStorage.getItem(seen)) continue;
+      try { localStorage.setItem(seen, '1'); } catch {}
+      setTimeout(async () => importBackup(await diskFile(f.path)), 300);
+      break;
+    }
     for (const f of files) {
       const name = f.path.split('/').pop();
       if (!kindOf(name) || name === 'Put documents here.txt') continue;
@@ -3105,8 +3114,10 @@ async function changeLibraryFolder() {
   // the old folder's documents leave the library (their files stay where they are); the new folder's come in
   for (const d of [...S.docs]) { S.docs.splice(S.docs.indexOf(d), 1); S.texts.delete(d.id); closePdf(d.id); await store.deleteDoc(d.id, { keepFile: true }).catch(() => {}); }
   renderLibrary();
-  toast(`Library folder: ${p}`);
-  syncFolder().then(indexSpotlight);
+  cloudOn = !!(await cloudStatus()).on;
+  toast(cloudOn ? `Library folder: ${p} (in iCloud Drive: syncing with your Apple devices)` : `Library folder: ${p}`, { ms: 6000 });
+  try { localStorage.removeItem('instant-search:stateAt'); } catch {} // take the folder's own organisation
+  syncCloud();
 }
 
 function nativeSetup() {
@@ -3117,6 +3128,7 @@ function nativeSetup() {
     store[k] = (...a) => { scheduleState(); return orig.apply(store, a); };
   }
   if (platform === 'windows') document.documentElement.classList.add('desktop-app');
+  if (platform === 'windows') addEventListener('focus', () => applyState()); // changes from your other devices
   cloudStatus().then((st) => { cloudOn = !!st.on; return syncCloud(); });
   Files.addListener('changed', () => syncCloud());
   Files.addListener('incoming', () => syncFolder().then(indexSpotlight));
@@ -4096,7 +4108,7 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
 function backupMenu(anchor) {
   openMenu(anchor, [
     { header: 'Backup' },
-    ...(platform === 'windows' ? [{ label: 'Library folder…', sub: 'Choose the folder on this computer that holds your documents', icon: I.folder, run: changeLibraryFolder }, { label: 'Show library folder', sub: 'Open it in File Explorer', icon: I.out, run: () => revealLibrary() }, { sep: true }] : []),
+    ...(platform === 'windows' ? [{ label: 'Library folder…', sub: cloudOn ? 'In iCloud Drive: syncing with your Apple devices' : 'Choose a folder (pick iCloud Drive › Findly to sync with your Apple devices)', icon: I.folder, run: changeLibraryFolder }, { label: 'Show library folder', sub: 'Open it in File Explorer', icon: I.out, run: () => revealLibrary() }, { sep: true }] : []),
     ...(platform === 'ios' ? [{ label: 'iCloud sync', sub: cloudOn ? 'On: your Apple devices share one library (iCloud Drive › Findly)' : 'Keep the same library on your iPhone, iPad and Mac', icon: I.save, checked: cloudOn, run: toggleCloud }, { sep: true }] : []),
     { label: 'Send to another device', sub: 'Straight across Wi-Fi, no file: scan the code on the other device', icon: I.out, run: () => sendTo() },
     { label: 'Receive from another device', sub: 'Shows a code to scan; adds what’s new, no duplicates', icon: I.upload, run: () => receiveFrom({ reload: () => location.reload() }) },
@@ -4125,7 +4137,7 @@ async function exportAll() {
         const m = busy.firstChild; if (m) m.textContent = `Making the backup… ${Math.round((done / st.size) * 100)}%`;
       }
       busy._hide();
-      toast(`Backup saved in ${platform === 'windows' ? 'your library folder' : 'Files › On My iPhone › Instant Search'} › ${path} (${fmtSize(st.size)})`, { ms: 8000 });
+      toast(`Backup saved in ${platform === 'windows' ? 'your library folder' : 'Files › On My iPhone › Findly'} › ${path} (${fmtSize(st.size)})`, { ms: 8000 });
     } catch (err) {
       busy._hide();
       toast(`Couldn’t make the backup: ${err?.message || err}`, { ms: 6000 });
@@ -4135,7 +4147,7 @@ async function exportAll() {
   try {
     const blob = await makeBackup();
     const d = new Date();
-    const name = `Instant Search backup ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.isbackup`;
+    const name = `Findly backup ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.isbackup`;
     busy._hide();
     const file = new File([blob], name, { type: 'application/octet-stream' });
     // phones: the share sheet has Save to Files; computers: a normal download
@@ -4205,7 +4217,7 @@ async function openClear() {
   const docs = new Set(everything ? S.docs : [...res.picked].filter((r) => r.doc).map((r) => r.doc));
   for (const f of folders) S.docs.filter((d) => d.folderId === f.id).forEach((d) => docs.add(d));
   if (!docs.size && !folders.length) return;
-  const what = everything ? 'everything in Instant Search' : [docs.size && plural(docs.size, 'document'), folders.length && plural(folders.length, 'folder')].filter(Boolean).join(' and ');
+  const what = everything ? 'everything in Findly' : [docs.size && plural(docs.size, 'document'), folders.length && plural(folders.length, 'folder')].filter(Boolean).join(' and ');
   const sure = await review({
     title: `Remove ${what}?`,
     intro: `This deletes ${everything ? 'all your documents, folders and linked pages' : 'them'} from this device and can’t be undone.${everything && res.options.settings ? ' Your settings will be reset too.' : ''}`,
