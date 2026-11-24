@@ -77,10 +77,12 @@ Links go through the download helper, which can download from any site once it's
 
 Browsers don't let one website read files from another unless that site allows it, and faa.gov doesn't. The helper is a tiny program on Cloudflare's free plan that fetches the files for the app. It can download from any site, and it comes with your own secret key so nobody else can use it.
 
+**Easiest:** in Findly, open **Add from a web link… → Download helper → Set up**. It walks you through each step with the links, the code and a test built in. The same steps by hand:
+
 1. Go to **https://dash.cloudflare.com** and create a free account (or sign in).
 2. In the left menu open **Workers & Pages** (it may be under **Compute**).
-3. Click **Create application**, then **Start with Hello World!**. Name it `instant-search-helper` and click **Deploy**.
-4. Copy the worker's address. It looks like `https://instant-search-helper.YOUR-NAME.workers.dev`.
+3. Click **Create application**, then **Start with Hello World!**. Name it `findly-helper` (any name works) and click **Deploy**.
+4. Copy the worker's address. It looks like `https://findly-helper.YOUR-NAME.workers.dev`.
 5. In Instant Search: **▾ next to Add documents → Add from a web link… → Download helper**. Paste the address, then press **Copy helper code**.
 6. Back in Cloudflare, click **Edit code**, select everything in the editor, paste, and click **Deploy** (top right).
 7. In Instant Search press **Save & test**. It should say **working ✓**.

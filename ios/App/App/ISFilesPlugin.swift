@@ -70,7 +70,7 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             var dest = url
-            if !url.standardizedFileURL.path.hasPrefix(self.root.standardizedFileURL.path + "/") || url.path.contains("/Inbox/") {
+            if !self.canon(url).hasPrefix(self.canon(self.root) + "/") || url.path.contains("/Inbox/") {
                 dest = self.free(url.lastPathComponent)
                 var coordError: NSError?
                 NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: url, options: [], error: &coordError) { src in
@@ -87,9 +87,16 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    /// The same place written one way: iOS hands out both /var/… and /private/var/… for the app's folders,
+    /// and a file deep in a subfolder lost its folders when the two didn't match.
+    private func canon(_ url: URL) -> String {
+        var p = url.resolvingSymlinksInPath().standardizedFileURL.path
+        if p.hasPrefix("/private/var/") { p = String(p.dropFirst(8)) }
+        return p
+    }
     private func rel(_ url: URL) -> String {
-        let base = root.standardizedFileURL.path + "/"
-        let p = url.standardizedFileURL.path
+        let base = canon(root) + "/"
+        let p = canon(url)
         return p.hasPrefix(base) ? String(p.dropFirst(base.count)) : url.lastPathComponent
     }
 

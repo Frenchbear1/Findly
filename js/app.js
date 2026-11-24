@@ -2969,7 +2969,7 @@ async function syncFolder() {
     }
     for (const f of files) {
       const name = f.path.split('/').pop();
-      if (!kindOf(name) || name === 'Put documents here.txt') continue;
+      if (!kindOf(name) || name === 'Put documents here.txt' || /^(Backups|\.findly)\//.test(f.path)) continue;
       const id = byPath.get(f.path);
       const doc = id && docById(id);
       if (doc) {
@@ -2990,7 +2990,15 @@ async function syncFolder() {
       file._diskPath = f.path;
       fresh.push(file);
     }
-    if (fresh.length) addFiles(fresh, null, { quietSkip: true });
+    // files put in subfolders (at any depth) land in a library folder of the same name: "Manuals › FAA"
+    const byDir = new Map();
+    for (const file of fresh) {
+      const dir = file._diskPath.split('/').slice(0, -1).filter(Boolean).join(' › ');
+      if (!byDir.has(dir)) byDir.set(dir, []);
+      byDir.get(dir).push(file);
+    }
+    for (const [dir, list] of byDir) addFiles(list.sort(byName), dir ? folderNamed(dir).id : null, { quietSkip: true });
+    if (fresh.length) toast(`Added ${plural(fresh.length, 'document')} from the Findly folder`);
     else { renderLibrary(); runSearch({ keepScroll: true }); }
   })().finally(() => { syncing = null; });
   return syncing;
@@ -3132,6 +3140,15 @@ function nativeSetup() {
   cloudStatus().then((st) => { cloudOn = !!st.on; return syncCloud(); });
   Files.addListener('changed', () => syncCloud());
   Files.addListener('incoming', () => syncFolder().then(indexSpotlight));
+  // documents dropped into the folder in Files while Findly was in the background: pick them up on coming back
+  let lastLook = Date.now();
+  const lookAgain = () => {
+    if (document.hidden || Date.now() - lastLook < 1500) return;
+    lastLook = Date.now();
+    syncFolder().then(indexSpotlight).catch(() => {});
+  };
+  document.addEventListener('visibilitychange', lookAgain);
+  addEventListener('focus', lookAgain);
   Files.takeIncoming().then((r) => { if (r?.files?.length) syncFolder(); }).catch(() => {});
   Link.addListener('open', openFromSystem);
   Link.takePending().then(openFromSystem).catch(() => {});
@@ -3297,20 +3314,18 @@ function openLinkDialog(folderId, { url = '', helperOpen = false, aiOpen = false
   sel.innerHTML = `<option value="">No folder</option>` + S.folders.map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
   sel.value = folderId || '';
   $('#linkUrl').value = url;
-  $('#helperUrl').value = helper.get();
+
   $('#autoCheck').checked = !!prefs.autoCheck;
-  $('#helperState').textContent = helper.get() ? 'set up' : 'not set up';
-  $('#helperState').className = helper.get() ? 'ok' : '';
-  $('#helperBox').open = helperOpen || false;
+  showHelperState();
+  if (helperOpen) setTimeout(() => openHelper(), 250);
   $('#aiBox').open = aiOpen || false;
   loadHelperCode();
-  $('#helperCopy').textContent = 'Copy helper code';
-  $('#helperCopy').classList.remove('done');
+
   fillAiBox();
   setLinkStatus('');
   $('#linkGo').disabled = false;
   $('#linkDlg').showModal();
-  setTimeout(() => (helperOpen ? $('#helperUrl') : aiOpen ? $('#aiGo') : $('#linkUrl')).focus(), 50);
+  setTimeout(() => (aiOpen ? $('#aiGo') : $('#linkUrl')).focus(), 50);
   if (aiOpen && !unlinked().length) setAiMode('new');
   if (aiOpen) setTimeout(() => $('#aiBox').scrollIntoView({ block: 'nearest' }), 60);
 }
@@ -3350,7 +3365,7 @@ async function submitLink() {
     await pickFromPage(url, links, title, folderId);
   } catch (err) {
     setLinkStatus(helperProblem(err), true);
-    if (err instanceof NeedsHelper || /helper/i.test(String(err?.message))) $('#helperBox').open = true;
+    if (err instanceof NeedsHelper || /helper/i.test(String(err?.message))) openHelper();
   } finally {
     $('#linkGo').disabled = false;
   }
@@ -3629,8 +3644,8 @@ function copyHelperCode(btn) {
     if (ok) {
       // the address the app uses carries the key (an older helper simply ignores it)
       const key = ensureHelperKey();
-      if (helper.get()) { helper.set(withKey(helper.get(), key)); $('#helperUrl').value = helper.get(); }
-      btn.textContent = 'Copied ✓ — now paste it in Cloudflare';
+      if (helper.get()) helper.set(withKey(helper.get(), key));
+      btn.textContent = 'Copied ✓ Now paste it in Cloudflare';
       btn.classList.add('done');
     } else {
       btn.textContent = 'Couldn’t copy — try again';
@@ -3639,13 +3654,126 @@ function copyHelperCode(btn) {
   if (helperCode) finish(copyText(helperCode));
   else loadHelperCode().then((code) => finish(!!code && copyText(code)));
 }
+// ---- the download helper, set up step by step in its own window ----
+// Sites like faa.gov don't let other websites download their files; a tiny free program on Cloudflare (the helper)
+// fetches them for Findly. This walks a first-timer through it with the links, the code and a test built in.
+const HELPER_STEP = 'instant-search:helperStep';
+async function testHelper(v) {
+  if (!v) return { ok: false, msg: 'Paste your helper’s address first.' };
+  if (!/^https?:\/\//i.test(v)) v = 'https://' + v;
+  let stored = '';
+  try { stored = localStorage.getItem(KEY_STORE) || ''; } catch {}
+  if (!keyOf(v) && stored) v = withKey(v, stored); // this device made the key: put it back on
+  if (keyOf(v)) { try { localStorage.setItem(KEY_STORE, keyOf(v)); } catch {} }
+  helper.set(v);
+  try {
+    const res = await fetch(v, { cache: 'no-store' });
+    const text = await res.text();
+    if (!res.ok || !/download helper/i.test(text)) {
+      return { ok: false, url: v, msg: /hello world/i.test(text) ? 'That’s still Cloudflare’s Hello World. Go back a step: paste the helper code into the worker and press Deploy.' : 'Something answered, but it isn’t the helper. Check the address, and that you pasted the code and pressed Deploy.' };
+    }
+    if (/key (missing|wrong)/i.test(text)) return { ok: false, url: v, msg: 'The helper is running but this address is missing its key. Use the whole address from the device where you set it up (it ends in ?key=…), or copy the code again and re-deploy.' };
+    try { localStorage.removeItem('instant-search:direct'); } catch {}
+    return { ok: true, url: v, any: /any site/i.test(text) };
+  } catch {
+    return { ok: false, url: v, msg: 'Nothing answered at that address. It should look like https://findly-helper.yourname.workers.dev, and the worker needs to be deployed.' };
+  }
+}
+function showHelperState(state) {
+  const el = $('#helperState');
+  if (!el) return;
+  const st = state || (helper.get() ? 'set' : 'none');
+  el.textContent = { ok: 'working ✓', set: 'set up', none: 'not set up', bad: 'not working' }[st] || '';
+  el.className = st === 'ok' || st === 'set' ? 'ok' : st === 'bad' ? 'bad' : '';
+  const btn = $('#helperOpen');
+  if (btn) btn.textContent = st === 'none' ? 'Set up' : 'Manage';
+}
+function openHelper() {
+  let d = $('#helperDlg');
+  if (!d) {
+    d = el('dialog', 'helper-dlg');
+    d.id = 'helperDlg';
+    document.body.append(d);
+    d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
+  }
+  const STEPS = ['Account', 'Worker', 'Code', 'Connect', 'Done'];
+  let step = helper.get() ? 4 : Math.min(3, Number(localStorage.getItem(HELPER_STEP) || 0));
+  let result = null;
+  const go = (n) => { step = Math.max(0, Math.min(4, n)); try { localStorage.setItem(HELPER_STEP, String(Math.min(step, 3))); } catch {} render(); };
+  const ext = (href, label) => `<a class="btn hs-link" href="${href}" target="_blank" rel="noopener">${label}<svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>`;
+  const body = () => {
+    if (step === 0) return `<h4>Make a free Cloudflare account</h4>
+      <p>The helper runs on Cloudflare’s free plan. No card needed. If you already have an account, just sign in.</p>
+      <div class="hs-acts">${ext('https://dash.cloudflare.com/sign-up', 'Create a free account')}${ext('https://dash.cloudflare.com/login', 'Sign in')}</div>
+      <p class="hs-tip">Come back here when you see Cloudflare’s dashboard.</p>`;
+    if (step === 1) return `<h4>Create the worker</h4>
+      <ol class="hs-ol">
+        <li>Open <b>Workers &amp; Pages</b> ${ext('https://dash.cloudflare.com/?to=/:account/workers-and-pages/create', 'Open it')}</li>
+        <li>Choose <b>Start with Hello World!</b> (or <b>Create Worker</b>).</li>
+        <li>Name it <code>findly-helper</code> <button type="button" class="btn sm" data-copyname>Copy name</button></li>
+        <li>Press <b>Deploy</b>.</li>
+      </ol>
+      <p class="hs-tip">Cloudflare renames buttons now and then; pick the closest match.</p>`;
+    if (step === 2) return `<h4>Put the helper’s code in it</h4>
+      <ol class="hs-ol">
+        <li><button type="button" class="btn primary" data-copycode>Copy helper code</button><br><span class="muted">It includes your own secret key, so only you can use your helper.</span></li>
+        <li>In Cloudflare, on your new worker, press <b>Edit code</b>.</li>
+        <li>Select everything in the editor (<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>A</kbd>), paste over it, and press <b>Deploy</b>.</li>
+      </ol>`;
+    if (step === 3) return `<h4>Connect Findly to it</h4>
+      <p>Copy your worker’s address from Cloudflare (on the worker’s page, under <b>Domains</b> or next to <b>Visit</b>). It ends in <code>.workers.dev</code>.</p>
+      <div class="hs-url"><input id="helperUrl" type="url" inputmode="url" placeholder="https://findly-helper.yourname.workers.dev" autocomplete="off" spellcheck="false" value="${esc(helper.get() || '')}"><button type="button" class="btn" data-pasteurl>Paste</button></div>
+      <button type="button" class="btn primary hs-test" data-test>Test it</button>
+      <p class="hs-result${result ? (result.ok ? ' ok' : ' bad') : ''}">${result ? esc(result.ok ? 'Working ✓' : result.msg) : ''}</p>`;
+    return `<div class="hs-done ${result?.ok === false ? 'bad' : ''}"><span class="hs-check">${result?.ok === false ? '!' : '✓'}</span>
+        <h4>${result?.ok === false ? 'Your helper isn’t answering' : 'Your download helper is set up'}</h4>
+        <p>${result?.ok === false ? esc(result.msg) : 'Findly can now add documents from any website, including faa.gov, and check them for updates.'}${result?.ok && !result.any ? ' <b>It only allows the sites listed in it:</b> copy the code again (step 3) and re-deploy to allow any site.' : ''}</p></div>
+      <div class="hs-box"><b>Using Findly on another device?</b><p>Copy this address there: Add from a web link › Download helper › Manage › Connect.</p>
+        <div class="hs-url"><input readonly value="${esc(helper.get() || '')}"><button type="button" class="btn" data-copyurl>Copy</button></div></div>
+      <div class="hs-acts"><button type="button" class="btn" data-test>Test again</button><button type="button" class="btn" data-goto="2">Update the code</button><button type="button" class="btn" data-goto="3">Change address</button></div>`;
+  };
+  const render = () => {
+    d.innerHTML = `<header class="hs-head"><h3>Download helper</h3><button class="icon-btn sm" data-x aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
+      <ol class="hs-steps">${STEPS.map((n, i) => `<li><button type="button" data-goto="${i}" class="${i < step ? 'done' : i === step ? 'on' : ''}" ${i === 4 && !helper.get() ? 'disabled' : ''}><i>${i < step ? '✓' : i + 1}</i><span>${n}</span></button></li>`).join('')}</ol>
+      <div class="hs-body">${body()}</div>
+      <footer class="hs-foot">${step > 0 && step < 4 ? '<button type="button" class="btn" data-back>Back</button>' : '<span></span>'}${step < 3 ? '<button type="button" class="btn primary" data-next>I’ve done this · Next</button>' : step === 4 ? '<button type="button" class="btn primary" data-x>Done</button>' : '<span></span>'}</footer>`;
+    if (step === 3) setTimeout(() => d.querySelector('#helperUrl')?.focus(), 50);
+  };
+  d.onclick = async (e) => {
+    const t = e.target;
+    if (t === d || t.closest('[data-x]')) { d.close(); return; }
+    const g = t.closest('[data-goto]');
+    if (g && !g.disabled) { result = null; go(Number(g.dataset.goto)); return; }
+    if (t.closest('[data-next]')) return go(step + 1);
+    if (t.closest('[data-back]')) return go(step - 1);
+    if (t.closest('[data-copyname]')) { copyText('findly-helper'); t.closest('button').textContent = 'Copied ✓'; return; }
+    if (t.closest('[data-copycode]')) return copyHelperCode(t.closest('button'));
+    if (t.closest('[data-copyurl]')) { copyText(helper.get()); t.closest('button').textContent = 'Copied ✓'; return; }
+    if (t.closest('[data-pasteurl]')) { try { d.querySelector('#helperUrl').value = (await navigator.clipboard.readText()).trim(); } catch { d.querySelector('#helperUrl').focus(); } return; }
+    if (t.closest('[data-test]')) {
+      const b = t.closest('button');
+      b.disabled = true;
+      b.textContent = 'Testing…';
+      const v = step === 3 ? d.querySelector('#helperUrl').value.trim() : helper.get();
+      result = await testHelper(v);
+      showHelperState(result.ok ? 'ok' : 'bad');
+      if (result.ok) { try { localStorage.removeItem(HELPER_STEP); } catch {} step = 4; }
+      render();
+    }
+  };
+  d.onkeydown = (e) => { if (e.key === 'Enter' && e.target.id === 'helperUrl') { e.preventDefault(); d.querySelector('[data-test]')?.click(); } };
+  loadHelperCode();
+  render();
+  if (!d.open) d.showModal();
+}
+
 function helperFixHtml(hosts, picks) {
   const list = hosts.map((h) => `<b>${esc(h)}</b>`).join(', ');
   return `<span class="helper-fix"><b>Your download helper doesn’t allow ${list} yet</b>, so ${picks ? 'some of these' : 'these'} couldn’t be downloaded. Update it once and it can download from any site, protected by your own secret key:
     <ol><li><button type="button" class="btn sm" data-copyhelper>Copy the updated helper code</button></li>
     <li>Open <a href="https://dash.cloudflare.com" target="_blank" rel="noopener">Cloudflare</a> → <b>Workers &amp; Pages</b> → your helper → <b>Edit code</b>. Select everything in the editor, paste, and click <b>Deploy</b>.</li>
     <li>Come back and press <b>Try again</b>${picks ? ' in Find documents with AI' : ''}.</li></ol>
-    <em>Your key is saved in the helper address. To use the helper on another device, copy the whole address from <b>Download helper</b> in the web link window.</em></span>`;
+    <em>Your key is saved in the helper address. To use the helper on another device, open <b>Download helper › Manage</b> in the web link window and copy the address.</em></span>`;
 }
 async function linkWithAi() {
   const items = parseAiAnswer($('#aiAnswer').value);
@@ -4566,41 +4694,7 @@ function bind() {
     }
   });
   $('#autoCheck').addEventListener('change', (e) => { prefs.autoCheck = e.target.checked; savePrefs(); });
-  $('#helperCopy').addEventListener('click', (e) => copyHelperCode(e.currentTarget));
-  $('#helperTest').addEventListener('click', async () => {
-    let v = $('#helperUrl').value.trim();
-    if (v && !/^https?:\/\//i.test(v)) v = 'https://' + v;
-    // this device made the key: put it back on an address pasted without it
-    let stored = '';
-    try { stored = localStorage.getItem(KEY_STORE) || ''; } catch {}
-    if (v && !keyOf(v) && stored) v = withKey(v, stored);
-    if (keyOf(v)) { try { localStorage.setItem(KEY_STORE, keyOf(v)); } catch {} }
-    $('#helperUrl').value = v;
-    helper.set(v);
-    $('#helperState').textContent = v ? 'testing…' : 'not set up';
-    $('#helperState').className = '';
-    if (!v) return;
-    try {
-      const res = await fetch(v, { cache: 'no-store' });
-      const text = await res.text();
-      if (!res.ok || !/download helper/i.test(text)) throw new Error('unexpected answer');
-      if (/key (missing|wrong)/i.test(text)) {
-        $('#helperState').textContent = 'needs its key';
-        setLinkStatus('The helper is running but needs its key. On the device where you set it up, copy the whole helper address (it ends in ?key=…) and paste it here.', true);
-        return;
-      }
-      const anySite = /any site/i.test(text);
-      $('#helperState').textContent = anySite ? 'working ✓' : 'working ✓ · listed sites only';
-      $('#helperState').className = 'ok';
-      setLinkStatus(anySite
-        ? 'Download helper is working and can download from any site. Try your link again.'
-        : 'Download helper is working, but only for the sites listed in it. Press Copy helper code and paste it into your worker on Cloudflare to allow any site.');
-      try { localStorage.removeItem('instant-search:direct'); } catch {}
-    } catch {
-      $('#helperState').textContent = 'not reachable';
-      setLinkStatus('The helper didn’t answer. Check the address (it ends in .workers.dev) and that the worker is deployed.', true);
-    }
-  });
+  $('#helperOpen').addEventListener('click', () => openHelper());
   document.addEventListener('click', (e) => { if (!e.target.closest('.pop-menu')) closeMenu(); });
   addEventListener('resize', closeMenu);
   $('.sidebar').addEventListener('scroll', closeMenu, true);

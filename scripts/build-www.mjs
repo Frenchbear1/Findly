@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = join(root, 'www');
-const skip = new Set(['.git', '.github', '.gitignore', '.nojekyll', 'node_modules', 'www', 'ios', 'scripts', 'tests', 'helper',
+const skip = new Set(['.git', '.github', '.gitignore', '.nojekyll', 'node_modules', 'www', 'ios', 'scripts', 'tests',
   'package.json', 'package-lock.json', 'capacitor.config.json', 'vercel.json', 'src-tauri']);
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out);
