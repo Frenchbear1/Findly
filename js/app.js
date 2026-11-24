@@ -1,10 +1,10 @@
-import { compile, MODES } from './search.js';
+import { compile, MODES, inWhere, WHERE } from './search.js';
 import { store, stuckStorage, setDiskPath } from './store.js';
 import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary, diskFile } from './native.js';
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
 import { detectLabels, cleanPdfLabels } from './pagelabels.js';
-import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION } from './pdf.js';
+import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION, MARKS_V, marksForPdf } from './pdf.js';
 import { renderHtmlPage, forgetHtml, renderedText } from './htmlview.js';
 import { remoteFetch, remoteInfo, remoteChanged, download, documentLinks, looksLikeDocument, fileNameFor, editionKey, linkKey, linkSimilarity, SAME_DOC_SCORE, helper, NeedsHelper } from './remote.js';
 import { comboFromEvent, comboLabel, worksWhileTyping, isMac } from './keys.js';
@@ -116,8 +116,10 @@ const savePrefs = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(pr
 const searchWorker = (() => {
   try { return new Worker(new URL('./search-worker.js', import.meta.url), { type: 'module' }); } catch { return null; }
 })();
+// the worker's copy of each document's headings and captions
+function sendMarks(doc) { try { searchWorker?.postMessage({ t: 'marks', id: doc.id, marks: doc.marks || null }); } catch {} }
 class TextMap extends Map {
-  set(k, v) { super.set(k, v); try { searchWorker?.postMessage({ t: 'set', id: k, pages: v }); } catch {} return this; }
+  set(k, v) { super.set(k, v); try { searchWorker?.postMessage({ t: 'set', id: k, pages: v }); } catch {} const d = S.docs.find((x) => x.id === k); if (d?.marks) sendMarks(d); return this; }
   delete(k) { try { searchWorker?.postMessage({ t: 'del', id: k }); } catch {} return super.delete(k); }
   clear() { try { searchWorker?.postMessage({ t: 'clear' }); } catch {} super.clear(); }
 }
@@ -185,6 +187,25 @@ function labelOlderDocs() {
   };
   setTimeout(step, 1500);
 }
+// Headings and captions for PDFs added before they were picked out: read again from each PDF, quietly,
+// one document at a time.
+async function markOlderDocs() {
+  const todo = S.docs.filter((d) => d.kind === 'pdf' && !d.status && d.marksV !== MARKS_V && S.texts.has(d.id));
+  for (const d of todo) {
+    await new Promise((r) => setTimeout(r, 400));
+    if (!S.docs.includes(d) || d.status) continue;
+    try {
+      const pdf = await getPdf(d.id, () => store.file(d.id));
+      const marks = await marksForPdf(pdf, S.texts.get(d.id) || [], () => !S.docs.includes(d));
+      if (!marks) continue;
+      d.marks = marks;
+      d.marksV = MARKS_V;
+      store.updateDoc(stripMeta(d)).catch(() => {});
+      sendMarks(d);
+      if (prefs.where && prefs.where !== 'any' && S.matcher) runSearch();
+    } catch {}
+  }
+}
 // A group is one section: a whole document, or (when ranking pages) a single hit page and the pages opened around it.
 const groupKey = (R, doc) => (R?.flat ? pkey(doc.id, R.pages[0].n) : doc.id);
 const searchable = (d) => !d.status;
@@ -200,8 +221,10 @@ function computeHits(docs) {
       const pages = S.texts.get(doc.id);
       if (!pages) continue;
       const hp = [];
+      const where = prefs.where && prefs.where !== 'any' ? prefs.where : null;
       for (let n = 0; n < pages.length; n++) {
-        const r = S.matcher.match(pages[n]);
+        let r = S.matcher.match(pages[n]);
+        if (r && where) r = inWhere(r, doc.marks?.[n] || null, where);
         if (r) hp.push({ n, ranges: r, count: r.length });
       }
       if (hp.length) list.push({ doc, pages: hp, hits: hp.reduce((a, p) => a + p.count, 0) });
@@ -261,7 +284,7 @@ function workerHits(docs) {
         return { doc: byId.get(f.id), pages, hits: at };
       }).filter((R) => R.doc));
     });
-    searchWorker.postMessage({ t: 'q', qid, query: q.value, opts: { mode: prefs.mode, matchCase: prefs.matchCase, wholeWord: prefs.wholeWord, near: prefs.near }, ids: docs.map((d) => d.id) });
+    searchWorker.postMessage({ t: 'q', qid, query: q.value, opts: { mode: prefs.mode, matchCase: prefs.matchCase, wholeWord: prefs.wholeWord, near: prefs.near, where: prefs.where || 'any' }, ids: docs.map((d) => d.id) });
   });
 }
 
@@ -2453,7 +2476,7 @@ function syncControls() {
   document.body.classList.toggle('side-hidden', !!prefs.sideHidden);
   $('#compactBtn').title = prefs.compact ? `Show the full toolbar (${keyHint('toggleCompact')})` : `Minimize the toolbar (${keyHint('toggleCompact')})`;
   const flags = [prefs.matchCase ? 'Aa' : '', prefs.wholeWord ? '<u>ab</u>' : '', prefs.mode === 'near' ? `≤${prefs.near}` : ''].filter(Boolean);
-  const pill = `<span class="full">${MODE_SHORT[prefs.mode]}</span><span class="short">${MODE_TINY[prefs.mode]}</span>${flags.map((f) => `<em>${f}</em>`).join('')}<svg class="pill-arrow" viewBox="0 0 24 24"><path d="M8 10l4 4 4-4"/></svg>`;
+  const pill = `<span class="full">${MODE_SHORT[prefs.mode]}</span><span class="short">${MODE_TINY[prefs.mode]}</span>${WHERE[prefs.where]?.short ? `<em class="where">${WHERE[prefs.where].short}</em>` : ''}${flags.map((f) => `<em>${f}</em>`).join('')}<svg class="pill-arrow" viewBox="0 0 24 24"><path d="M8 10l4 4 4-4"/></svg>`;
   setHTML($('#modePill'), pill);
   setHTML($('#mMode'), pill);
   $('#zoomVal').textContent = Math.round(zoomValue() * 100) + '%';
@@ -3295,7 +3318,10 @@ async function ingest(file, meta) {
       if (shown.length > plain.length * 1.15 + 80) pages = paginate(shown);
     }
     const pdfLabels = pages.labels;
+    const before = pages, pdfMarks = pages.marks;
     if (hasLiveText && meta.kind === 'pdf' && bytes) pages = await liveText(bytes, pages, meta);
+    // headings and captions, where the page's text is still the one they were found in
+    if (pdfMarks) { meta.marks = pages.map((t, n) => (t === before[n] ? pdfMarks[n] : null)); meta.marksV = MARKS_V; }
     const chars = pages.reduce((a, p) => a + p.trim().length, 0);
     meta.pages = pages.length;
     meta.labels = docLabels(meta.kind, pages, pdfLabels);
@@ -3689,7 +3715,9 @@ async function replaceDoc(doc, { pages, bytes, size, name, source }, keepOld) {
     pages: pages.length, size: size || doc.size, updatedAt: Date.now(), hash: textHash(pages),
     labels: docLabels(doc.kind, pages, pages.labels), labelsV: LABELS_V,
     noText: doc.kind === 'pdf' && chars < pages.length * 25,
+    marks: pages.marks || null, marksV: pages.marks ? MARKS_V : 0,
   });
+  sendMarks(doc);
   if (name) doc.name = name;
   if (source) doc.source = source;
   if (doc.kind === 'html' && bytes) doc.hasOriginal = true;
@@ -6180,7 +6208,7 @@ function pickerHtml() {
   const near = prefs.mode === 'near'
     ? `<div class="pk-near"><span>Within</span><button class="pk-step" data-near="-1" aria-label="Fewer words apart">${I.minus}</button><b>${fmt(Number(prefs.near) || 8)}</b><button class="pk-step" data-near="1" aria-label="More words apart">${I.plus}</button><span>words</span></div>`
     : '';
-  return `<div class="pk-opts" role="listbox" aria-label="Search type">${opts}</div>${near}<div class="pk-togs"><button class="pk-tog" data-tog="case" aria-pressed="${prefs.matchCase}"><i>Aa</i>Match case</button><button class="pk-tog" data-tog="word" aria-pressed="${prefs.wholeWord}"><i><u>ab</u></i>Whole words</button></div>`;
+  return `<div class="pk-opts" role="listbox" aria-label="Search type">${opts}</div>${near}<div class="pk-togs"><button class="pk-tog" data-tog="case" aria-pressed="${prefs.matchCase}"><i>Aa</i>Match case</button><button class="pk-tog" data-tog="word" aria-pressed="${prefs.wholeWord}"><i><u>ab</u></i>Whole words</button></div><div class="pk-where"><span>Look in</span><div class="pk-wseg">${Object.entries(WHERE).map(([k, w]) => `<button type="button" data-where="${k}" aria-pressed="${(prefs.where || 'any') === k}">${w.label}</button>`).join('')}</div></div>`;
 }
 const pickerFor = (anchor) => { const m = $('.picker'); return m && m._anchor === anchor ? m : null; };
 function openPicker(anchor) {
@@ -6197,13 +6225,15 @@ function openPicker(anchor) {
       if (t.dataset.tog === 'case') prefs.matchCase = !prefs.matchCase;
       else prefs.wholeWord = !prefs.wholeWord;
     }
+    const wh = e.target.closest('[data-where]');
+    if (wh) { record('Look in'); prefs.where = wh.dataset.where; }
     const n = e.target.closest('[data-near]');
     if (n) {
       const cur = Number(prefs.near) || 8;
       record('Near distance', { group: 'near' });
       prefs.near = Number(n.dataset.near) > 0 ? (NEAR_STEPS.find((x) => x > cur) ?? cur) : ([...NEAR_STEPS].reverse().find((x) => x < cur) ?? cur);
     }
-    if (!t && !n) return;
+    if (!t && !n && !wh) return;
     syncControls();
     runSearch();
     m.innerHTML = pickerHtml();
@@ -6911,6 +6941,8 @@ async function start() {
   labelOlderDocs();
   nativeSetup();
   restorePlace();
+  for (const d of S.docs) if (d.marks) sendMarks(d);
+  setTimeout(markOlderDocs, 4000);
   const sendTo_ = location.hash.match(/send-to=([A-Z0-9]{6})/i);
   if (sendTo_) { history.replaceState(null, '', location.pathname + location.search); sendTo({ code: sendTo_[1] }); }
   if (prefs.autoCheck && hasSources() && checkDue()) {

@@ -301,3 +301,24 @@ export function compile(rawQuery, opts) {
     soft,
   };
 }
+
+// ---------- where on the page ----------
+// Keep only the hits in one kind of text: headings, captions, or the ordinary text between them.
+// marks: [kind, start, end, …] for the page (kind 1 a heading, 2 a caption); null when it has none.
+export const WHERE = {
+  any: { label: 'Anywhere', short: '' },
+  heads: { label: 'Headings', short: 'Headings', kind: 1 },
+  captions: { label: 'Captions', short: 'Captions', kind: 2 },
+  body: { label: 'Body text', short: 'Body', kind: 0 },
+};
+export function inWhere(ranges, marks, where) {
+  const w = WHERE[where];
+  if (!w || where === 'any' || !ranges) return ranges;
+  const inKind = (r) => {
+    if (!marks) return 0;
+    for (let i = 0; i < marks.length; i += 3) if (r[0] < marks[i + 2] && r[1] > marks[i + 1]) return marks[i];
+    return 0;
+  };
+  const out = ranges.filter((r) => inKind(r) === w.kind);
+  return out.length ? out : null;
+}

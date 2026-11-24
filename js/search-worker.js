@@ -2,9 +2,10 @@
 // Holds a copy of every document's page texts; answers queries in library order; drops a query the moment a newer
 // one arrives (it checks between documents and every few milliseconds), so only the latest keystroke's search
 // ever finishes.
-import { compile } from './search.js';
+import { compile, inWhere } from './search.js';
 
 const texts = new Map(); // docId -> page texts
+const marks = new Map(); // docId -> per page headings and captions (see inWhere)
 let latest = 0;
 
 const pause = () => new Promise((r) => setTimeout(r, 0)); // lets newer messages in
@@ -12,8 +13,9 @@ const pause = () => new Promise((r) => setTimeout(r, 0)); // lets newer messages
 self.onmessage = async (e) => {
   const m = e.data;
   if (m.t === 'set') { texts.set(m.id, m.pages); return; }
-  if (m.t === 'del') { texts.delete(m.id); return; }
-  if (m.t === 'clear') { texts.clear(); return; }
+  if (m.t === 'marks') { if (m.marks) marks.set(m.id, m.marks); else marks.delete(m.id); return; }
+  if (m.t === 'del') { texts.delete(m.id); marks.delete(m.id); return; }
+  if (m.t === 'clear') { texts.clear(); marks.clear(); return; }
   if (m.t !== 'q') return;
   latest = m.qid;
   const qid = m.qid;
@@ -25,11 +27,14 @@ self.onmessage = async (e) => {
   for (const id of m.ids) {
     const pages = texts.get(id);
     if (!pages) continue;
+    const where = m.opts.where && m.opts.where !== 'any' ? m.opts.where : null;
+    const dm = where ? marks.get(id) : null;
     const ns = [];
     const counts = [];
     const data = [];
     for (let n = 0; n < pages.length; n++) {
-      const r = matcher.match(pages[n]);
+      let r = matcher.match(pages[n]);
+      if (r && where) r = inWhere(r, dm?.[n] || null, where);
       if (r) {
         ns.push(n);
         counts.push(r.length);

@@ -41,17 +41,65 @@ export function textFromItems(items) {
   return { text, map };
 }
 
+// ---------- headings and captions ----------
+// Each line of a page's text with the size of its type, so headings (set larger than the body text) and
+// figure/table captions can be told apart from ordinary text. Returns [start, end, size] per line.
+export function lineSizes(text, map, items) {
+  const lines = [];
+  let i = 0, k = 0;
+  while (i < text.length) {
+    let e = text.indexOf('\n', i);
+    if (e < 0) e = text.length;
+    let h = 0;
+    while (k < map.length && map[k][0] < e) {
+      if (map[k][0] + map[k][2] > i) { const tr = items[map[k][1]].transform; h = Math.max(h, Math.hypot(tr[2], tr[3]) || items[map[k][1]].height || 0); }
+      k++;
+    }
+    if (e > i && h) lines.push([i, e, Math.round(h * 4) / 4]);
+    i = e + 1;
+  }
+  return lines;
+}
+// From every page's lines, the marks for each page: [kind, start, end, …] with kind 1 a heading, 2 a caption.
+export const MARKS_V = 1;
+export function marksFrom(pageLines, texts) {
+  // the body size: the type size most of the document's characters are set in
+  const tally = new Map();
+  for (const lines of pageLines) for (const [s, e, h] of lines || []) tally.set(h, (tally.get(h) || 0) + (e - s));
+  let body = 0, most = 0;
+  for (const [h, n] of tally) if (n > most) { most = n; body = h; }
+  return pageLines.map((lines, n) => {
+    if (!lines) return null;
+    const t = texts[n] || '';
+    const out = [];
+    for (const [s, e, h] of lines) {
+      const str = t.slice(s, e).trim();
+      if (!/[A-Za-z]{2}/.test(str) || str.length > 160) continue;
+      if (/^(figure|fig\.|table|exhibit|chart|diagram)\s*[A-Z]?[\d.-]+/i.test(str)) { out.push(2, s, e); continue; }
+      const big = body && h >= body * 1.15;
+      // a short line all in capitals, at body size, reads as a heading too
+      const caps = str.length <= 70 && str.length >= 4 && /[A-Z]{3}/.test(str) && str === str.toUpperCase() && !/[.,;]$/.test(str);
+      if ((big && str.length <= 120 && !/^\d+([.-]\d+)*$/.test(str)) || caps) out.push(1, s, e);
+    }
+    return out.length ? out : null;
+  });
+}
+
 export async function extractPdf(bytes, onProgress) {
   const doc = await pdfjsLib.getDocument({ data: bytes.slice(0), isEvalSupported: false }).promise;
   const pages = [];
+  const lines = [];
   try {
     for (let n = 1; n <= doc.numPages; n++) {
       const page = await doc.getPage(n);
       const content = await page.getTextContent();
-      pages.push(textFromItems(content.items).text);
+      const t = textFromItems(content.items);
+      pages.push(t.text);
+      lines.push(lineSizes(t.text, t.map, content.items));
       page.cleanup();
       onProgress?.(n, doc.numPages);
     }
+    pages.marks = marksFrom(lines, pages);
     // the page numbers the PDF's maker gave it ("i", "ii", "1-1"…), if any; the caller decides whether to use them
     try { pages.labels = await doc.getPageLabels(); } catch {}
   } finally {
@@ -364,4 +412,19 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   page.cleanup();
   const cleanup = () => { task.cancel(); sizer.disconnect(); canvas.width = canvas.height = 0; frame.remove(); };
   return { cleanup, trimmed: !!span, show: () => { if (!cancelled) host.replaceChildren(frame); } };
+}
+
+/** Headings and captions for a document already in the library (added before they were detected). */
+export async function marksForPdf(pdf, texts, isStale) {
+  const lines = [];
+  for (let n = 1; n <= pdf.numPages; n++) {
+    if (isStale?.()) return null;
+    const page = await pdf.getPage(n);
+    const content = await page.getTextContent();
+    const t = textFromItems(content.items);
+    // only where the text matches what's stored (a page read another way has other positions)
+    lines.push(t.text === texts[n - 1] ? lineSizes(t.text, t.map, content.items) : null);
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  return marksFrom(lines, texts);
 }
