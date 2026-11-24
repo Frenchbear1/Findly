@@ -593,6 +593,7 @@ function fill(art) {
         art._cleanup = r.cleanup;
         art._edge = pageEdge(body);
         swapped();
+        keepBudget(art);
         const fr = body.querySelector('.pdf-page');
         if (fr && !r.trimmed) S.pageAspect = fr.offsetHeight / fr.offsetWidth || S.pageAspect;
       } catch (err) {
@@ -673,6 +674,25 @@ const gapMO = new MutationObserver((recs) => {
 });
 queueMicrotask(() => { for (const id of ['results', 'reader']) { const r = document.getElementById(id); if (r) gapMO.observe(r, { childList: true, subtree: true }); } });
 
+// Drawn PDF pages are held to a budget: past it, the ones furthest from the screen are let go (they're
+// drawn again if you come back). Without it a fast scroll could pile up enough page images for iOS to
+// stop the app for using too much memory, which reloads it.
+const drawn = new Set();
+// a page let go while still near the screen is drawn again as it comes into view
+const comeback = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { comeback.unobserve(e.target); fill(e.target); } }, { rootMargin: '300px 0px' });
+const DRAWN_MAX = 16;
+function keepBudget(art) {
+  drawn.add(art);
+  if (drawn.size <= DRAWN_MAX) return;
+  const mid = innerHeight / 2;
+  const far = [...drawn].filter((a) => a !== art && a.isConnected && !kept(a))
+    .map((a) => { const r = a.getBoundingClientRect(); return [a, r.bottom < 0 ? -r.bottom : r.top > innerHeight ? r.top - innerHeight : -1]; })
+    .filter(([, d]) => d > 200)
+    .sort((x, y) => y[1] - x[1]);
+  for (const [a] of far) { if (drawn.size <= DRAWN_MAX) break; unfill(a); comeback.observe(a); }
+  for (const a of drawn) if (!a.isConnected) drawn.delete(a);
+}
+
 function unfill(art) {
   art._plan = null;
   const body = art.lastElementChild;
@@ -685,7 +705,9 @@ function unfill(art) {
   art._prevCleanup = null;
   art._filled = null;
   art._token = (art._token || 0) + 1;
+  for (const c of body.querySelectorAll('canvas')) c.width = c.height = 0; // copies for cropped pieces too: free them now, not whenever
   body.replaceChildren();
+  drawn.delete(art);
 }
 
 function refill(art) {
@@ -2204,6 +2226,35 @@ async function scrollToPage(v, docId, n) {
   await fill(art);
   scrollToEl(art, 'start', 'instant');
   trackPosition();
+}
+
+// ---------- keeping your place ----------
+// Where you are (the search, the page and how far into it, the document open) is noted as you scroll, so if
+// the app is restarted — iOS does that to an app using too much memory — it opens right back where you were.
+const PLACE = 'instant-search:place';
+let placeT = 0;
+function notePlace() {
+  clearTimeout(placeT);
+  placeT = setTimeout(() => {
+    if (!H.ready) return;
+    const a = captureAnchor();
+    const st = { t: Date.now(), q: prefs.q || '', view: active === reader ? 'reader' : 'results', doc: reader.docId,
+      at: a ? { d: a.art.dataset.doc, n: Number(a.art.dataset.n), r: a.ratio, y: a.y } : null, y: scrollY };
+    try { localStorage.setItem(PLACE, JSON.stringify(st)); } catch {}
+  }, 300);
+}
+addEventListener('scroll', notePlace, { passive: true });
+async function restorePlace() {
+  let st = null;
+  try { st = JSON.parse(localStorage.getItem(PLACE) || 'null'); } catch {}
+  if (!st || Date.now() - st.t > 6 * 3600e3 || (st.q || '') !== (prefs.q || '')) return;
+  const at = st.at;
+  if (st.view === 'reader' && st.doc && docById(st.doc)) await openReader(st.doc, at?.d === st.doc ? at.n : 0);
+  else if (at && docById(at.d) && (st.y || 0) > 50) await scrollToPage(results, at.d, at.n);
+  else return;
+  // then the same spot inside the page
+  const art = at && active.pageEls.get(pkey(at.d, at.n));
+  if (art) { const r = art.getBoundingClientRect(); window.scrollBy({ top: r.top + at.r * r.height - at.y, behavior: 'instant' }); }
 }
 
 // ---------- reader ----------
@@ -6859,6 +6910,7 @@ async function start() {
   updateStorage();
   labelOlderDocs();
   nativeSetup();
+  restorePlace();
   const sendTo_ = location.hash.match(/send-to=([A-Z0-9]{6})/i);
   if (sendTo_) { history.replaceState(null, '', location.pathname + location.search); sendTo({ code: sendTo_[1] }); }
   if (prefs.autoCheck && hasSources() && checkDue()) {

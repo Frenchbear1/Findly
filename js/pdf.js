@@ -291,7 +291,9 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   const tsDraw = columns ? Math.max(ts, 2.1) : ts;
   const cssWidth = Math.max(width || 0, host.clientWidth || 700) * tsDraw;
   const dpr = Math.min(window.devicePixelRatio || 1, columns ? 2 : 2.5);
-  const scale = Math.min(cssWidth * dpr, 4096) / base.width;
+  // each page's bitmap is capped at about 6 million pixels (24 MB): fast scrolling draws many pages at
+  // once, and on iPhone running out of memory makes iOS restart the whole app
+  const scale = Math.min(Math.min(cssWidth * dpr, 4096) / base.width, Math.sqrt(6e6 / (base.width * base.height)) * (ts > 1 ? Math.min(ts, 1.6) : 1));
   const vp = page.getViewport({ scale });
 
   // .pdf-frame is the visible box; .pdf-page inside it is the whole page, scaled and shifted when trimmed
