@@ -4644,11 +4644,7 @@ function openSettings() {
       <header class="set-head"><h3>Settings</h3><button class="icon-btn sm" data-s="x" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
       <div class="set-body">
         ${group('Appearance', [
-          row('theme', palette, 'Reading theme', 'Colours, paper and textures'),
-          `<div class="set-row static set-slide"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18" opacity=".5"/></svg></span><span class="set-t"><b>Transparency</b><small>Search bar, bottom bar, headers and menus</small>
-            <input type="range" min="0" max="100" value="${prefs.glassT ?? 50}" data-glass aria-label="Transparency"><span class="set-ends"><span>Solid</span><span>Clear</span></span></span></div>`,
-          `<div class="set-row static set-slide"><span class="set-ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="6.5" opacity=".55"/><circle cx="12" cy="12" r="10" opacity=".25"/></svg></span><span class="set-t"><b>Blur</b><small>How much the page behind them is softened</small>
-            <input type="range" min="0" max="100" value="${prefs.glassB ?? 50}" data-blur aria-label="Blur"><span class="set-ends"><span>Sharp</span><span>Frosted</span></span></span></div>`,
+          row('theme', palette, 'Reading theme', 'Colours, paper, accent, transparency and blur'),
         ])}
         ${group('Reading', [
           `<div class="set-row static"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M9 3.5h6M9 20.5h6"/></svg></span><span class="set-t"><b>Opening cropped pages</b><small>${prefs.expand === 'drag' ? 'Drag the bars on a cropped page to pull it open' : 'Tap the arrows on a cropped page to open it'}</small></span><span class="seg small set-seg"><button type="button" data-s="xb" aria-pressed="${prefs.expand !== 'drag'}">Buttons</button><button type="button" data-s="xd" aria-pressed="${prefs.expand === 'drag'}">Drag</button></span></div>`,
@@ -5257,7 +5253,7 @@ function applyGlass() {
 }
 function openThemes() {
   closeMenu();
-  openThemeBar(prefs, { save: savePrefs });
+  openThemeBar(prefs, { save: savePrefs, glass: applyGlass });
 }
 
 // ---------- events ----------
@@ -5642,7 +5638,7 @@ function bind() {
       }
     }
     if (e.key === 'Escape' && $('.pop-menu')) { closeMenu(); return; }
-    if (e.key === 'Escape' && themeBarOpen()) { openThemeBar(prefs, { save: savePrefs }); return; }
+    if (e.key === 'Escape' && themeBarOpen()) { openThemeBar(prefs, { save: savePrefs, glass: applyGlass }); return; }
     if (boards.isOpen()) { if (e.key === 'Escape' && !$('dialog[open]')) boards.close(); return; }
     if (e.key === 'Escape' && document.body.classList.contains('panel')) { setPanel(false); return; }
     if ($('dialog[open]') || e.isComposing) return;

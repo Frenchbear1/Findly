@@ -161,7 +161,7 @@ function paperCard(pp, on, t) {
   return `<button class="tcard${on ? ' on' : ''}" data-paper="${pp.id}" aria-pressed="${on}">${mini(t, id)}<span>${pp.name}</span></button>`;
 }
 
-export function openThemeBar(prefs, { save }) {
+export function openThemeBar(prefs, { save, glass } = {}) {
   let bar = document.getElementById('themeBar');
   if (bar && !bar.hidden) { closeBar(bar, save); return; }
   if (!bar) {
@@ -171,6 +171,7 @@ export function openThemeBar(prefs, { save }) {
     bar.setAttribute('aria-label', 'Reading theme');
     document.body.append(bar);
   }
+  if (glass) bar._glass = glass;
   let tab = bar._tab || 'colours';
   const commit = () => { clearTimeout(bar._t); bar._t = setTimeout(save, 250); };
   const apply = () => { applyReadingTheme(prefs); commit(); };
@@ -200,6 +201,15 @@ export function openThemeBar(prefs, { save }) {
             : `${(prefs.paper || 'theme') === 'theme' ? `<p class="tbar-note">Automatic picks <b>${effName}</b> for this theme.</p>` : ''}${field('Grain', g ? pct(g) : 'Off', `<input type="range" min="0" max="100" value="${g}" data-grain>`, ['Faint', 'Strong'])}`}
         </div>
         <p class="tbar-credit">Paper textures from Subtle Patterns (CC BY-SA 3.0)</p>`;
+    } else if (tab === 'glass') {
+      // see-through and blur of the bars, headers and menus, live over the results behind
+      const gt = prefs.glassT ?? 50, gb = prefs.glassB ?? 50;
+      body = `<div class="tbar-sliders">
+        <p class="tbar-note">The search bar, bottom bar, headers and menus. Scroll your results behind them to see it.</p>
+        ${field('Transparency', gt === 50 ? 'As designed' : pct(gt), `<input type="range" min="0" max="100" value="${gt}" data-gt>`, ['Solid', 'Clear'])}
+        ${field('Blur', gb === 50 ? 'As designed' : pct(gb), `<input type="range" min="0" max="100" value="${gb}" data-gb>`, ['Sharp', 'Frosted'])}
+        <button class="tb-reset" data-greset ${gt !== 50 || gb !== 50 ? '' : 'disabled'}>Reset these</button>
+      </div>`;
     } else {
       const tint = prefs.tint !== false;
       const liftWord = (v) => (v === 0 ? 'Same' : v > 0 ? `Lighter ${v}` : `Darker ${-v}`);
@@ -213,10 +223,16 @@ export function openThemeBar(prefs, { save }) {
         <button class="tb-reset" data-reset ${changed ? '' : 'disabled'}>Reset these</button>
       </div>`;
     }
-    bar.innerHTML = `<div class="tbar-head">
-        <div class="seg small tbar-tabs">${[['colours', 'Colours'], ['paper', 'Paper'], ['adjust', 'Adjust']].map(([k, l]) => `<button data-tab="${k}" aria-pressed="${tab === k}">${l}</button>`).join('')}</div>
+    // the panel fits what's in it, with the tabs fixed along the bottom; a change of tab glides to the new height
+    const h0 = bar.offsetHeight;
+    bar.innerHTML = `<div class="tbar-body">${body}</div><div class="tbar-foot">
+        <div class="seg small tbar-tabs">${[['colours', 'Colours'], ['paper', 'Paper'], ['adjust', 'Adjust'], ['glass', 'Glass']].map(([k, l]) => `<button data-tab="${k}" aria-pressed="${tab === k}">${l}</button>`).join('')}</div>
         <button class="tbar-done" data-close>Done</button>
-      </div><div class="tbar-body">${body}</div>`;
+      </div>`;
+    const h1 = bar.offsetHeight;
+    if (h0 && Math.abs(h1 - h0) > 1 && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      bar.animate([{ height: `${h0}px` }, { height: `${h1}px` }], { duration: 260, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
+    }
     bar.querySelectorAll('.tb-field input[type="range"]').forEach(fillTrack);
     if (centre) bar.querySelector('.tcard.on')?.scrollIntoView({ block: 'nearest', inline: 'center' });
     scrollable(bar.querySelector('.tbar-row'));
@@ -233,6 +249,7 @@ export function openThemeBar(prefs, { save }) {
     if (pp) { prefs.paper = pp.dataset.paper; apply(); keepScroll(() => render()); return; }
     const ac = e.target.closest('[data-accent]');
     if (ac) { prefs.accent = ac.dataset.accent || null; apply(); render(); return; }
+    if (e.target.closest('[data-greset]')) { prefs.glassT = 50; prefs.glassB = 50; bar._glass?.(); commit(); render(); return; }
     if (e.target.closest('[data-reset]')) { prefs.pageLift = null; prefs.accent = null; prefs.tint = true; prefs.tintAmt = 85; apply(); render(); }
   };
   bar.oninput = (e) => {
@@ -241,6 +258,17 @@ export function openThemeBar(prefs, { save }) {
     else if (t.hasAttribute('data-grain')) prefs.grain = Number(t.value);
     else if (t.hasAttribute('data-lift')) prefs.pageLift = Number(t.value);
     else if (t.hasAttribute('data-amt')) prefs.tintAmt = Number(t.value);
+    else if (t.hasAttribute('data-gt') || t.hasAttribute('data-gb')) {
+      prefs[t.hasAttribute('data-gt') ? 'glassT' : 'glassB'] = Number(t.value);
+      bar._glass?.();
+      commit();
+      fillTrack(t);
+      const out = t.closest('.tb-field')?.querySelector('output');
+      if (out) out.textContent = Number(t.value) === 50 ? 'As designed' : `${t.value}%`;
+      const rs = bar.querySelector('[data-greset]');
+      if (rs) rs.disabled = prefs.glassT === 50 && prefs.glassB === 50;
+      return;
+    }
     else if (t.hasAttribute('data-tint')) { prefs.tint = t.checked; bar.querySelector('[data-amt]').closest('.tb-field').hidden = !t.checked; }
     else return;
     if (t.type === 'range') fillTrack(t);
