@@ -123,6 +123,49 @@ function textBox(items, base) {
   };
 }
 
+// Where something is actually printed: the page drawn small and scanned for ink, as fractions like textBox.
+// Text positions alone can lie: official PDFs (eCFR, GPO) carry invisible print-shop text out in the margins,
+// which made a blank margin look used. The ink tells the truth, so trimming never keeps an empty side.
+const inkCache = new Map();
+async function inkBox(page, base, key) {
+  if (inkCache.has(key)) return inkCache.get(key);
+  let out = null;
+  try {
+    const W = 420;
+    const vp = page.getViewport({ scale: W / base.width });
+    const c = document.createElement('canvas');
+    c.width = W;
+    c.height = Math.max(1, Math.round(vp.height));
+    const ctx = c.getContext('2d', { alpha: false });
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    const { data } = ctx.getImageData(0, 0, c.width, c.height);
+    const cols = new Uint16Array(c.width), rows = new Uint16Array(c.height);
+    for (let y = 0; y < c.height; y++) {
+      for (let x = 0; x < c.width; x++) {
+        const i = (y * c.width + x) * 4;
+        if (data[i] * 0.3 + data[i + 1] * 0.59 + data[i + 2] * 0.11 < 232) { cols[x]++; rows[y]++; }
+      }
+    }
+    // ignore specks: a column/row needs a couple of dark pixels to count
+    const first = (a) => a.findIndex((v) => v >= 2);
+    const last = (a) => { for (let i = a.length - 1; i >= 0; i--) if (a[i] >= 2) return i; return -1; };
+    const x0 = first(cols), x1 = last(cols), y0 = first(rows), y1 = last(rows);
+    if (x0 >= 0 && x1 > x0) out = { x: [x0 / c.width, (x1 + 1) / c.width], y: [y0 / c.height, (y1 + 1) / c.height] };
+  } catch {}
+  if (inkCache.size > 400) inkCache.delete(inkCache.keys().next().value);
+  inkCache.set(key, out);
+  return out;
+}
+// Text box tightened by the ink: never keep a side that has nothing printed on it.
+function tighten(box, ink) {
+  if (!ink) return box;
+  const pad = 0.025;
+  const a = Math.max(0, ink.x[0] - pad), b = Math.min(1, ink.x[1] + pad);
+  let x = box.x ? [Math.max(box.x[0], a), Math.min(box.x[1], b)] : [a, b];
+  if (x[1] - x[0] < 0.35 || x[0] + (1 - x[1]) < 0.08) x = box.x && x[1] - x[0] >= 0.35 ? x : null;
+  return { ...box, x };
+}
+
 // Every piece of (unrotated) text as [left, right, top, bottom] fractions of the page, packed in one array.
 function textLines(items, base) {
   const out = [];
@@ -228,7 +271,8 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   const base = page.getViewport({ scale: 1 });
   const content = await page.getTextContent();
   // "wide view": cut the side margins so the text fills the width (top and bottom margins are trimmed by the app)
-  const box = trim ? textBox(content.items, base) : { x: null, y: null };
+  let box = trim ? textBox(content.items, base) : { x: null, y: null };
+  if (trim) box = tighten(box, await inkBox(page, base, `${pdf.fingerprints?.[0] || ''}:${n}`));
   const span = box.x;
   const ts = span ? 1 / (span[1] - span[0]) : 1;
   // in column view a column fills the width, so draw sharper (columns are found around each hit by the app)

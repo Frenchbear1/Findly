@@ -222,11 +222,18 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   dialog .icon-btn:focus-visible, dialog [data-x]:focus-visible, .menu-item:focus-visible { outline: none; box-shadow: none; }
 }
 
-/* with the top bar tucked away, the sticky headers stay clear of the notch / Dynamic Island */
+/* the top bar slides with the scroll (--bar-off, set from app.js); the sticky headers ride along under it.
+   When it's all the way out, its top padding still covers the status bar / Dynamic Island. */
 @media (max-width: 900px) {
-  body.bar-hidden .doc-head { height: calc(48px + env(safe-area-inset-top)); padding-top: calc(10px + env(safe-area-inset-top)); }
-  body.bar-hidden .page-head { top: calc(48px + env(safe-area-inset-top)); }
-  body.bar-hidden #reader .page-head, body.bar-hidden .doc-sec.same-doc .page-head { top: env(safe-area-inset-top); }
+  .topbar { transform: translateY(calc(-1 * var(--bar-off, 0px))); transition: none; will-change: transform; }
+  .doc-head { top: max(env(safe-area-inset-top), calc(var(--top-h) - var(--bar-off, 0px))); }
+  .page-head { top: calc(max(env(safe-area-inset-top), calc(var(--top-h) - var(--bar-off, 0px))) + 48px); }
+  #reader .page-head, .doc-sec.same-doc .page-head { top: max(env(safe-area-inset-top), calc(var(--top-h) - var(--bar-off, 0px))); }
+  /* the status bar / Dynamic Island strip stays frosted once the bar has slid away */
+  body::after {
+    content: ""; position: fixed; z-index: 19; left: 0; right: 0; top: 0; height: env(safe-area-inset-top); pointer-events: none;
+    background: color-mix(in srgb, var(--bg) var(--a-top, 72%), transparent); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  }
 }
 
 /* the bottom bar in the results: clear Apple-style glass, every control the same plain glyph on glass */
@@ -322,3 +329,5 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
 /* Settings › Blur drives these on every screen size */
 .topbar, .dock { -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
 .set-seg button { transition: background 0.2s, box-shadow 0.2s, color 0.2s; }
+/* phones: the document's name gets the room, not its folder */
+@media (max-width: 600px) { .doc-head .dfolder { display: none; } }

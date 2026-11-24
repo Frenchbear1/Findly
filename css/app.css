@@ -784,8 +784,6 @@ dialog[open] { animation: dlg 0.2s ease-out; }
   .m-count.jogging { background: var(--accent); color: var(--accent-ink); }
   .m-count:disabled { opacity: 0.5; }
   body.has-dock .toasts { bottom: calc(72px + env(safe-area-inset-bottom)); }
-  body.bar-hidden .topbar { transform: translateY(calc(-100% - 2px)); }
-  body.bar-hidden .doc-head { top: 0; }
   .menu-item { min-height: 40px; font-size: 14px; }
   .menu-head { padding-top: 4px; }
 }
@@ -957,8 +955,6 @@ button svg { pointer-events: none; }
   border-radius: 0 0 10px 10px; pointer-events: none;
 }
 #reader .page-head, .doc-sec.same-doc .page-head { top: var(--top-h); }
-body.bar-hidden .page-head { top: 48px; }
-body.bar-hidden #reader .page-head, body.bar-hidden .doc-sec.same-doc .page-head { top: 0; }
 .doc-head { height: 48px; min-height: 0; }
 
 /* pages opened above slide up into place; pages opened below slide down */

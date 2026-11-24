@@ -6276,7 +6276,6 @@ function bindJog(el) {
 
 // On phones the top bar slides away while you read and comes back when you scroll up.
 let lastScrollY = 0;
-let scrollAcc = 0;
 // A page's label only gets its frosted backing once it's stuck under the headers (then the page scrolls
 // beneath it); until then it's see-through, so the tabs and arrows beside it show and can be tapped.
 let stuckRaf = 0;
@@ -6306,38 +6305,65 @@ addEventListener('resize', markStuck);
 // The headers stuck under the top bar glide up and down with it (moved with transforms, not by animating
 // their sticky position, so nothing gaps or stutters while you scroll).
 const BAR_EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
-function setBarHidden(h) {
-  const b = document.body;
-  if (b.classList.contains('bar-hidden') === h) return;
-  const heads = [];
-  if (!reduceMotion()) {
-    const view = b.dataset.view === 'reader' ? $('#reader') : $('#results');
-    for (const e of view.querySelectorAll('.doc-head, .page-head')) {
-      const r = e.getBoundingClientRect();
-      if (r.bottom < -2 || r.top > 240) continue;
-      heads.push([e, r.top]);
-    }
-  }
-  b.classList.toggle('bar-hidden', h);
-  markStuck();
-  for (const [e, t] of heads) {
-    const d = t - e.getBoundingClientRect().top;
-    if (Math.abs(d) > 0.5) e.animate([{ transform: `translateY(${d}px)` }, { transform: 'none' }], { duration: 280, easing: BAR_EASE });
-  }
+// The top bar follows your finger: it slides up by exactly as much as you scroll down (and back down as you
+// scroll up), the sticky headers move with it, and nothing jumps. When you let go a half-out bar finishes the
+// way you were going: scrolling down tucks it away, pulling back up brings it all the way in.
+let barOff = 0, barMax = 0, barAnim = 0, barSnapT = 0, touching = false, barDir = 1;
+const safeProbe = () => {
+  let p = $('#safeProbe');
+  if (!p) { p = el('div'); p.id = 'safeProbe'; p.style.cssText = 'position:fixed;top:0;left:0;width:0;height:env(safe-area-inset-top);visibility:hidden;pointer-events:none'; document.body.append(p); }
+  return p.offsetHeight;
+};
+function measureBar() {
+  const t = $('.topbar');
+  barMax = t ? t.offsetHeight + 2 : 0; // all the way out; the sticky headers stop under the status bar (see ios.css)
 }
+function putBar(v) {
+  barOff = Math.max(0, Math.min(barMax, v));
+  document.documentElement.style.setProperty('--bar-off', `${barOff.toFixed(1)}px`);
+  document.body.classList.toggle('bar-hidden', barMax > 0 && barOff >= barMax - 0.5);
+  markStuck();
+}
+function glideBar(to, ms = 240) {
+  cancelAnimationFrame(barAnim);
+  const from = barOff;
+  if (Math.abs(to - from) < 0.5) { putBar(to); return; }
+  const t0 = performance.now();
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / ms);
+    putBar(from + (to - from) * (1 - Math.pow(1 - k, 3)));
+    if (k < 1) barAnim = requestAnimationFrame(step);
+  };
+  barAnim = requestAnimationFrame(step);
+}
+function settleBar() {
+  if (touching) return; // wait until the finger is off and the scroll has come to rest
+  if (barOff > 0 && barOff < barMax) glideBar(barDir < 0 ? 0 : barMax);
+}
+function setBarHidden(h) {
+  if (!barMax) measureBar();
+  glideBar(h ? barMax : 0);
+}
+addEventListener('touchstart', () => { touching = true; clearTimeout(barSnapT); cancelAnimationFrame(barAnim); }, { passive: true });
+addEventListener('touchend', () => { touching = false; clearTimeout(barSnapT); barSnapT = setTimeout(settleBar, 160); }, { passive: true });
+addEventListener('touchcancel', () => { touching = false; clearTimeout(barSnapT); barSnapT = setTimeout(settleBar, 160); }, { passive: true });
+addEventListener('resize', () => { measureBar(); putBar(barOff); });
 function onScrollBars() {
   const y = scrollY;
   const dy = y - lastScrollY;
   lastScrollY = y;
-  if (performance.now() < autoScrollUntil) { scrollAcc = 0; return; }
-  if (!isPhone() || y < 60 || document.activeElement === q || document.body.classList.contains('drawer') || $('.pop-menu')) {
-    setBarHidden(false);
-    scrollAcc = 0;
+  if (performance.now() < autoScrollUntil) return;
+  if (!isPhone() || document.activeElement === q || document.body.classList.contains('drawer') || $('.pop-menu')) {
+    if (barOff) glideBar(0);
     return;
   }
-  scrollAcc = Math.sign(dy) === Math.sign(scrollAcc) ? scrollAcc + dy : dy;
-  if (scrollAcc > 30) setBarHidden(true);
-  else if (scrollAcc < -30) setBarHidden(false);
+  if (!barMax) measureBar();
+  cancelAnimationFrame(barAnim);
+  if (Math.abs(dy) >= 2) barDir = Math.sign(dy);
+  // near the top the bar can't be further out than the page has scrolled, so it's fully back by the time you get there
+  putBar(Math.min(barOff + dy, Math.max(0, y)));
+  clearTimeout(barSnapT);
+  barSnapT = setTimeout(settleBar, 160);
 }
 
 function setMode(mode) {
