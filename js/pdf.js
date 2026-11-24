@@ -161,6 +161,9 @@ export function getPdf(docId, loadBytes) {
   return openDocs.get(docId);
 }
 
+/** Ids of the documents held open for drawing pages. */
+export const openPdfIds = () => [...openDocs.keys()];
+
 export function closePdf(docId) {
   const p = openDocs.get(docId);
   if (p) { p.then((d) => d.destroy()).catch(() => {}); openDocs.delete(docId); }
@@ -471,6 +474,9 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   let cancelled = false;
   try { await task.promise; } catch (e) { if (e?.name !== 'RenderingCancelledException') throw e; cancelled = true; }
   release();
+  // the page's parsed drawing (with every picture on it decoded) is let go right after each drawing; keeping
+  // it for a dozen image-heavy pages is what runs an iPhone out of memory
+  try { page.cleanup(); } catch {}
 
   // ---- the sharp copy, of just the part of the page that's shown (plus a little either side) ----
   // sharpen([y0, y1], [x0, x1]) asks for it; asking again for more (opening the crop) draws the larger part
@@ -506,6 +512,7 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
           c.style.marginTop = `${((sy / vp.height) - 1) * ar * 100}%`;
           c.style.marginLeft = `${(sx / vp.width) * 100}%`;
           c.style.width = `${(c.width / vp.width) * 100}%`;
+          try { page.cleanup(); } catch {}
           if (sharp) { sharp.replaceWith(c); sharp.width = sharp.height = 0; } else canvas.after(c);
           sharp = c;
           have = [sx / vp.width, (sx + c.width) / vp.width, sy / vp.height, (sy + c.height) / vp.height];
@@ -532,16 +539,25 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
 }
 
 /** Headings and captions for a document already in the library (added before they were detected). */
-export async function marksForPdf(pdf, texts, isStale) {
+export async function marksForPdf(bytes, texts, isStale) {
+  // its own copy of the document, without fonts (only the text's positions and sizes are needed), each page
+  // let go as soon as it's read and the whole thing closed at the end: reading a long manual page by page
+  // otherwise piles up enough in memory for iOS to restart the app
+  const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0), isEvalSupported: false, disableFontFace: true }).promise;
   const lines = [];
-  for (let n = 1; n <= pdf.numPages; n++) {
-    if (isStale?.()) return null;
-    const page = await pdf.getPage(n);
-    const content = await page.getTextContent();
-    const t = textFromItems(content.items);
-    // only where the text matches what's stored (a page read another way has other positions)
-    lines.push(t.text === texts[n - 1] ? lineSizes(t.text, t.map, content.items) : null);
-    await new Promise((r) => setTimeout(r, 0));
+  try {
+    for (let n = 1; n <= pdf.numPages; n++) {
+      if (isStale?.()) return null;
+      const page = await pdf.getPage(n);
+      const content = await page.getTextContent();
+      const t = textFromItems(content.items);
+      // only where the text matches what's stored (a page read another way has other positions)
+      lines.push(t.text === texts[n - 1] ? lineSizes(t.text, t.map, content.items) : null);
+      page.cleanup();
+      await new Promise((r) => setTimeout(r, n % 20 ? 0 : 60));
+    }
+  } finally {
+    pdf.destroy();
   }
   return marksFrom(lines, texts);
 }

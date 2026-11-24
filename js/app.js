@@ -4,7 +4,7 @@ import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, r
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
 import { detectLabels, cleanPdfLabels } from './pagelabels.js';
-import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION, MARKS_V, marksForPdf } from './pdf.js';
+import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION, MARKS_V, marksForPdf, openPdfIds } from './pdf.js';
 import { renderHtmlPage, forgetHtml, renderedText } from './htmlview.js';
 import { remoteFetch, remoteInfo, remoteChanged, download, documentLinks, looksLikeDocument, fileNameFor, editionKey, linkKey, linkSimilarity, SAME_DOC_SCORE, helper, NeedsHelper } from './remote.js';
 import { comboFromEvent, comboLabel, worksWhileTyping, isMac } from './keys.js';
@@ -190,20 +190,30 @@ function labelOlderDocs() {
 // Headings and captions for PDFs added before they were picked out: read again from each PDF, quietly,
 // one document at a time.
 async function markOlderDocs() {
+  const KEY = 'instant-search:marking';
+  // if the app was stopped while reading a document, don't try that one again (it would only happen again)
+  let crashed = null;
+  try { crashed = localStorage.getItem(KEY); localStorage.removeItem(KEY); } catch {}
+  const gaveUp = crashed && docById(crashed);
+  if (gaveUp && gaveUp.marksV !== MARKS_V) { gaveUp.marksV = MARKS_V; gaveUp.marks = null; store.updateDoc(stripMeta(gaveUp)).catch(() => {}); }
   const todo = S.docs.filter((d) => d.kind === 'pdf' && !d.status && d.marksV !== MARKS_V && S.texts.has(d.id));
   for (const d of todo) {
-    await new Promise((r) => setTimeout(r, 400));
+    // only while you're not scrolling, one document at a time
+    while (performance.now() - lastScrollAt < 3000 || document.hidden) await new Promise((r) => setTimeout(r, 1000));
     if (!S.docs.includes(d) || d.status) continue;
     try {
-      const pdf = await getPdf(d.id, () => store.file(d.id));
-      const marks = await marksForPdf(pdf, S.texts.get(d.id) || [], () => !S.docs.includes(d));
+      const bytes = await store.file(d.id);
+      if (!bytes) continue;
+      try { localStorage.setItem(KEY, d.id); } catch {}
+      const marks = await marksForPdf(bytes, S.texts.get(d.id) || [], () => !S.docs.includes(d));
+      try { localStorage.removeItem(KEY); } catch {}
       if (!marks) continue;
       d.marks = marks;
       d.marksV = MARKS_V;
       store.updateDoc(stripMeta(d)).catch(() => {});
       sendMarks(d);
       if (prefs.where && prefs.where !== 'any' && S.matcher) runSearch();
-    } catch {}
+    } catch { try { localStorage.removeItem(KEY); } catch {} }
   }
 }
 // A group is one section: a whole document, or (when ranking pages) a single hit page and the pages opened around it.
@@ -709,7 +719,7 @@ queueMicrotask(() => { for (const id of ['results', 'reader']) { const r = docum
 const drawn = new Set();
 // a page let go while still near the screen is drawn again as it comes into view
 const comeback = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { comeback.unobserve(e.target); fill(e.target); } }, { rootMargin: '300px 0px' });
-const DRAWN_MAX = 16;
+const drawnMax = () => (isPhone() ? 10 : 16);
 // Pages above the screen are sized ahead of time: while you're not scrolling, the nearest ones above that
 // have never been drawn get their quick soft copy (which settles their height), one after another going up.
 // Scrolling back up then finds them the right size already, instead of the view being nudged as they
@@ -750,14 +760,22 @@ function screenDistance(art) {
 }
 function keepBudget(art) {
   drawn.add(art);
-  if (drawn.size <= DRAWN_MAX) return;
+  if (drawn.size <= drawnMax()) return;
   const mid = innerHeight / 2;
   const far = [...drawn].filter((a) => a !== art && a.isConnected && !kept(a))
     .map((a) => { const r = a.getBoundingClientRect(); return [a, r.bottom < 0 ? -r.bottom : r.top > innerHeight ? r.top - innerHeight : -1]; })
     .filter(([, d]) => d > 200)
     .sort((x, y) => y[1] - x[1]);
-  for (const [a] of far) { if (drawn.size <= DRAWN_MAX) break; unfill(a); comeback.observe(a); }
+  for (const [a] of far) { if (drawn.size <= drawnMax()) break; unfill(a); comeback.observe(a); }
   for (const a of drawn) if (!a.isConnected) drawn.delete(a);
+  // an open PDF holds a lot in memory (the whole file, for a start): keep at most two on a phone (three
+  // otherwise), closing ones no page on show comes from
+  const ids = openPdfIds(), most = isPhone() ? 2 : 3;
+  if (ids.length > most) {
+    const using = new Set([...document.querySelectorAll('article.page')].filter((a) => a._filled).map((a) => a.dataset.doc));
+    if (reader.docId) using.add(reader.docId);
+    for (const id of ids) if (!using.has(id) && openPdfIds().length > most) closePdf(id);
+  }
 }
 
 function unfill(art) {
@@ -7012,7 +7030,7 @@ async function start() {
   nativeSetup();
   restorePlace();
   for (const d of S.docs) if (d.marks) sendMarks(d);
-  setTimeout(markOlderDocs, 4000);
+  setTimeout(markOlderDocs, 15000);
   const sendTo_ = location.hash.match(/send-to=([A-Z0-9]{6})/i);
   if (sendTo_) { history.replaceState(null, '', location.pathname + location.search); sendTo({ code: sendTo_[1] }); }
   if (prefs.autoCheck && hasSources() && checkDue()) {
