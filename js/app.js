@@ -6711,9 +6711,8 @@ const pageScrubber = pageScrub({
     return { main, sub: active === results ? doc.name : '' };
   },
 });
-// The library and the pages-with-hits list: just the bar and its bump.
+// The library: just the bar and its bump.
 listScrub($('.lib-zone'), { layer: () => $('.sidebar'), inset: 8 });
-listScrub($('#outlineList'), { layer: () => $('#outline'), inset: 9 });
 
 function setMode(mode) {
   if (!MODES[mode] || prefs.mode === mode) return;
