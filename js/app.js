@@ -12,7 +12,7 @@ import { applyReadingTheme, openThemeBar, themeBarOpen, THEME_DEFAULTS, BLUR_DEF
 import { initBoards } from './boards.js';
 import { makeBackup, readBackup, backupStream } from './backup.js';
 import { send as sendTo, receive as receiveFrom } from './transfer.js';
-import { pageScrub, listScrub } from './scrub.js';
+import { pageScrub } from './scrub.js';
 
 // ---------- small helpers ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -6757,8 +6757,6 @@ const pageScrubber = pageScrub({
     return { main, sub: active === results ? doc.name : '' };
   },
 });
-// The library: just the bar and its bump.
-listScrub($('.lib-zone'), { layer: () => $('.sidebar'), inset: 8 });
 
 function setMode(mode) {
   if (!MODES[mode] || prefs.mode === mode) return;

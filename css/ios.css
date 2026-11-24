@@ -393,6 +393,7 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
   .page { margin-bottom: 14px; }
   .page-head { box-sizing: border-box; height: 40px; min-height: 40px; padding-bottom: 6px !important; }
   .gap.has-up { margin-bottom: -40px; }
+  .doc-pages > .gap.has-up:first-child { margin-top: 12px; }
   /* clear of the page's rounded corner, so the tab's flare lands on the straight edge */
   .gap { padding-right: 28px; }
 }

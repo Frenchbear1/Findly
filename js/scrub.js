@@ -98,6 +98,10 @@ export function makeScrub(ad) {
     sig += (tgt.sig - sig) * 0.22;
     const d = shape();
     fill.style.clipPath = `path('${d}')`;
+    // the bump is shaded darker, fading out into the bar either side
+    fill.style.setProperty('--by', `${(bumpY - top + PAD).toFixed(1)}px`);
+    fill.style.setProperty('--bs', `${(sig * 1.9).toFixed(1)}px`);
+    fill.style.setProperty('--bk', `${Math.round(10 + Math.max(0, amp - IDLE.amp) * 0.9)}%`);
     fill.style.webkitClipPath = `path('${d}')`;
     path.setAttribute('d', d);
     if (tag.classList.contains('on')) tag.style.transform = `translate3d(0, ${Math.round(bumpY - tag.offsetHeight / 2)}px, 0)`;
