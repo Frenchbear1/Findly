@@ -4271,7 +4271,7 @@ function openSettings() {
       <div class="set-body">
         ${group('Appearance', [row('theme', palette, 'Reading theme', 'Colours, paper and textures')])}
         ${group('Reading', [
-          `<div class="set-row static"><span class="set-ic">${I.undo}</span><span class="set-t"><b>Undo &amp; redo</b><small>${prefs.undoStyle === 'buttons' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar; Undo pops up after a change'}</small></span><span class="seg small set-seg"><button type="button" data-s="ug" aria-pressed="${prefs.undoStyle !== 'buttons'}">Gestures</button><button type="button" data-s="ub" aria-pressed="${prefs.undoStyle === 'buttons'}">Buttons</button></span></div>`,
+          `<div class="set-row static"><span class="set-ic">${I.undo}</span><span class="set-t"><b>Undo &amp; redo</b><small>${prefs.undoStyle === 'buttons' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar: right to undo, left to redo'}</small></span><span class="seg small set-seg"><button type="button" data-s="ug" aria-pressed="${prefs.undoStyle !== 'buttons'}">Gestures</button><button type="button" data-s="ub" aria-pressed="${prefs.undoStyle === 'buttons'}">Buttons</button></span></div>`,
         ])}
         ${group('Documents from websites', [
           row('helper', bolt, 'Download helper', helper.get() ? 'Set up' : 'Not set up · needed for sites like faa.gov'),
@@ -4753,22 +4753,8 @@ function syncUndoBtns() {
 // The chip: "Undo" right after you do something, "Redo" right after an undo; it steps aside after a moment.
 let undoTimer = 0;
 function showUndo(kind, note) {
-  const label = kind === 'undo' ? 'Undo' : 'Redo';
-  for (const b of [$('#mUndo'), $('#dUndo')]) {
-    if (!b) continue;
-    b.dataset.kind = kind;
-    b.innerHTML = b.id === 'mUndo' ? (kind === 'undo' ? I.undo : I.redo) : `${kind === 'undo' ? I.undo : I.redo}<span>${label}</span>`; // on the phone bar: just the arrow
-    b.setAttribute('aria-label', label);
-    b.title = `${label}: ${(kind === 'undo' ? H.undo : H.redo).at(-1)?.label || ''} (${kind === 'undo' ? MOD + '+Z' : MOD + '+Shift+Z'})`;
-  }
+  // no pop-up undo button any more: undo is the bar's swipe (Gestures) or its fixed arrows (Buttons), or Ctrl+Z
   syncUndoBtns();
-  if (prefs.undoStyle === 'buttons' && matchMedia('(max-width: 900px)').matches) { // fixed arrows on the bar: no pop-up chip
-    if (note) { const hint = $('#swipeHint'); if (hint) { hint.textContent = note; hint.className = 'swipe-hint flash'; clearTimeout(hint._t); hint._t = setTimeout(() => (hint.className = 'swipe-hint'), 1400); } }
-    return;
-  }
-  document.body.classList.add('undo-on');
-  clearTimeout(undoTimer);
-  undoTimer = setTimeout(() => document.body.classList.remove('undo-on'), note ? 5000 : 8000);
   if (note) {
     const hint = $('#swipeHint');
     if (hint) { hint.textContent = note; hint.className = 'swipe-hint flash'; clearTimeout(hint._t); hint._t = setTimeout(() => (hint.className = 'swipe-hint'), 1400); }

@@ -286,3 +286,4 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   body.undo-buttons .mb svg { width: 19px; height: 19px; }
   body.undo-buttons .m-count { font-size: 13.5px; }
 }
+.m-undo, .d-undo { display: none !important; }
