@@ -672,6 +672,8 @@ function cropBand(art, content) {
   const pad = line * (Number(prefs.cropLines) || 3);
   let a = Math.min(...marks.map((m) => m[0])) - pad;
   let b = Math.max(...marks.map((m) => m[1])) + pad;
+  if (open.at != null) a = Math.min(a, open.at); // dragged open part of the way
+  if (open.ab != null) b = Math.max(b, open.ab);
   if (open.top || a < line * 1.5) a = 0; // not worth hiding a line or two
   if (open.bottom || b > 1 - line * 1.5) b = 1;
   if (a <= 0 && b >= 1) return null;
@@ -726,8 +728,15 @@ function applyCrop(art) {
 // Arrows set into the top and bottom borders of a cropped result: tap to open the page up or down.
 const EYE_H = 'M0 10C13 10 16 1.5 27 1.5L49 1.5C60 1.5 63 10 76 10C63 10 60 18.5 49 18.5L27 18.5C16 18.5 13 10 0 10';
 function edgeNavs(body, top, bottom) {
-  for (const b of body.querySelectorAll(':scope > .edge-nav')) b.remove();
+  for (const b of body.querySelectorAll(':scope > .edge-nav, :scope > .edge-drag')) b.remove();
   const make = (side) => {
+    if (prefs.expand === 'drag') { // an accent bar to pull the page open with
+      const b = el('button', `edge-drag ${side}`, '<i></i>');
+      b.dataset.drag = side;
+      b.setAttribute('aria-label', side === 'top' ? 'Drag up to show more of the page above' : 'Drag down to show more of the page below');
+      body.append(b);
+      return;
+    }
     const b = el('button', `edge-nav ${side}`, `<svg class="cn-eye" viewBox="0 0 76 20" preserveAspectRatio="none"><path class="f" d="${EYE_H}Z"/><path d="${EYE_H}"/></svg>${side === 'top' ? I.up : I.down}`);
     b.dataset.act = `edge-${side}`;
     b.setAttribute('aria-label', side === 'top' ? 'Show the page above this' : 'Show the rest of the page below');
@@ -752,7 +761,7 @@ function expandEdge(art, side) {
   const added = body.offsetHeight - h0;
   if (added > 0 && !reduceMotion()) {
     // reveal the page itself; the arrows in the border stay put on top the whole time
-    const parts = [...body.children].filter((c) => !c.matches('.edge-nav, .col-nav'));
+    const parts = [...body.children].filter((c) => !c.matches('.edge-nav, .col-nav, .edge-drag, .col-drag'));
     let off = 0;
     const total = parts.reduce((t, c) => t + c.offsetHeight, 0);
     for (const c of parts) {
@@ -764,6 +773,195 @@ function expandEdge(art, side) {
     }
   }
 }
+// ---- drag bars: pull a cropped page open with your finger ----
+// Top/bottom bar: the page opens under your finger while everything else holds still; near the edge of the
+// screen it scrolls along with you, and it stops where the page ends. Side bar: the view glides toward the
+// next column as you drag and finishes (or springs back) when you let go. A tap does what the button did.
+let dragging = null;
+const lerp = (a, b, t) => a + (b - a) * t;
+function startEdgeDrag(e, handle) {
+  const art = handle.closest('article.page');
+  const body = art?.lastElementChild;
+  if (!art || !body) return;
+  const content = body.querySelector('.pdf-frame:not(.clone), .page-text');
+  const ty = prefs.trim && content?.dataset.ty ? content.dataset.ty.split(',').map(Number) : [0, 1];
+  const side = handle.dataset.drag;
+  let clip, frame, band, set;
+  const pieces = [...body.querySelectorAll(':scope > .piece')];
+  if (pieces.length) {
+    const i = side === 'top' ? 0 : pieces.length - 1;
+    const pc = art._plan?.pieces[i];
+    if (!pc) return;
+    clip = pieces[i];
+    frame = clip.querySelector('.pdf-frame');
+    band = [...pc.band];
+    set = (b) => { art._pieceX = { ...art._pieceX, [pc.key]: { at: b[0], ab: b[1] } }; };
+  } else {
+    clip = body.querySelector(':scope > .crop-clip');
+    frame = content;
+    band = art._band ? [...art._band] : null;
+    set = (b) => {
+      const key = pkey(art.dataset.doc, Number(art.dataset.n));
+      const o = { ...cropOpen.get(key), at: b[0], ab: b[1] };
+      if (b[0] <= ty[0] + 0.002) o.top = true;
+      if (b[1] >= ty[1] - 0.002) o.bottom = true;
+      cropOpen.set(key, o);
+    };
+  }
+  if (!clip || !frame || !band) return;
+  e.preventDefault();
+  handle.setPointerCapture(e.pointerId);
+  const key = pkey(art.dataset.doc, Number(art.dataset.n));
+  const was = { open: cropOpen.get(key), px: art._pieceX };
+  const H = frame.offsetHeight;
+  const r0 = clip.getBoundingClientRect();
+  dragging = {
+    kind: 'edge', art, side, clip, H, band, cur: [...band], ty, set, was, handle,
+    y0: e.clientY, y: e.clientY, moved: false,
+    line: r0.top, // where the old top edge of the page sits on screen (it holds still while the top opens)
+  };
+  art.classList.add('dragging');
+  handle.classList.add('on');
+  dragLoop();
+}
+function applyEdge(d) {
+  const { clip, H, cur } = d;
+  clip.style.height = Math.max(24, Math.round((cur[1] - cur[0]) * H)) + 'px';
+  clip.firstElementChild.style.marginTop = -Math.round(cur[0] * H) + 'px';
+}
+function dragLoop() {
+  const d = dragging;
+  if (!d) return;
+  if (d.kind === 'edge') {
+    const topZone = Math.max(safeTop(), $('.topbar').getBoundingClientRect().bottom) + 96;
+    const botZone = innerHeight - ($('#mbar:not([hidden])') ? 150 : 90);
+    let v = 0;
+    if (d.side === 'bottom' && d.y > botZone && d.cur[1] < d.ty[1]) v = Math.min(18, ((d.y - botZone) / 90) * 18);
+    if (d.side === 'top' && d.y < topZone && d.cur[0] > d.ty[0]) v = -Math.min(18, ((topZone - d.y) / 90) * 18);
+    if (v) {
+      const y = scrollY;
+      autoScrollUntil = performance.now() + 250; // the top bar holds still while we scroll for you
+      window.scrollBy({ top: v, behavior: 'instant' });
+      if (d.side === 'top') d.line -= scrollY - y; // the page moved down under the finger
+    }
+    if (d.side === 'bottom') {
+      const top = d.clip.getBoundingClientRect().top;
+      d.cur[1] = Math.max(d.band[1], Math.min(d.ty[1], d.cur[0] + (d.y - top) / d.H));
+      applyEdge(d);
+    } else {
+      const was = d.cur[0];
+      d.cur[0] = Math.max(d.ty[0], Math.min(d.band[0], d.band[0] - (d.line - d.y) / d.H));
+      const grew = (was - d.cur[0]) * d.H;
+      applyEdge(d);
+      // the page grew upward: scroll by the same amount so what you were reading doesn't move
+      if (Math.abs(grew) > 0.01) { autoScrollUntil = performance.now() + 250; window.scrollBy({ top: grew, behavior: 'instant' }); }
+    }
+  } else if (d.kind === 'col') {
+    // pull the side bar inward, as if swiping the next column into view
+    const p = Math.max(0, Math.min(1, -d.dir * (d.x - d.x0) / d.reach));
+    applyCol(d, p);
+  }
+  d.raf = requestAnimationFrame(dragLoop);
+}
+const safeTop = () => { const p = $('#safeProbe'); return p ? p.offsetHeight : 0; };
+function applyCol(d, p) {
+  d.p = p;
+  const span = [lerp(d.from.span[0], d.to.span[0], p), lerp(d.from.span[1], d.to.span[1], p)];
+  frameSpan(d.frame, span);
+  const H = d.frame.offsetHeight;
+  const band = [lerp(d.from.band[0], d.to.band[0], p), lerp(d.from.band[1], d.to.band[1], p)];
+  d.clip.style.height = Math.max(24, Math.round((band[1] - band[0]) * H)) + 'px';
+  d.clip.firstElementChild.style.marginTop = -Math.round(band[0] * H) + 'px';
+}
+function startColDrag(e, handle) {
+  const art = handle.closest('article.page');
+  const body = art?.lastElementChild;
+  const i = Number(handle.dataset.piece);
+  const pc = art?._plan?.pieces[i];
+  const content = body?.querySelector('.pdf-frame:not(.clone)');
+  if (!pc?.cols || !content) return;
+  const dir = handle.dataset.drag === 'col-next' ? 1 : -1;
+  const k = dir < 0 ? pc.k - 1 : pc.k, k2 = dir > 0 ? pc.k2 + 1 : pc.k2;
+  if (k < 0 || k2 >= pc.cols.length) return;
+  // where the piece will end up: the plan with the column added, worked out without drawing it
+  const was = art._colOpen;
+  art._colOpen = { ...was, [pc.key]: [k, k2] };
+  const target = colPlan(art, content)?.pieces.find((q) => q.key === pc.key);
+  art._colOpen = was;
+  if (!target) return;
+  const clip = body.querySelectorAll(':scope > .piece')[i];
+  e.preventDefault();
+  handle.setPointerCapture(e.pointerId);
+  dragging = {
+    kind: 'col', art, i, dir, handle, clip, frame: clip.querySelector('.pdf-frame'),
+    from: { span: [...pc.span], band: [...pc.band] }, to: { span: target.span, band: target.band },
+    now: { ...was, [pc.key]: [k, k2] }, was,
+    x0: e.clientX, x: e.clientX, y0: e.clientY, y: e.clientY, reach: Math.max(120, clip.offsetWidth * 0.55), moved: false, p: 0,
+  };
+  art.classList.add('dragging');
+  handle.classList.add('on');
+  dragLoop();
+}
+function moveDrag(e) {
+  const d = dragging;
+  if (!d || !d.handle.hasPointerCapture?.(e.pointerId)) return;
+  d.x = e.clientX;
+  d.y = e.clientY;
+  if (Math.hypot(d.x - (d.x0 ?? d.x), d.y - d.y0) > 6) d.moved = true;
+}
+function endDrag(e, cancelled) {
+  const d = dragging;
+  if (!d) return;
+  dragging = null;
+  cancelAnimationFrame(d.raf);
+  d.art.classList.remove('dragging');
+  d.handle.classList.remove('on');
+  const art = d.art;
+  if (!d.moved && !cancelled) { // a tap: same as the button
+    if (d.kind === 'edge') expandEdge(art, d.side);
+    else shiftColumn(art, d.i, d.dir);
+    return;
+  }
+  if (d.kind === 'edge') {
+    const now = { open: cropOpen.get(pkey(art.dataset.doc, Number(art.dataset.n))), px: art._pieceX };
+    if (Math.abs(d.cur[0] - d.band[0]) < 0.001 && Math.abs(d.cur[1] - d.band[1]) < 0.001) return;
+    d.set(d.cur);
+    const key = pkey(art.dataset.doc, Number(art.dataset.n));
+    const after = { open: cropOpen.get(key), px: art._pieceX };
+    const put = (st) => { if (st.open) cropOpen.set(key, st.open); else cropOpen.delete(key); art._pieceX = st.px; if (art.isConnected) applyCrop(art); };
+    void now;
+    recordCustom(d.side === 'top' ? 'Show above' : 'Show below', () => put(d.was), () => put(after));
+    applyCrop(art);
+    return;
+  }
+  // sideways: past about a third finishes the move, otherwise it springs back
+  const go = d.p > 0.33 && !cancelled;
+  const from = d.p, to = go ? 1 : 0, t0 = performance.now(), ms = 260;
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / ms);
+    applyCol(d, lerp(from, to, 1 - Math.pow(1 - k, 3)));
+    if (k < 1) { requestAnimationFrame(step); return; }
+    if (go) {
+      const set = (v) => { art._colOpen = v; if (art.isConnected) applyCrop(art); };
+      recordCustom(d.dir > 0 ? 'Column to the right' : 'Column to the left', () => set(d.was), () => set(d.now));
+      art._colOpen = d.now;
+    }
+    art.lastElementChild._pieceSig = null;
+    applyCrop(art);
+  };
+  requestAnimationFrame(step);
+}
+document.addEventListener('pointerdown', (e) => {
+  const h = e.target.closest?.('.edge-drag, .col-drag');
+  if (!h || dragging) return;
+  if (h.classList.contains('col-drag')) startColDrag(e, h); else startEdgeDrag(e, h);
+});
+document.addEventListener('pointermove', moveDrag);
+document.addEventListener('pointerup', (e) => endDrag(e, false));
+document.addEventListener('pointercancel', (e) => endDrag(e, true));
+// the page mustn't scroll under a finger that's dragging a bar
+document.addEventListener('touchmove', (e) => { if (dragging) e.preventDefault(); }, { passive: false });
+
 // Open a cropped page out to the whole page ('all'), or crop it to the hits again ('crop'), keeping the
 // hits where they are on screen.
 function expandCrop(art, how) {
@@ -873,6 +1071,9 @@ function colPlan(art, content) {
     if (open?.top || a < ty[0] + line * 1.5) a = ty[0];
     if (open?.bottom || z > ty[1] - line * 1.5) z = ty[1];
     const key = `${g.top.toFixed(3)}`;
+    const px = art._pieceX?.[key]; // this piece dragged open part of the way
+    if (px?.at != null) a = Math.max(ty[0], Math.min(a, px.at));
+    if (px?.ab != null) z = Math.min(ty[1], Math.max(z, px.ab));
     if (!g.cols) return { key, cols: null, k: -1, k2: -1, span: tx, band: [Math.max(0, a), Math.min(1, z)], cutA: a > ty[0] + 0.005, cutB: z < ty[1] - 0.005 };
     const r = opened[key];
     const k = r ? Math.max(0, r[0]) : g.k, k2 = r ? Math.min(g.cols.length - 1, r[1]) : g.k;
@@ -972,6 +1173,14 @@ function layoutPieces(art, body, content, plan) {
       clip.append(inner);
       // arrows tucked into the sides when there's a column that way
       const nav = (side, act, label) => {
+        if (prefs.expand === 'drag') {
+          const b = el('button', `col-drag ${side}`, '<i></i>');
+          b.dataset.drag = act;
+          b.dataset.piece = k;
+          b.setAttribute('aria-label', `${label} (pull inward)`);
+          body.append(b);
+          return;
+        }
         const b = el('button', `col-nav ${side}`, `<svg class="cn-eye" viewBox="0 0 20 76" preserveAspectRatio="none"><path class="f" d="${EYE}Z"/><path d="${EYE}"/></svg>${I.chevron}`);
         b.dataset.act = act;
         b.dataset.piece = k;
@@ -1007,7 +1216,7 @@ function layoutPieces(art, body, content, plan) {
     clip.classList.toggle('cut-a', pc.cutA);
     clip.classList.toggle('cut-b', pc.cutB);
     // the side arrows sit on the card's border, level with the middle of their piece
-    for (const nav of body.querySelectorAll(`:scope > .col-nav[data-piece="${k}"]`)) {
+    for (const nav of body.querySelectorAll(`:scope > :is(.col-nav, .col-drag)[data-piece="${k}"]`)) {
       const h = clip.offsetHeight;
       nav.style.height = Math.max(30, Math.min(76, h - 12)) + 'px';
       nav.style.top = clip.offsetTop + h / 2 + 'px';
@@ -4440,6 +4649,7 @@ function openSettings() {
             <input type="range" min="0" max="100" value="${prefs.glassB ?? 50}" data-blur aria-label="Blur"><span class="set-ends"><span>Sharp</span><span>Frosted</span></span></span></div>`,
         ])}
         ${group('Reading', [
+          `<div class="set-row static"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M9 3.5h6M9 20.5h6"/></svg></span><span class="set-t"><b>Opening cropped pages</b><small>${prefs.expand === 'drag' ? 'Drag the bars on a cropped page to pull it open' : 'Tap the arrows on a cropped page to open it'}</small></span><span class="seg small set-seg"><button type="button" data-s="xb" aria-pressed="${prefs.expand !== 'drag'}">Buttons</button><button type="button" data-s="xd" aria-pressed="${prefs.expand === 'drag'}">Drag</button></span></div>`,
           `<div class="set-row static"><span class="set-ic">${I.undo}</span><span class="set-t"><b>Undo &amp; redo</b><small>${prefs.undoStyle === 'buttons' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar: right to undo, left to redo'}</small></span><span class="seg small set-seg"><button type="button" data-s="ug" aria-pressed="${prefs.undoStyle !== 'buttons'}">Gestures</button><button type="button" data-s="ub" aria-pressed="${prefs.undoStyle === 'buttons'}">Buttons</button></span></div>`,
         ])}
         ${group('Documents from websites', [
@@ -4488,6 +4698,20 @@ function openSettings() {
     const k = b.dataset.s;
     const then = (fn) => { shut(); closeDrawer(); setTimeout(fn, 200); };
     if (k === 'x') return shut();
+    if (k === 'xb' || k === 'xd') {
+      prefs.expand = k === 'xd' ? 'drag' : 'buttons';
+      savePrefs();
+      const rowEl = b.closest('.set-row');
+      rowEl.querySelectorAll('[data-s="xb"], [data-s="xd"]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.s === k)));
+      rowEl.querySelector('small').textContent = k === 'xd' ? 'Drag the bars on a cropped page to pull it open' : 'Tap the arrows on a cropped page to open it';
+      for (const art of $$('article.page')) { // swap the arrows for bars (or back) on pages already shown
+        const body = art.lastElementChild;
+        if (!body?.classList.contains('cropped')) continue;
+        body._pieceSig = null;
+        applyCrop(art);
+      }
+      return;
+    }
     if (k === 'ug' || k === 'ub') { // just flip the switch and its line of text in place
       prefs.undoStyle = k === 'ub' ? 'buttons' : 'gestures';
       savePrefs();
