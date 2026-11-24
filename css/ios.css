@@ -321,3 +321,4 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
 }
 /* Settings › Blur drives these on every screen size */
 .topbar, .dock { -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+.set-seg button { transition: background 0.2s, box-shadow 0.2s, color 0.2s; }

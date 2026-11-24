@@ -4425,7 +4425,10 @@ function openSettings() {
   const disk = '<svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>';
   const render = () => {
     const linked = hasSources();
-    d.innerHTML = `<div class="set-sheet" tabindex="-1" autofocus>
+    // already open: swap only the rows, so the sheet doesn't replay its entrance or lose its scroll
+    const open = d.open && d.querySelector('.set-body');
+    const keepY = open ? open.scrollTop : 0;
+    const html = `<div class="set-sheet" tabindex="-1" autofocus>
       <i class="set-grab" aria-hidden="true"></i>
       <header class="set-head"><h3>Settings</h3><button class="icon-btn sm" data-s="x" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
       <div class="set-body">
@@ -4463,6 +4466,12 @@ function openSettings() {
         ])}
       </div>
     </div>`;
+    if (open) {
+      const t = document.createElement('template');
+      t.innerHTML = html;
+      open.replaceWith(t.content.querySelector('.set-body'));
+      d.querySelector('.set-body').scrollTop = keepY;
+    } else d.innerHTML = html;
   };
   d.oninput = (e) => {
     if (e.target.hasAttribute('data-glass')) prefs.glassT = Number(e.target.value);
@@ -4479,7 +4488,15 @@ function openSettings() {
     const k = b.dataset.s;
     const then = (fn) => { shut(); closeDrawer(); setTimeout(fn, 200); };
     if (k === 'x') return shut();
-    if (k === 'ug' || k === 'ub') { prefs.undoStyle = k === 'ub' ? 'buttons' : 'gestures'; savePrefs(); syncUndoBtns(); render(); return; }
+    if (k === 'ug' || k === 'ub') { // just flip the switch and its line of text in place
+      prefs.undoStyle = k === 'ub' ? 'buttons' : 'gestures';
+      savePrefs();
+      syncUndoBtns();
+      const rowEl = b.closest('.set-row');
+      rowEl.querySelectorAll('[data-s="ug"], [data-s="ub"]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.s === k)));
+      rowEl.querySelector('small').textContent = k === 'ub' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar: right to undo, left to redo';
+      return;
+    }
     if (k === 'auto') { prefs.autoCheck = !prefs.autoCheck; savePrefs(); $('#autoCheck') && ($('#autoCheck').checked = prefs.autoCheck); b.querySelector('.set-sw').classList.toggle('on', prefs.autoCheck); return; }
     if (k === 'cloud') { await toggleCloud(); render(); return; }
     if (k === 'theme') return then(openThemes);
