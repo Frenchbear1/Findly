@@ -172,6 +172,29 @@ fn rename(app: AppHandle, from: String, name: String) -> Result<serde_json::Valu
     Ok(serde_json::json!({ "path": rel_of(&r, &dest) }))
 }
 
+/// Moves a library file into a folder (relative to the library, "" for the top), keeping its name unless one
+/// is taken there; then removes folders the move left empty. Answers the file's new path.
+#[tauri::command]
+fn move_to(app: AppHandle, from: String, folder: String) -> Result<serde_json::Value, String> {
+    let r = root(&app)?;
+    let src = at(&app, &from)?;
+    let dir = if folder.is_empty() { r.clone() } else { at(&app, &folder)? };
+    if src.parent() == Some(dir.as_path()) { return Ok(serde_json::json!({ "path": from })); }
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let name = src.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let dest = free(&dir, &name);
+    fs::rename(&src, &dest).map_err(|e| e.to_string())?;
+    // folders emptied by the move go too (never the library folder itself)
+    let mut up = src.parent().map(|p| p.to_path_buf());
+    while let Some(d) = up {
+        if d == r || !d.starts_with(&r) { break; }
+        if fs::read_dir(&d).map(|mut x| x.next().is_some()).unwrap_or(true) { break; }
+        let _ = fs::remove_dir(&d);
+        up = d.parent().map(|p| p.to_path_buf());
+    }
+    Ok(serde_json::json!({ "path": rel_of(&r, &dest) }))
+}
+
 #[tauri::command]
 fn read(app: AppHandle, path: String, offset: u64, length: u64) -> Result<serde_json::Value, String> {
     let mut f = fs::File::open(at(&app, &path)?).map_err(|e| e.to_string())?;
@@ -212,7 +235,7 @@ fn reveal(app: AppHandle) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![info, list, write, free_name, remove, rename, read, stat, pick_folder, reveal])
+        .invoke_handler(tauri::generate_handler![info, list, write, free_name, remove, rename, move_to, read, stat, pick_folder, reveal])
         .run(tauri::generate_context!())
         .expect("error while running Findly");
 }

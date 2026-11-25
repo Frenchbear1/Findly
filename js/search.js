@@ -33,8 +33,11 @@ function termSource(raw, wholeWord) {
 }
 
 function makeTerm(label, source, opts, neg = false) {
-  return { label, re: new RegExp(source, 'g' + 'u' + (opts.matchCase ? '' : 'i')), neg };
+  return { label, src: source, re: new RegExp(source, 'g' + 'u' + (opts.matchCase ? '' : 'i')), neg };
 }
+// The runs of three or more letters or digits a term's matches must contain: what a text index can look up
+// to narrow the pages before matching exactly (see the iPhone's ISIndexPlugin).
+const literals = (label) => label.split(/[\s*]+/).flatMap((w) => w.match(/[\p{L}\p{N}]{3,}/gu) || []);
 
 // "quoted phrases", plain words and -exclusions
 function splitTerms(q) {
@@ -299,6 +302,8 @@ export function compile(rawQuery, opts) {
     terms: terms.map((t) => ({ label: t.label, neg: t.neg, color: t.color })),
     match,
     soft,
+    // the same query for another engine to run (the iPhone's text index): patterns and how to combine them
+    plan: { mode, dist, matchCase: !!opts.matchCase, ast, terms: terms.map((t) => ({ src: t.src, neg: t.neg, color: t.color, lits: literals(t.label) })) },
   };
 }
 

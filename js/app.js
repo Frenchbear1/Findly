@@ -1,6 +1,7 @@
 import { compile, MODES, inWhere, WHERE } from './search.js';
 import { store, stuckStorage, setDiskPath } from './store.js';
-import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, nativePdf, drawPage, forgetPages, pdfRange, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary, diskFile } from './native.js';
+import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, nativePdf, drawPage, forgetPages, pdfRange, nativeIndex, Index, readResultFile, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary, diskFile } from './native.js';
+import { NativeTexts } from './texts.js';
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
 import { detectLabels, cleanPdfLabels } from './pagelabels.js';
@@ -10,7 +11,7 @@ import { remoteFetch, remoteInfo, remoteChanged, download, documentLinks, looksL
 import { comboFromEvent, comboLabel, worksWhileTyping, isMac } from './keys.js';
 import { applyReadingTheme, openThemeBar, themeBarOpen, THEME_DEFAULTS, BLUR_DEF, blurPx } from './themes.js';
 import { initBoards } from './boards.js';
-import { makeBackup, readBackup, backupStream } from './backup.js';
+import { makeBackup, readBackup, backupStream, setTextSource } from './backup.js';
 import { send as sendTo, receive as receiveFrom } from './transfer.js';
 
 // ---------- small helpers ----------
@@ -118,7 +119,17 @@ const searchWorker = (() => {
 })();
 // the worker's copy of each document's headings and captions
 function sendMarks(doc) { try { searchWorker?.postMessage({ t: 'marks', id: doc.id, marks: doc.marks || null }); } catch {} }
+// Page text in memory (browsers, Windows); the iPhone uses NativeTexts (texts.js), with the same calls.
 class TextMap extends Map {
+  count(id) { return this.get(id)?.length || 0; }
+  len(id, n) { return this.get(id)?.[n]?.length || 0; }
+  peek(id, n) { return this.get(id)?.[n]; }
+  async page(id, n) { return this.get(id)?.[n] ?? ''; }
+  async load() {}
+  async all(id) { return this.get(id) || []; }
+  flushed() { return Promise.resolve(); }
+  detach(id) { const p = this.get(id); this.delete(id); return p; }
+  attach(id, p) { this.set(id, p); }
   set(k, v) { super.set(k, v); try { searchWorker?.postMessage({ t: 'set', id: k, pages: v }); } catch {} const d = S.docs.find((x) => x.id === k); if (d?.marks) sendMarks(d); return this; }
   delete(k) { try { searchWorker?.postMessage({ t: 'del', id: k }); } catch {} return super.delete(k); }
   clear() { try { searchWorker?.postMessage({ t: 'clear' }); } catch {} super.clear(); }
@@ -126,7 +137,7 @@ class TextMap extends Map {
 const S = {
   docs: [],            // metadata, library order
   folders: [],         // { id, name, order, collapsed }
-  texts: new TextMap(), // docId -> page texts
+  texts: nativeIndex ? new NativeTexts() : new TextMap(), // docId -> page texts (see texts.js)
   matcher: null,
   error: null,
   terms: [],
@@ -178,10 +189,10 @@ function docLabels(kind, pages, fromPdf) {
 function labelOlderDocs() {
   const todo = S.docs.filter((d) => d.kind === 'pdf' && !d.status && d.labelsV !== LABELS_V && S.texts.has(d.id));
   if (!todo.length) return;
-  const step = () => {
+  const step = async () => {
     const d = todo.shift();
     if (!d) { store.updateDocs(S.docs.filter((x) => x.labelsV === LABELS_V && !x.status).map(stripMeta)).catch(() => {}); return; }
-    d.labels = detectLabels(S.texts.get(d.id) || []);
+    d.labels = detectLabels((await S.texts.all(d.id).catch(() => [])) || []);
     d.labelsV = LABELS_V;
     setTimeout(step, 0);
   };
@@ -205,7 +216,7 @@ async function markOlderDocs() {
       const bytes = await pdfSource(d.id);
       if (!bytes) continue;
       try { localStorage.setItem(KEY, d.id); } catch {}
-      const marks = await marksForPdf(bytes, S.texts.get(d.id) || [], () => !S.docs.includes(d));
+      const marks = await marksForPdf(bytes, (await S.texts.all(d.id)) || [], () => !S.docs.includes(d));
       try { localStorage.removeItem(KEY); } catch {}
       if (!marks) continue;
       d.marks = marks;
@@ -298,6 +309,63 @@ function workerHits(docs) {
   });
 }
 
+// The iPhone: the search runs in its text database (ISIndexPlugin) with the same compiled query; the answer comes
+// back as a summary and a binary file of hit positions, turned into the same shape as the worker's.
+async function nativeHits(docs) {
+  const qid = ++searchSeq;
+  const plan = S.matcher?.plan;
+  if (!plan) return [];
+  let r;
+  try { r = await Index.search({ qid, ids: docs.map((d) => d.id), ...plan }); } catch (e) { if (qid === searchSeq) toast(`Search failed: ${e?.message || e}`); return qid === searchSeq ? [] : null; }
+  if (r.cancelled || qid !== searchSeq) return null;
+  const buf = r.docs?.length ? new Int32Array(await readResultFile(r.path)) : new Int32Array(0);
+  if (qid !== searchSeq) return null;
+  const byId = new Map(docs.map((d) => [d.id, d]));
+  const where = prefs.where && prefs.where !== 'any' ? prefs.where : null;
+  const list = [];
+  let off = 0;
+  for (const f of r.docs || []) {
+    const k = f.pages, h = f.hits;
+    const ns = buf.subarray(off, off + k); off += k;
+    const counts = buf.subarray(off, off + k); off += k;
+    const data = buf.subarray(off, off + 3 * h); off += 3 * h;
+    const doc = byId.get(f.id);
+    if (!doc) continue;
+    let pages = [];
+    let at = 0;
+    for (let i = 0; i < k; i++) { pages.push(workerPage(ns[i], counts[i], data, at)); at += counts[i]; }
+    if (where) pages = pages.map((p) => { const rr = inWhere(p.ranges, doc.marks?.[p.n] || null, where); return rr ? { n: p.n, ranges: rr, count: rr.length } : null; }).filter(Boolean);
+    if (pages.length) list.push({ doc, pages, hits: pages.reduce((a, p) => a + p.count, 0) });
+  }
+  return list;
+}
+async function runSearchNative({ keepScroll = false } = {}) {
+  for (const [k, w] of workerWaits) { workerWaits.delete(k); w(null); }
+  prepSearch();
+  const scope = orderedDocs().filter(inScope);
+  const rdoc = reader.docId && docById(reader.docId);
+  if (!S.matcher) { searchSeq++; document.body.classList.remove('searching'); showSearch([], rdoc ? [] : null, { keepScroll }); return; }
+  const docs = rdoc && !scope.includes(rdoc) ? [...scope, rdoc] : scope;
+  document.body.classList.add('searching');
+  await S.texts.flushed(); // documents just added are in the database before it's searched
+  const found = await nativeHits(docs);
+  if (!found) return; // a newer search took over
+  document.body.classList.remove('searching');
+  const inResults = new Set(scope);
+  showSearch(found.filter((R) => inResults.has(R.doc)), rdoc ? found.filter((R) => R.doc === rdoc) : null, { keepScroll });
+}
+// One document's hits, for opening it to read: from the results when it's among them, otherwise searched.
+async function docHits(doc) {
+  if (!nativeIndex) return computeHits([doc]);
+  if (!S.matcher) return [];
+  const mine = results.list.filter((R) => R.doc === doc);
+  if (mine.length || inScope(doc)) {
+    const pages = mine.flatMap((R) => R.pages).sort((a, b) => a.n - b.n);
+    return pages.length ? [{ doc, pages, hits: pages.reduce((a, p) => a + p.count, 0) }] : [];
+  }
+  return (await nativeHits([doc])) || [];
+}
+
 function prepSearch() {
   prefs.q = q.value;
   savePrefs();
@@ -309,6 +377,7 @@ function prepSearch() {
 // While typing: the matching runs in the worker, so the keyboard and the page stay smooth; only the newest
 // keystroke's results are shown.
 async function runSearchLive() {
+  if (nativeIndex) { runSearchNative(); return; }
   if (!searchWorker) { runSearch(); return; }
   prepSearch();
   if (!S.matcher) { searchSeq++; runSearch(); return; }
@@ -324,6 +393,7 @@ async function runSearchLive() {
 }
 
 function runSearch({ keepScroll = false } = {}) {
+  if (nativeIndex) { runSearchNative({ keepScroll }); return; }
   searchSeq++; // anything the worker is still doing is out of date now
   for (const [k, w] of workerWaits) { workerWaits.delete(k); w(null); }
   document.body.classList.remove('searching');
@@ -368,7 +438,7 @@ function scheduleSearch() {
   let chars = 0;
   for (const p of S.texts.values()) chars += p.length * 3000;
   // the search itself no longer holds up typing (it runs in a worker), so it can start almost at once
-  searchTimer = setTimeout(searchWorker ? runSearchLive : runSearch, searchWorker ? 70 : chars > 6e6 ? 260 : 110);
+  searchTimer = setTimeout(searchWorker || nativeIndex ? runSearchLive : runSearch, searchWorker || nativeIndex ? 70 : chars > 6e6 ? 260 : 110);
 }
 
 // ---------- text rendering ----------
@@ -413,6 +483,18 @@ function pageRanges(v, docId, n, text, ctx) {
   return S.matcher ? S.matcher.soft(text).map((r) => [r[0], r[1], r[2], null]) : [];
 }
 
+// A page with no text worth showing (a scan): known exactly once its text has been read, guessed from its length before.
+// The first page with text, for a short description of a document (on the iPhone, from a small store of
+// openings read in the background, since the text itself isn't in memory).
+function openingOf(id) {
+  if (nativeIndex) return S.texts.opening(id);
+  return (S.texts.get(id) || []).find((p) => p.trim()) || '';
+}
+function pageBlank(id, n) {
+  const t = S.texts.peek(id, n);
+  return t !== undefined ? !t.trim() : S.texts.len(id, n) < 3;
+}
+
 // ---------- page cards ----------
 const override = new Map(); // per-page Text/Original choice
 // PDFs keep their file; HTML files added from now on keep their source too
@@ -422,7 +504,7 @@ function pageMode(doc, n) {
   const o = override.get(doc.kind === 'html' ? pkey(doc.id, WEB) : pkey(doc.id, n));
   if (o) return o;
   // a PDF page with no extractable text (a scan) is only useful as the original
-  if (doc.kind === 'pdf' && !(S.texts.get(doc.id)?.[n] || '').trim()) return 'original';
+  if (doc.kind === 'pdf' && pageBlank(doc.id, n)) return 'original';
   return prefs.view;
 }
 // An HTML document shown as the real web page is one card, not one per page: the page loads once and
@@ -481,7 +563,7 @@ function htmlOrdinal(doc, n, ranges) {
 function estimate(doc, n, mode = pageMode(doc, n)) {
   const z = zoomValue();
   if (mode === 'original') return doc.kind === 'html' ? HTML_FRAME_H() + 44 : Math.round(BASE_W * z * S.pageAspect) + 56;
-  const chars = (S.texts.get(doc.id)?.[n] || '').length;
+  const chars = S.texts.len(doc.id, n);
   return Math.max(150, Math.round(chars * S.pxPerChar * z) + 80);
 }
 
@@ -570,7 +652,19 @@ function fill(art) {
   const n = Number(art.dataset.n);
   const body = art.lastElementChild;
   if (!doc) return Promise.resolve();
-  const text = S.texts.get(doc.id)?.[n] || '';
+  if (nativeIndex && (S.texts.peek(doc.id, n) === undefined || ((art._web || doc.kind === 'html') && S.texts.peek(doc.id, 0) === undefined))) {
+    // the page's text comes from the phone's database first (with its neighbours: they're usually next);
+    // a web page counts its highlights from the start of the document, so it needs those pages too
+    const tk = art._token;
+    const whole = art._web || doc.kind === 'html';
+    art._filled = S.texts.load(doc.id, whole ? 0 : n - 3, whole ? S.texts.count(doc.id) : n + 8).catch(() => {}).then(() => {
+      if (art._token !== tk) return;
+      art._filled = null;
+      return fill(art);
+    });
+    return art._filled;
+  }
+  const text = S.texts.peek(doc.id, n) ?? '';
   // in the "pages with most hits" ranking an HTML page is shown as text; its web page opens once from the button
   const mode = art._flat && doc.kind === 'html' ? 'text' : pageMode(doc, n);
   const ranges = pageRanges(v, doc.id, n, text, art._ctx);
@@ -2425,7 +2519,7 @@ async function openReader(docId, n) {
   curPageN = n ?? 0;
   curArt = null;
   reader.docId = docId;
-  assign(reader, computeHits([doc]));
+  assign(reader, await docHits(doc));
   active = reader;
   document.body.dataset.view = 'reader';
   renderView(reader);
@@ -2544,6 +2638,7 @@ function docItemHtml(d, hits) {
 
 let renaming = null; // { fid, input } while a folder name is being edited
 function renderLibrary() {
+  organiseSoon();
   const ul = $('#lib');
   const hadFocus = renaming && document.activeElement === renaming.input;
   const hits = new Map();
@@ -2722,9 +2817,8 @@ function removeDoc(id) {
   if (idx < 0) return;
   finalizeRemoval();
   const doc = S.docs[idx];
-  const pages = S.texts.get(id);
+  const pages = S.texts.detach(id); // kept a few seconds for Undo
   S.docs.splice(idx, 1);
-  S.texts.delete(id);
   if (reader.docId === id) closeReader();
   runSearch();
   pendingRemoval = { doc, pages, idx, timer: setTimeout(finalizeRemoval, 6000) };
@@ -2737,6 +2831,7 @@ function finalizeRemoval() {
   pendingRemoval = null;
   closePdf(doc.id);
   forgetHtml(doc.id);
+  S.texts.forget?.(doc.id);
   store.deleteDoc(doc.id).catch(() => {});
 }
 function undoRemoval() {
@@ -2745,7 +2840,7 @@ function undoRemoval() {
   const { doc, pages, idx } = pendingRemoval;
   pendingRemoval = null;
   S.docs.splice(idx, 0, doc);
-  S.texts.set(doc.id, pages);
+  S.texts.attach(doc.id, pages);
   runSearch();
 }
 
@@ -3616,6 +3711,35 @@ async function liveText(bytes, pages, meta) {
 // The library folder (On My iPhone › Instant Search): files added there are added to the library, files
 // changed there are read again, files deleted there leave the library. Runs at start and whenever the app comes back.
 let syncing = null;
+// Windows: the library folder on disk is organised like the library: each document's file sits in folders named
+// after its folder's tiers ("Manuals › FAA" → Manuals\FAA\), and moves when the document or its folder does.
+// (The folder scan works the other way, so the two agree.) It shares the scan's turn, so neither sees the other's
+// half-done work.
+const diskSeg = (s) => s.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').replace(/[. ]+$/, '').trim() || 'Folder';
+const folderDir = (fid) => { const f = fid && folderById(fid); return f ? f.name.split(/\s*›\s*/).filter(Boolean).map(diskSeg).join('/') : ''; };
+let organiseT = 0;
+function organiseSoon() {
+  if (platform !== 'windows' || !Files?.moveTo) return;
+  clearTimeout(organiseT);
+  organiseT = setTimeout(organiseDisk, 900);
+}
+async function organiseDisk() {
+  while (syncing) await syncing.catch(() => {});
+  syncing = (async () => {
+    const paths = await store.paths();
+    for (const d of S.docs) {
+      const p = !d.status && paths.get(d.id);
+      if (!p) continue;
+      const want = folderDir(d.folderId);
+      if (p.split('/').slice(0, -1).join('/') === want) continue;
+      try {
+        const r = await Files.moveTo({ from: p, folder: want });
+        if (r?.path && r.path !== p) await store.setPath(d.id, r.path);
+      } catch {}
+    }
+  })().finally(() => { syncing = null; });
+  return syncing;
+}
 async function syncFolder() {
   if (!isNative) return;
   if (syncing) return syncing;
@@ -3688,7 +3812,8 @@ function indexSpotlight() {
   if (!isNative) return;
   clearTimeout(spotT);
   spotT = setTimeout(() => {
-    const docs = S.docs.filter((d) => !d.status).map((d) => ({ id: d.id, title: d.name.replace(/\.[a-z0-9]+$/i, ''), pages: d.pages || 0, text: (S.texts.get(d.id) || []).join('\n').slice(0, 200000) }));
+    // on the iPhone the text isn't in memory: Spotlight gets the start of each document
+    const docs = S.docs.filter((d) => !d.status).map((d) => ({ id: d.id, title: d.name.replace(/\.[a-z0-9]+$/i, ''), pages: d.pages || S.texts.count(d.id), text: nativeIndex ? S.texts.opening(d.id) : (S.texts.get(d.id) || []).join('\n').slice(0, 200000) }));
     Link.index({ docs }).catch(() => {});
   }, 3000);
 }
@@ -4170,7 +4295,7 @@ function aiFiles() {
 }
 function aiPrompt(docs) {
   const opening = (d) => {
-    const first = (S.texts.get(d.id) || []).find((p) => p.trim()) || '';
+    const first = openingOf(d.id);
     const t = first.replace(/\s+/g, ' ').trim().slice(0, 90);
     return t ? ` — begins “${t.replace(/["“”]/g, '')}…”` : '';
   };
@@ -4510,7 +4635,7 @@ async function linkWithAi() {
     const me = { text: d.name, url: 'https://x/' + encodeURIComponent(d.name), size: d.size };
     const best = links.map((l) => ({ l, s: linkSimilarity(me, { text: l.text, url: l.url }) })).sort((a, b) => b.s - a.s)[0];
     if (best && best.s >= SAME_DOC_SCORE) return best.l;
-    const opening = new Set(words(((S.texts.get(d.id) || []).find((p) => p.trim()) || '').slice(0, 600)));
+    const opening = new Set(words(openingOf(d.id).slice(0, 600)));
     const byText = links.map((l) => {
       const w = [...new Set(words(l.text))].filter((x) => !['pdf', 'kb', 'mb', 'the', 'of', 'and'].includes(x));
       return { l, n: w.length, s: w.length ? w.filter((x) => opening.has(x)).length / w.length : 0 };
@@ -5131,13 +5256,38 @@ async function exportAll() {
     toast(`Couldn’t make the backup: ${err?.message || err}`, { ms: 6000 });
   }
 }
+// The library's page text, at launch (or after an import or transfer replaced what's stored).
+// On the iPhone it lives in its own database (texts.js): only page counts are read here, and any text still in the
+// browser database (from before, or just restored from a backup) is moved over, one document at a time, then
+// deleted there. In a browser it's all read into memory as always.
+async function loadTexts({ again = false } = {}) {
+  if (!nativeIndex) {
+    const texts = await store.allTexts();
+    if (again) S.texts.clear();
+    for (const t of texts) S.texts.set(t.id, t.pages);
+    return;
+  }
+  await S.texts.init();
+  const ids = await store.textIds().catch(() => []);
+  if (!ids.length) return;
+  let done = 0;
+  libStatus.show('Building the search index…', 0);
+  for (const id of ids) {
+    const rec = await store.textOf(id).catch(() => null);
+    if (rec?.pages) { S.texts.set(id, rec.pages); await S.texts.flushed(); }
+    await store.dropText(id).catch(() => {});
+    libStatus.show(`Building the search index… ${plural(++done, 'document')} of ${fmt(ids.length)}`, done / ids.length);
+  }
+  libStatus.done('Search index ready');
+}
+setTextSource(nativeIndex ? { ids: () => [...S.texts.keys()], pages: (id) => S.texts.all(id) } : null);
+
 // Bring the library on screen up to date with what's stored (after an import or a transfer), without reloading.
 async function refreshLibrary() {
-  const [docs, texts, folders] = await Promise.all([store.allDocs(), store.allTexts(), store.allFolders()]);
+  const [docs, folders] = await Promise.all([store.allDocs(), store.allFolders()]);
   const busyDocs = S.docs.filter((d) => d.status); // still being added: keep them
   S.folders = folders.sort((a, b) => (a.order || 0) - (b.order || 0));
-  S.texts.clear();
-  for (const t of texts) S.texts.set(t.id, t.pages);
+  await loadTexts({ again: true });
   S.docs = docs.filter((d) => S.texts.has(d.id)).sort((a, b) => (a.order || 0) - (b.order || 0));
   for (const d of busyDocs) if (!S.docs.some((x) => x.id === d.id)) S.docs.push(d);
   try { S.watch = JSON.parse(localStorage.getItem(WATCH_KEY)) || []; } catch {}
@@ -7063,9 +7213,9 @@ async function start() {
   if (prefs.sideW) applySideWidth(Math.min(prefs.sideW, sideMax()));
   syncControls();
   try {
-    const [docs, texts, folders] = await Promise.all([store.allDocs(), store.allTexts(), store.allFolders()]);
+    const [docs, folders] = await Promise.all([store.allDocs(), store.allFolders()]);
     S.folders = folders.sort((a, b) => (a.order || 0) - (b.order || 0));
-    for (const t of texts) S.texts.set(t.id, t.pages);
+    await loadTexts();
     S.docs = docs.filter((d) => S.texts.has(d.id)).sort((a, b) => (a.order || 0) - (b.order || 0));
   } catch (e) {
     if (stuckStorage(e)) storageStuck('Your library couldn’t be loaded because');

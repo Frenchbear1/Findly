@@ -101,6 +101,9 @@ export function alreadyHere(have) {
   };
 }
 const DOC_STORES = new Set(['docs', 'texts', 'files']);
+// On the iPhone page text lives in its own database, not here: the app hands over how to read it.
+let textSource = null; // { ids(): [doc id], pages(id): Promise<[text]> }
+export const setTextSource = (src) => { textSource = src; };
 
 /** The backup as a stream: the header bytes, then parts that are only read when they're needed (so a library of any
  *  size can be sent to another device or written to a file a piece at a time). */
@@ -138,6 +141,19 @@ export async function backupStream({ have = null } = {}) {
           parts.push({ size: sizes.get(r.path), kind: 'blob', read: async () => new Blob([await readBytes(r.path)]) });
           rows.push({ id: r.id, bytes: { __bin: parts.length - 1 } });
         }
+        stores[s] = rows;
+        continue;
+      }
+      if (s === 'texts' && textSource && name === 'instant-search') {
+        // each document's text is read for the backup when it's sent (measured now, read again then, so
+        // never the whole library's text in memory at once)
+        for (const id of textSource.ids()) {
+          if (skip.has(id)) continue;
+          const size = new TextEncoder().encode(JSON.stringify({ id, pages: await textSource.pages(id) })).length;
+          parts.push({ size, kind: 'json', read: async () => new Blob([JSON.stringify({ id, pages: await textSource.pages(id) })]) });
+          rows.push({ __json: parts.length - 1, id });
+        }
+        await eachOf(db, s, (row) => { if (!skipped(row) && !rows.some((r) => r.id === row.id)) rows.push(pack(row, parts)); });
         stores[s] = rows;
         continue;
       }

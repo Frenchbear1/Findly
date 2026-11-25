@@ -1,7 +1,7 @@
 // Tiny IndexedDB wrapper. Documents live on this device only.
 // stores: docs (metadata), texts (page text per doc), files (original PDF bytes for the page view), folders
 
-import { isNative, readBytes, saveBytes, writeBytes, removeFile } from './native.js';
+import { isNative, readBytes, saveBytes, writeBytes, removeFile, nativeIndex } from './native.js';
 
 // In the iPhone app a document's original file is a real file in the library folder (On My iPhone › Instant Search);
 // the database only remembers which file is whose. In a browser the bytes go in the database as before.
@@ -58,6 +58,16 @@ export const store = {
   async allTexts() {
     return tx(['texts'], 'readonly', (t) => t.objectStore('texts').getAll());
   },
+  /** Ids of documents whose text is in this database (one at a time from here: see textOf). */
+  async textIds() {
+    return tx(['texts'], 'readonly', (t) => t.objectStore('texts').getAllKeys());
+  },
+  async textOf(id) {
+    return tx(['texts'], 'readonly', (t) => t.objectStore('texts').get(id));
+  },
+  async dropText(id) {
+    return tx(['texts'], 'readwrite', (t) => t.objectStore('texts').delete(id));
+  },
   async addDoc(meta, pages, fileBytes) {
     let rec = fileBytes ? { id: meta.id, bytes: fileBytes } : null;
     if (isNative && (fileBytes || diskPath.has(meta.id))) {
@@ -73,7 +83,8 @@ export const store = {
     }
     return tx(['docs', 'texts', 'files'], 'readwrite', (t) => {
       t.objectStore('docs').put(meta);
-      t.objectStore('texts').put({ id: meta.id, pages });
+      // the iPhone keeps page text in its own database (S.texts writes it there), not in this one
+      if (!nativeIndex) t.objectStore('texts').put({ id: meta.id, pages });
       if (rec) t.objectStore('files').put(rec);
     });
   },
@@ -81,6 +92,14 @@ export const store = {
   async paths() {
     const all = await tx(['files'], 'readonly', (t) => t.objectStore('files').getAll());
     return new Map(all.filter((r) => r.path).map((r) => [r.id, r.path]));
+  },
+  /** A document's file moved within the library folder. */
+  async setPath(id, path) {
+    return tx(['files'], 'readwrite', (t) => {
+      const os = t.objectStore('files');
+      const g = os.get(id);
+      g.onsuccess = () => { if (g.result) os.put({ ...g.result, path }); };
+    });
   },
   async updateDoc(meta) {
     return tx(['docs'], 'readwrite', (t) => t.objectStore('docs').put(meta));

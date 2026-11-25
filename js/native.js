@@ -29,6 +29,7 @@ const desktopFiles = shell === 'windows' ? {
   freeName: ({ name, folder }) => invoke('free_name', { name, folder: folder || null }),
   remove: ({ path }) => invoke('remove', { path }),
   rename: ({ from, name }) => invoke('rename', { from, name }),
+  moveTo: ({ from, folder }) => invoke('move_to', { from, folder }),
   read: ({ path, offset, length }) => invoke('read', { path, offset, length }),
   stat: ({ path }) => invoke('stat', { path }),
   takeIncoming: async () => ({ files: [] }),
@@ -173,4 +174,15 @@ export async function pdfRange(path) {
     get(begin, end - 1).then((r) => r.arrayBuffer()).then((b) => t.onDataRange(begin, new Uint8Array(b))).catch(() => {});
   };
   return t;
+}
+
+// ---------- the library's text in a database (the iPhone) ----------
+const IndexP = plugin('ISIndex');
+/** The iPhone keeps page text in its own database with a text index, not in memory (see ISIndexPlugin). */
+export const nativeIndex = !!IndexP && platform === 'ios';
+export const Index = IndexP;
+/** The binary answer of a search (a file the iPhone wrote), as an ArrayBuffer. */
+export async function readResultFile(path) {
+  const r = await fetch(cap.convertFileSrc(path));
+  return r.arrayBuffer();
 }

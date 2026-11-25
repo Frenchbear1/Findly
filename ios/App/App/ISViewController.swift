@@ -9,6 +9,7 @@ class ISViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(ISTextPlugin())
         bridge?.registerPluginInstance(ISLinkPlugin())
         bridge?.registerPluginInstance(ISPdfPlugin())
+        bridge?.registerPluginInstance(ISIndexPlugin())
     }
 
     override open func viewDidLoad() {
