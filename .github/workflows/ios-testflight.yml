@@ -41,6 +41,39 @@ jobs:
           mkdir -p "$RUNNER_TEMP/keys"
           printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/keys/AuthKey.p8"
 
+      # Each run on a fresh Mac makes a new signing certificate, and Apple caps how many an account
+      # can hold. Revoke the ones earlier runs made ("Created via API"); their private keys left with
+      # those machines, so nothing can use them. Certificates made by hand are left alone.
+      - name: Revoke certificates left by earlier runs
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          python3 -m pip install --quiet --break-system-packages pyjwt cryptography 2>/dev/null || python3 -m pip install --quiet pyjwt cryptography
+          python3 - <<'PY'
+          import json, os, time, urllib.request, jwt
+          key = open(os.path.join(os.environ["RUNNER_TEMP"], "keys", "AuthKey.p8")).read()
+          now = int(time.time())
+          token = jwt.encode({"iss": os.environ["ASC_ISSUER_ID"], "iat": now, "exp": now + 900, "aud": "appstoreconnect-v1"},
+                             key, algorithm="ES256", headers={"kid": os.environ["ASC_KEY_ID"], "typ": "JWT"})
+          def call(method, url):
+              req = urllib.request.Request(url, method=method, headers={"Authorization": "Bearer " + token})
+              with urllib.request.urlopen(req) as r:
+                  body = r.read()
+                  return json.loads(body) if body else None
+          certs = call("GET", "https://api.appstoreconnect.apple.com/v1/certificates?limit=200")["data"]
+          for c in certs:
+              a = c["attributes"]
+              name = a.get("displayName") or a.get("name") or ""
+              kind = a.get("certificateType", "")
+              made_by_ci = "Created via API" in name or "Created via API" in (a.get("name") or "")
+              if made_by_ci and kind in ("DEVELOPMENT", "IOS_DEVELOPMENT", "DISTRIBUTION", "IOS_DISTRIBUTION"):
+                  call("DELETE", "https://api.appstoreconnect.apple.com/v1/certificates/" + c["id"])
+                  print("revoked", kind, name, a.get("expirationDate", ""))
+              else:
+                  print("kept   ", kind, name, a.get("expirationDate", ""))
+          PY
+
       # Archive signed for development so the app's iCloud entitlements are kept (this needs at
       # least one iPhone registered under Devices). The export step re-signs it for the App Store.
       - name: Archive
