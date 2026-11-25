@@ -147,6 +147,9 @@ function fraction(str, i, family) {
 
 const openDocs = new Map(); // docId -> Promise<PDFDocumentProxy>
 
+// What getDocument reads from: the file's bytes, or (iPhone) { range } to read it in pieces as needed.
+const source = (src) => (src?.range ? { range: src.range, disableAutoFetch: true, disableStream: true, rangeChunkSize: 131072 } : { data: src.slice(0) });
+
 export function getPdf(docId, loadBytes, { fonts = true } = {}) {
   if (!openDocs.has(docId)) {
     openDocs.set(
@@ -154,7 +157,7 @@ export function getPdf(docId, loadBytes, { fonts = true } = {}) {
       loadBytes().then((bytes) => {
         if (!bytes) throw new Error('Original file not stored');
         // fonts are only needed to draw the page; when the iPhone draws it, only the text's positions are read
-        return pdfjsLib.getDocument({ data: bytes.slice(0), isEvalSupported: false, disableFontFace: !fonts }).promise;
+        return pdfjsLib.getDocument({ ...source(bytes), isEvalSupported: false, disableFontFace: !fonts }).promise;
       })
     );
     openDocs.get(docId).catch(() => openDocs.delete(docId));
@@ -560,7 +563,7 @@ export async function marksForPdf(bytes, texts, isStale) {
   // its own copy of the document, without fonts (only the text's positions and sizes are needed), each page
   // let go as soon as it's read and the whole thing closed at the end: reading a long manual page by page
   // otherwise piles up enough in memory for iOS to restart the app
-  const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0), isEvalSupported: false, disableFontFace: true }).promise;
+  const pdf = await pdfjsLib.getDocument({ ...source(bytes), isEvalSupported: false, disableFontFace: true }).promise;
   const lines = [];
   try {
     for (let n = 1; n <= pdf.numPages; n++) {

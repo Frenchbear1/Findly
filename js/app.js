@@ -1,6 +1,6 @@
 import { compile, MODES, inWhere, WHERE } from './search.js';
 import { store, stuckStorage, setDiskPath } from './store.js';
-import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, nativePdf, drawPage, forgetPages, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary, diskFile } from './native.js';
+import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, nativePdf, drawPage, forgetPages, pdfRange, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary, diskFile } from './native.js';
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
 import { detectLabels, cleanPdfLabels } from './pagelabels.js';
@@ -202,7 +202,7 @@ async function markOlderDocs() {
     while (performance.now() - lastScrollAt < 3000 || document.hidden) await new Promise((r) => setTimeout(r, 1000));
     if (!S.docs.includes(d) || d.status) continue;
     try {
-      const bytes = await store.file(d.id);
+      const bytes = await pdfSource(d.id);
       if (!bytes) continue;
       try { localStorage.setItem(KEY, d.id); } catch {}
       const marks = await marksForPdf(bytes, S.texts.get(d.id) || [], () => !S.docs.includes(d));
@@ -618,7 +618,7 @@ function fill(art) {
       showLoading();
       try {
         const draw = nativePdf ? await pageDrawer(doc.id, n) : null;
-        const pdf = await getPdf(doc.id, () => store.file(doc.id), { fonts: !draw });
+        const pdf = await getPdf(doc.id, () => pdfSource(doc.id), { fonts: !draw });
         if (!doc.labelsPdf) { // the PDF's own labels beat ones read from the text
           doc.labelsPdf = 1;
           pdf.getPageLabels().then((l) => { const c = cleanPdfLabels(l, pdf.numPages); if (c) doc.labels = c; store.updateDoc(stripMeta(doc)).catch(() => {}); }).catch(() => {});
@@ -763,10 +763,23 @@ async function sweep() {
 // On the iPhone, Apple's PDF engine draws the pages (straight from the library's files); pdf.js only reads
 // where the text is. A document without a file falls back to pdf.js.
 let libPathsP = null;
-async function pageDrawer(docId, n) {
+async function libPath(docId) {
   if (!libPathsP) libPathsP = store.paths().catch(() => new Map());
   let path = (await libPathsP).get(docId);
   if (!path) { libPathsP = store.paths().catch(() => new Map()); path = (await libPathsP).get(docId); }
+  return path || null;
+}
+// What pdf.js opens a PDF from: on the iPhone the library file itself, read in pieces as needed (never the
+// whole file in memory); elsewhere, or if that fails, the file's bytes.
+async function pdfSource(docId) {
+  if (nativePdf) {
+    const path = await libPath(docId);
+    if (path) try { return { range: await pdfRange(path) }; } catch {}
+  }
+  return store.file(docId);
+}
+async function pageDrawer(docId, n) {
+  const path = await libPath(docId);
   if (!path) return null;
   const draw = (w, r, q) => drawPage(path, n, w, r, q);
   draw.forget = forgetPages;
@@ -2369,15 +2382,30 @@ function notePlace() {
   placeT = setTimeout(() => {
     if (!H.ready) return;
     const a = captureAnchor();
-    const st = { t: Date.now(), q: prefs.q || '', view: active === reader ? 'reader' : 'results', doc: reader.docId,
+    const st = { t: Date.now(), up: Math.round(performance.now() / 1000), drawn: drawn.size, pdfs: openPdfIds().length, imgs: document.querySelectorAll('.pdf-page > img, .pdf-page > canvas').length, q: prefs.q || '', view: active === reader ? 'reader' : 'results', doc: reader.docId,
       at: a ? { d: a.art.dataset.doc, n: Number(a.art.dataset.n), r: a.ratio, y: a.y } : null, y: scrollY };
     try { localStorage.setItem(PLACE, JSON.stringify(st)); } catch {}
   }, 300);
 }
 addEventListener('scroll', notePlace, { passive: true });
+// Whether the app was stopped by iOS (it doesn't say): a flag set while the app is open and cleared when it
+// goes to the background or closes normally. Found still set at launch, the last session ended suddenly,
+// and a note says what was going on then (to tell David, and me, what to fix).
+const ALIVE = 'instant-search:alive';
+function markAlive(on) { try { on ? localStorage.setItem(ALIVE, '1') : localStorage.removeItem(ALIVE); } catch {} }
+document.addEventListener('visibilitychange', () => markAlive(!document.hidden));
+addEventListener('pagehide', () => markAlive(false));
+function checkSuddenStop(st) {
+  let was = false;
+  try { was = localStorage.getItem(ALIVE) === '1'; } catch {}
+  markAlive(true);
+  if (!was || !isNative || !st) return;
+  toast(`Findly was restarted by iOS ${st.up}s after opening (${st.drawn} pages drawn, ${st.imgs} page images, ${st.pdfs} PDFs open). Screenshot this for Claude.`, { ms: 12000 });
+}
 async function restorePlace() {
   let st = null;
   try { st = JSON.parse(localStorage.getItem(PLACE) || 'null'); } catch {}
+  checkSuddenStop(st);
   if (!st || Date.now() - st.t > 6 * 3600e3 || (st.q || '') !== (prefs.q || '')) return;
   const at = st.at;
   if (st.view === 'reader' && st.doc && docById(st.doc)) await openReader(st.doc, at?.d === st.doc ? at.n : 0);
@@ -6670,7 +6698,7 @@ function saveItems(art) {
 async function pageCanvas(art, section, width = 2000) {
   const doc = docById(art.dataset.doc);
   const n = Number(art.dataset.n);
-  const pdf = await getPdf(doc.id, () => store.file(doc.id));
+  const pdf = await getPdf(doc.id, () => pdfSource(doc.id));
   const page = await pdf.getPage(n + 1);
   const base = page.getViewport({ scale: 1 });
   let x = [0, 1], y = [0, 1];

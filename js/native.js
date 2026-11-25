@@ -151,3 +151,26 @@ export async function drawPage(path, n, width, r = [0, 1, 0, 1], quality = 0.82)
 }
 /** Page images no longer shown (their files are deleted). */
 export const forgetPages = (paths) => { if (paths.length) PdfDraw?.forget({ paths }).catch(() => {}); };
+
+/** A library PDF for pdf.js read in pieces, as it needs them (its pages, its index), instead of the whole file
+ *  being loaded into the page first: a long manual can be tens of megabytes, and results jump between several. */
+export async function pdfRange(path) {
+  const url = await fileUrl(path);
+  const get = async (a, b) => {
+    for (let k = 0; ; k++) {
+      try {
+        const r = await fetch(url, { headers: { Range: `bytes=${a}-${b}` } });
+        if (r.status === 206) return r;
+        throw new Error(`status ${r.status}`);
+      } catch (e) { if (k >= 2) throw e; await new Promise((res) => setTimeout(res, 150)); }
+    }
+  };
+  const head = await get(0, 65535);
+  const total = Number((head.headers.get('Content-Range') || '').split('/')[1]);
+  if (!(total > 0)) throw new Error('no size');
+  const t = new globalThis.pdfjsLib.PDFDataRangeTransport(total, new Uint8Array(await head.arrayBuffer()));
+  t.requestDataRange = (begin, end) => {
+    get(begin, end - 1).then((r) => r.arrayBuffer()).then((b) => t.onDataRange(begin, new Uint8Array(b))).catch(() => {});
+  };
+  return t;
+}
