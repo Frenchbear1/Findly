@@ -3711,7 +3711,7 @@ async function liveText(bytes, pages, meta) {
 // The library folder (On My iPhone › Instant Search): files added there are added to the library, files
 // changed there are read again, files deleted there leave the library. Runs at start and whenever the app comes back.
 let syncing = null;
-// Windows: the library folder on disk is organised like the library: each document's file sits in folders named
+// Windows and iPhone: the library folder on disk is organised like the library: each document's file sits in folders named
 // after its folder's tiers ("Manuals › FAA" → Manuals\FAA\), and moves when the document or its folder does.
 // (The folder scan works the other way, so the two agree.) It shares the scan's turn, so neither sees the other's
 // half-done work.
@@ -3719,7 +3719,7 @@ const diskSeg = (s) => s.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').replace(/[. 
 const folderDir = (fid) => { const f = fid && folderById(fid); return f ? f.name.split(/\s*›\s*/).filter(Boolean).map(diskSeg).join('/') : ''; };
 let organiseT = 0;
 function organiseSoon() {
-  if (platform !== 'windows' || !Files?.moveTo) return;
+  if ((platform !== 'windows' && platform !== 'ios') || !Files?.moveTo) return;
   clearTimeout(organiseT);
   organiseT = setTimeout(organiseDisk, 900);
 }
@@ -3727,16 +3727,20 @@ async function organiseDisk() {
   while (syncing) await syncing.catch(() => {});
   syncing = (async () => {
     const paths = await store.paths();
+    // a document being read stays put this time (its file is open); it moves on a later pass
+    const busy = new Set([...openPdfIds(), reader.docId].filter(Boolean));
+    let moved = false;
     for (const d of S.docs) {
       const p = !d.status && paths.get(d.id);
-      if (!p) continue;
+      if (!p || busy.has(d.id)) continue;
       const want = folderDir(d.folderId);
       if (p.split('/').slice(0, -1).join('/') === want) continue;
       try {
         const r = await Files.moveTo({ from: p, folder: want });
-        if (r?.path && r.path !== p) await store.setPath(d.id, r.path);
+        if (r?.path && r.path !== p) { await store.setPath(d.id, r.path); moved = true; }
       } catch {}
     }
+    if (moved) libPathsP = null; // where the reader opens files from
   })().finally(() => { syncing = null; });
   return syncing;
 }
@@ -5010,12 +5014,33 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
 
   const actionable = rows.filter((r) => r.kind);
   if (!actionable.length && !rows.length) {
+    pendingUpdates = null; showUpdatesBtn();
     libStatus.done(jobs.length || folders.length ? `Everything is up to date · ${plural(upToDate, 'document')} checked` : 'Nothing linked to check yet');
     return;
   }
-  if (quiet && !actionable.length && !failures) { libStatus.done(`Everything is up to date · ${plural(upToDate, 'document')} checked`); return; }
-  libStatus.hide();
+  if (quiet && !actionable.length && !failures) { pendingUpdates = null; showUpdatesBtn(); libStatus.done(`Everything is up to date · ${plural(upToDate, 'document')} checked`); return; }
   if (upToDate) rows.push({ header: 'Up to date' }, { info: true, title: plural(upToDate, 'document'), detail: 'No changes on the site.' });
+  // No popup: the results wait behind a button at the bottom of the library until they're wanted.
+  pendingUpdates = rows;
+  showUpdatesBtn();
+  libStatus.done(actionable.length ? `${plural(actionable.length, 'update')} found · see the button below` : 'Check finished · some couldn’t be checked');
+}
+
+let pendingUpdates = null;
+function showUpdatesBtn() {
+  const b = $('#updatesBtn');
+  const rows = pendingUpdates;
+  if (!rows) { b.classList.remove('on'); setTimeout(() => { if (!pendingUpdates) b.hidden = true; }, 260); return; }
+  const n = rows.filter((r) => r.kind).length;
+  b.querySelector('span').textContent = n ? `${plural(n, 'update')} found` : 'Check results';
+  b.classList.toggle('warn', !n);
+  b.hidden = false;
+  requestAnimationFrame(() => b.classList.add('on'));
+}
+async function openUpdates() {
+  const rows = pendingUpdates;
+  if (!rows) return;
+  const actionable = rows.filter((r) => r.kind);
   const res = await review({
     title: actionable.length ? 'Updates found' : 'Check finished',
     intro: actionable.length ? 'Ticked items will be applied. Anything that looks wrong is left unticked so you can decide.' : '',
@@ -5023,7 +5048,10 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
     options: rows.some((r) => r.kind === 'update') ? [{ id: 'keep', label: 'Keep the old versions too (as “(previous)”, left out of searches)' }] : [],
     apply: 'Apply',
   });
-  if (!res) return;
+  if (!actionable.length) { pendingUpdates = null; showUpdatesBtn(); return; } // nothing to apply: seen is enough
+  if (!res || pendingUpdates !== rows) return; // closed: the button stays for later
+  pendingUpdates = null;
+  showUpdatesBtn();
   let updated = 0;
   for (const r of rows) {
     if (r.kind === 'update' && res.picked.has(r)) { await replaceDoc(r.doc, r.payload, res.options.keep); updated++; }
@@ -5407,8 +5435,7 @@ async function openClear() {
 }
 
 // ---------- toasts ----------
-// One quiet status line at the top of the library (and a hairline at the top of the screen when the library is
-// out of view) for long jobs: update checks, imports, transfers. No popups piling up.
+// One quiet status line at the top of the library (never on the reading page) for long jobs: update checks, imports, transfers. No popups piling up.
 const libStatus = (() => {
   let hideT = 0;
   let line = null;
@@ -5423,7 +5450,6 @@ const libStatus = (() => {
     if (shown !== target) raf = requestAnimationFrame(glide);
   };
   const box = () => $('#libStatus');
-  const hair = () => line || (line = document.body.appendChild(el('div', 'top-progress', '<b></b>')));
   const paint = (text, frac) => {
     const b = box();
     clearTimeout(hideT);
@@ -5442,12 +5468,6 @@ const libStatus = (() => {
     } else { delete pct.dataset.on; pct.textContent = ''; shown = target = 0; }
     b.classList.toggle('busy', !known);
     b.querySelector('.ls-bar b').style.transform = known ? `scaleX(${f})` : '';
-    const r = b.getBoundingClientRect();
-    const seen = b.offsetParent && r.width > 0 && r.right > 4 && r.left < innerWidth - 4;
-    const h = hair();
-    h.classList.toggle('on', !seen);
-    h.classList.toggle('busy', !known);
-    h.firstChild.style.transform = known ? `scaleX(${f})` : '';
   };
   return {
     show: paint,
@@ -5776,6 +5796,7 @@ function bind() {
   $('#checkAllBtn').addEventListener('click', () => checkSources());
   $('#linkForm').addEventListener('submit', (e) => { e.preventDefault(); submitLink(); });
   $('#linkDlg').addEventListener('click', (e) => { if (e.target === e.currentTarget || e.target.closest('[data-close]')) $('#linkDlg').close(); });
+  $('#updatesBtn').addEventListener('click', openUpdates);
   $('#reviewIntro').addEventListener('click', (e) => {
     const b = e.target.closest('[data-copyhelper]');
     if (!b) return;

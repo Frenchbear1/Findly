@@ -1516,6 +1516,11 @@ dialog.helper-dlg::backdrop { background: rgba(10, 12, 20, 0.45); -webkit-backdr
 @keyframes ls-sweep { from { left: -30%; } to { left: 100%; } }
 .lib-status.ok .ls-bar b { background: #1f9d55; }
 /* when the library is out of view (phone), the same progress as a hairline at the top of the screen */
+.updates-btn { flex: none; display: flex; align-items: center; justify-content: center; gap: 8px; margin: 8px 0 0; padding: 10px 14px; border: 0; border-radius: 12px; background: var(--accent-soft); color: var(--accent); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; opacity: 0; transform: translateY(6px); transition: opacity 0.25s ease, transform 0.3s cubic-bezier(.25,.8,.3,1), background 0.15s; }
+.updates-btn.on { opacity: 1; transform: none; }
+.updates-btn:active { transform: scale(0.97); }
+.updates-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.updates-btn.warn { background: color-mix(in srgb, var(--ink-2) 10%, transparent); color: var(--ink-2); }
 .top-progress { position: fixed; z-index: 90; left: 0; right: 0; top: env(safe-area-inset-top); height: 2px; pointer-events: none; opacity: 0; transition: opacity 0.3s; }
 .top-progress.on { opacity: 1; }
 .top-progress b { position: absolute; inset: 0; background: var(--accent); transform-origin: left; transform: scaleX(0); transition: transform 0.45s cubic-bezier(.25,.8,.3,1); }

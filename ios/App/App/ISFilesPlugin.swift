@@ -17,6 +17,7 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "freeName", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "remove", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "rename", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "moveTo", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "takeIncoming", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "read", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stat", returnType: CAPPluginReturnPromise),
@@ -268,6 +269,30 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         run(call) {
             let dest = self.free(name, in: src.deletingLastPathComponent())
             try self.fm.moveItem(at: src, to: dest)
+            return ["path": self.rel(dest)]
+        }
+    }
+
+    /// Moves a file into a folder of the library (made if needed; "" is the top level), keeping its name unless
+    /// that's taken there. Folders the move leaves empty go too, never the library folder itself.
+    @objc func moveTo(_ call: CAPPluginCall) {
+        guard let from = call.getString("from"), let src = at(from) else { return call.reject("bad path") }
+        let folder = call.getString("folder") ?? ""
+        guard let dir = folder.isEmpty ? root : at(folder) else { return call.reject("bad folder") }
+        run(call) {
+            let top = self.root.standardizedFileURL.path
+            if src.deletingLastPathComponent().standardizedFileURL.path == dir.standardizedFileURL.path { return ["path": from] }
+            guard self.fm.fileExists(atPath: src.path) else { throw NSError(domain: "ISFiles", code: 2, userInfo: [NSLocalizedDescriptionKey: "not on this device yet"]) }
+            try self.fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            let dest = self.free(src.lastPathComponent, in: dir)
+            try self.fm.moveItem(at: src, to: dest)
+            var up = src.deletingLastPathComponent().standardizedFileURL
+            while up.path != top && up.path.hasPrefix(top + "/") {
+                let left = (try? self.fm.contentsOfDirectory(atPath: up.path))?.filter { $0 != ".DS_Store" } ?? ["?"]
+                if !left.isEmpty { break }
+                try? self.fm.removeItem(at: up)
+                up = up.deletingLastPathComponent().standardizedFileURL
+            }
             return ["path": self.rel(dest)]
         }
     }
