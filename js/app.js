@@ -7222,7 +7222,40 @@ async function openSearchLink() {
 }
 
 // ---------- start ----------
+// ---------- the website on an iPhone that has the app: hand over to the app ----------
+// Links tapped elsewhere (Notes, Notion, Messages) already open the app by themselves (Universal Links), but a page
+// typed or opened in Safari stays in Safari. There, a small "Open in the app" button hands the page (and any search in
+// its address) to the app through findly://. Once that has worked, later visits hand over straight away; Safari asks
+// before opening the app. If the app is gone, the next try notices and the button comes back.
+function offerApp() {
+  const iOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+  if (isNative || platform !== 'web' || !iOS || navigator.standalone) return;
+  const HAS = 'findly:hasApp', NO = 'findly:noAppOffer', TRIED = 'findly:handed';
+  const get = (k, st = localStorage) => { try { return st.getItem(k); } catch { return null; } };
+  const set = (k, v, st = localStorage) => { try { v == null ? st.removeItem(k) : st.setItem(k, v); } catch {} };
+  const target = 'findly://open' + (location.hash || '');
+  let pill = null;
+  const tryApp = () => {
+    let left = false;
+    const away = () => { if (document.hidden) { left = true; set(HAS, '1'); pill?.remove(); } };
+    document.addEventListener('visibilitychange', away);
+    setTimeout(() => { document.removeEventListener('visibilitychange', away); if (!left) { set(HAS, null); show(); } }, 15000);
+    location.href = target;
+  };
+  const show = () => {
+    if (pill || get(NO)) return;
+    pill = el('div', 'app-offer', '<button class="ao-go"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>Open in the Findly app</button><button class="ao-x" aria-label="Don’t offer again"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>');
+    document.body.append(pill);
+    requestAnimationFrame(() => requestAnimationFrame(() => pill?.classList.add('on')));
+    pill.querySelector('.ao-go').onclick = tryApp;
+    pill.querySelector('.ao-x').onclick = () => { set(NO, '1'); pill.classList.remove('on'); setTimeout(() => { pill?.remove(); pill = null; }, 300); };
+  };
+  if (get(HAS) && !get(TRIED, sessionStorage)) { set(TRIED, '1', sessionStorage); tryApp(); }
+  else show();
+}
+
 async function start() {
+  offerApp();
   applyTheme();
   $('#modes').innerHTML = Object.entries(MODES)
     .map(([k, m], i) => `<button data-mode="${k}" title="${m.hint} (Alt+${i + 1})">${m.label}</button>`)

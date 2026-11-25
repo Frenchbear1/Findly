@@ -3,7 +3,7 @@
     "details": [
       {
         "appIDs": ["__APPLE_TEAM_ID__.com.davidlabarre.instantsearch"],
-        "components": [{ "/": "/*", "#": "find?*", "comment": "links to a search open in the iPhone app" }]
+        "components": [{ "/": "/*", "comment": "any link to the website opens the iPhone app when it is installed" }]
       }
     ]
   }

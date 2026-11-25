@@ -21,6 +21,7 @@ public class ISLinkPlugin: CAPPlugin, CAPBridgedPlugin {
         ISLinkPlugin.current = self
         NotificationCenter.default.addObserver(self, selector: #selector(activity(_:)), name: .capacitorContinueActivity, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(universal(_:)), name: .capacitorOpenUniversalLink, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(scheme(_:)), name: .capacitorOpenURL, object: nil)
     }
 
     /// Something asked the app to open: a Spotlight result or a Shortcut.
@@ -43,6 +44,12 @@ public class ISLinkPlugin: CAPPlugin, CAPBridgedPlugin {
     /// A link to a search (https://instant-search-virid.vercel.app/#find?…) tapped somewhere: open it here.
     @objc private func universal(_ note: Notification) {
         guard let info = note.object as? [String: Any], let url = info["url"] as? URL else { return }
+        ISLinkPlugin.deliver(["url": url.absoluteString])
+    }
+
+    /// findly://open#find?… : the website handing a page over to the app (Safari asks first).
+    @objc private func scheme(_ note: Notification) {
+        guard let info = note.object as? [String: Any], let url = info["url"] as? URL, url.scheme?.lowercased() == "findly" else { return }
         ISLinkPlugin.deliver(["url": url.absoluteString])
     }
 

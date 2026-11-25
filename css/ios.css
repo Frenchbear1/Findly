@@ -95,7 +95,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   .lib-zone { margin: -4px -4px 0; padding: 2px 0 24px; }
   .lib { border-radius: 14px; background: var(--card); box-shadow: 0 0 0 0.5px var(--sep); overflow: hidden; }
   .lib:empty { display: none; }
-  .lib > li + li, .folder-docs > li + li { box-shadow: 0 -0.5px 0 var(--sep); }
+  .lib > li + li { box-shadow: 0 -0.5px 0 var(--sep); }
   .lib-item { min-height: 56px; padding: 4px 6px 4px 6px; border-radius: 0; }
   .lib-item:active { background: var(--fill); }
   .lname { font-size: 15px; font-weight: 600; }
@@ -112,7 +112,6 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
     background: color-mix(in srgb, var(--accent) 30%, var(--line-2));
   }
   .folder-docs > li > .lib-item, .folder-docs > .lib-item { padding-left: 34px; }
-  .folder-docs > li + li, .folder-docs > .lib-item + .lib-item { box-shadow: -2px -0.5px 0 -0.5px var(--sep), 0 -0.5px 0 var(--sep); }
   .folder-docs .folder-empty { padding-left: 62px; }
   .folder-docs::before { display: none; }
   /* round iOS-style checkmarks */
@@ -402,4 +401,16 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
 @media (max-width: 900px) {
   .mbar.swiping > :not(.swipe-hint), .mbar.swiping > :not(.swipe-hint):active { transform: translateX(var(--swx, 0px)) !important; }
   .mbar.swiping > :active, .mbar.swiping .m-mode:active, .mbar.swiping .m-undo:active, .mbar.swiping .m-count:active { background: transparent !important; }
+}
+
+/* The top of the screen reads as one sheet of glass: the status-bar strip frosts the top inset, the bar frosts
+   from just below it (frosting the same strip twice made it darker, with a seam), no hairline under the bar, and
+   the document header that sticks beneath it uses the bar's own tint. */
+@media (max-width: 900px) {
+  .topbar, body.compact .topbar { background: none !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; border-bottom: 0 !important; }
+  .topbar::before {
+    content: ""; position: absolute; z-index: -1; left: 0; right: 0; bottom: 0; top: env(safe-area-inset-top); pointer-events: none;
+    background: color-mix(in srgb, var(--bg) var(--a-top, 72%), transparent); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  }
+  .doc-head { background: color-mix(in srgb, var(--bg) var(--a-top, 72%), transparent) !important; box-shadow: none; border: 0; }
 }
