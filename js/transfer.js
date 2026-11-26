@@ -255,10 +255,21 @@ function panel(kind) {
       t.finished = true;
       keepAwake(false);
       d.querySelector('.xf-foot').hidden = true;
+      d.querySelector('[data-cancel]').hidden = true; // nothing left to stop: only the close button stays
       if (ok) { ring(1); setPhase('done'); } else if (phase) setPhase('error');
       setInfo(html);
-      if (pillText && !d.open) { pill.classList.remove('paused'); pill.classList.add('done'); pill.querySelector('span').textContent = pillText; pill.onclick = onTap || (() => t.show()); }
+      const toPill = () => { pill.hidden = false; pill.classList.remove('paused'); pill.classList.add('done'); pill.querySelector('span').textContent = pillText; pill.onclick = onTap || (() => t.show()); };
+      if (pillText && !d.open) toPill();
       else pill.hidden = true;
+      if (ok) {
+        // done: let the tick play, then tidy away this sheet and whatever it was opened from (Settings)
+        setTimeout(() => {
+          if (!t.finished || current !== t) return;
+          for (const o of document.querySelectorAll('dialog[open]')) if (o !== d) { try { o.close(); } catch {} }
+          if (onTap) { if (d.open) d.close(); toPill(); return; } // still something to tap (load the library)
+          t.destroy();
+        }, 2200);
+      }
     },
     destroy() { t.active = false; clearTimeout(flowT); keepAwake(false); if (d.open) d.close(); d.remove(); pill.remove(); if (current === t) current = null; },
   };
@@ -362,7 +373,7 @@ export async function receive({ reload }) {
         } else if (msg.t === 'size') {
           expect = msg.size;
           sink = await makeSink();
-          label = msg.sending ? `Receiving ${msg.sending} new or changed document${msg.sending === 1 ? '' : 's'}` : 'Bringing boards and folders up to date';
+          label = msg.sending ? `Receiving ${msg.sending} new or changed document${msg.sending === 1 ? '' : 's'}` : 'Bringing names, folders and boards up to date';
           keepAwake(true);
           t.status(label, 0, expect);
           c.send(JSON.stringify({ t: 'ready' }));

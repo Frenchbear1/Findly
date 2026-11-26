@@ -174,8 +174,8 @@ body.moving-doc .lib-item:hover { background: transparent; }
 .fcount { flex: none; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 2px; }
 .folder.off .fname, .folder.off .ficon { opacity: 0.5; }
 .frename { min-width: 0; flex: 1; height: 26px; margin-left: 3px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); font-weight: 600; font-size: 13.5px; outline: 0; box-shadow: 0 0 0 3px var(--accent-soft); }
-.folder-row:hover .lib-acts, .folder-row:focus-within .lib-acts { opacity: 1; pointer-events: auto; }
-.folder-row:hover .lhits, .folder-row:focus-within .lhits { opacity: 0; }
+.folder-row:hover .lib-acts, .folder-row:has(:focus-visible) .lib-acts { opacity: 1; pointer-events: auto; }
+.folder-row:hover .lhits, .folder-row:has(:focus-visible) .lhits { opacity: 0; pointer-events: none; }
 .folder-docs { position: relative; margin-left: 18px !important; padding-left: 4px !important; }
 .folder-docs::before { content: ""; position: absolute; left: 4px; top: 2px; bottom: 6px; border-left: 1px solid var(--line-2); }
 .folder.collapsed .folder-docs { display: none; }
@@ -221,10 +221,12 @@ body.moving-doc .lib-item:hover { background: transparent; }
 }
 /* the fade into the row is decoration only: it never catches the mouse */
 .lib-acts::before { content: ""; position: absolute; right: 100%; top: 0; bottom: 0; width: 22px; background: linear-gradient(to right, transparent, var(--row-hover)); pointer-events: none; }
-.lib-acts .mini { width: 28px; }
+.lib-acts .mini { width: 28px; background: transparent; }
+.lib-acts .mini:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
+/* (a click leaves the button focused: the buttons still go away once the mouse leaves; only keyboard focus keeps them) */
 :root { --row-hover: color-mix(in srgb, var(--panel) 91%, #7f786e); }
-.lib-item:hover .lib-acts, .lib-item:focus-within .lib-acts { opacity: 1; pointer-events: auto; }
-.lib-item:hover .lhits, .lib-item:focus-within .lhits { opacity: 0; }
+.lib-item:hover .lib-acts, .lib-item:has(:focus-visible) .lib-acts { opacity: 1; pointer-events: auto; }
+.lib-item:hover .lhits, .lib-item:has(:focus-visible) .lhits { opacity: 0; pointer-events: none; }
 .mini { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: var(--muted); background: var(--panel); }
 .mini:hover { color: var(--ink); background: var(--card); box-shadow: var(--shadow-sm); }
 .mini svg { width: 14px; height: 14px; }
@@ -598,7 +600,7 @@ html:not(.paper) .gap-tab, html:not(.paper) .gap-tab::before, html:not(.paper) .
 .outline {
   position: sticky; top: calc(var(--top-h) + 14px); align-self: start;
   max-height: calc(100vh - var(--top-h) - 28px); overflow-y: auto; padding: 8px 2px 12px;
-  scrollbar-width: thin;
+
 }
 .ol-title { font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); padding: 4px 4px 10px; }
 .ol-group { margin-bottom: 16px; }
@@ -859,8 +861,19 @@ dialog[open] { animation: dlg 0.2s ease-out; }
 .rrow.info { cursor: default; padding-left: 36px; }
 .rtext { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .rtext b { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
-.rtext span { font-size: 12.5px; color: var(--muted); }
-.rrow.warn .rtext span { color: var(--danger); }
+.rtext > span:not(.ract) { font-size: 12.5px; color: var(--muted); }
+.rrow.warn .rtext > span:not(.ract) { color: var(--danger); }
+/* a broken link's fixes, right in its row: Unlink, or find a new link with AI (copy, paste the answer, check) */
+.ract { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ract.ai { flex-direction: column; align-items: stretch; gap: 6px; }
+.ract-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.ract-hint { font-size: 12px; color: var(--muted); }
+.ract textarea { width: 100%; box-sizing: border-box; min-height: 64px; padding: 8px 30px 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; resize: vertical; }
+.ract-paste, .ai-paste { position: relative; display: block; }
+.paste-clear { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--ink) 14%, transparent); color: var(--ink-2); cursor: pointer; }
+.paste-clear svg { width: 12px; height: 12px; stroke-width: 2.6; }
+.paste-clear:hover { background: color-mix(in srgb, var(--ink) 24%, transparent); }
+.paste-clear[hidden] { display: none; }
 .rrow.up .rtext span em { color: #2f9e44; font-style: normal; font-weight: 600; }
 .review-opts { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .review-opts:empty { display: none; }
@@ -926,7 +939,7 @@ dialog[open] { animation: dlg 0.2s ease-out; }
   .ol-p { min-width: 38px; height: 32px; font-size: 13px; }
   .ol-row { padding: 8px 6px; font-size: 13px; }
 }
-#outlineList { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+#outlineList { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .ol-sort { flex: 1 1 auto; }
 .ol-sort select { width: 100%; min-width: 0; }
 
@@ -1567,6 +1580,8 @@ button.set-row:active { background: color-mix(in srgb, var(--accent) 12%, transp
 .set-sw i { position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform 0.22s cubic-bezier(.3,.9,.3,1.15); }
 .set-sw.on { background: #34c759; }
 .set-sw.on i { transform: translateX(18px); }
+/* bigger screens (Windows, a laptop browser): a wider sheet so the descriptions don't wrap so much */
+@media (min-width: 1000px) and (min-height: 600px) { #linkDlg, #reviewDlg { max-width: min(660px, calc(100vw - 48px)); } dialog.set-dlg { width: min(640px, calc(100vw - 48px)); max-width: none; max-height: min(820px, calc(100dvh - 48px)); } }
 @keyframes set-pop { from { opacity: 0; transform: translateY(10px) scale(0.98); } }
 @keyframes set-out { to { opacity: 0; transform: translateY(8px) scale(0.98); } }
 @keyframes set-fade { from { opacity: 0; } }
@@ -1751,7 +1766,9 @@ html, body { overflow-anchor: none; }
 .app-offer svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
 /* while a popup is up the page behind stays put (see watchPopups); popups don't hand their scrolling on to it */
-dialog, .pop-menu, #themeBar, .sidebar, .outline, dialog *, .pop-menu *, #themeBar *, .sidebar *, .outline * { overscroll-behavior: contain; }
+/* (only on the popups themselves: on every element inside them it stopped the mouse wheel from scrolling the
+   popup's own list in Chromium, so Windows only scrolled with the pointer over the dimmed background) */
+dialog, .pop-menu, #themeBar, .sidebar, .outline { overscroll-behavior: contain; }
 @media (pointer: coarse) { html.scroll-lock { overflow: hidden; } } /* the root only: hiding the body's overflow too would make it a scroller of its own, and the sticky bars and headers would jump */
 /* no double-tap zoom anywhere (pinching still zooms); touch-action narrows down the tree, so this covers everything */
 html { touch-action: manipulation; }
@@ -1924,3 +1941,17 @@ html.pan-lock, html.pan-lock body { overscroll-behavior: none; }
 }
 .xf-run .xf-sub { margin-top: 2px; }
 .xfer .xf-body { gap: 12px; padding-bottom: 26px; }
+
+/* mouse-and-keyboard screens (Windows especially): slim rounded scroll bars that match the app instead of the
+   system's wide grey ones */
+@media (pointer: fine) {
+  ::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--ink) 22%, transparent) padding-box; min-height: 36px; }
+  ::-webkit-scrollbar-thumb:hover { border-width: 2px; background-color: color-mix(in srgb, var(--ink) 38%, transparent); }
+  ::-webkit-scrollbar-thumb:active { background-color: color-mix(in srgb, var(--accent) 70%, transparent); }
+  ::-webkit-scrollbar-corner, ::-webkit-scrollbar-button { display: none; background: transparent; }
+}
+@supports not selector(::-webkit-scrollbar) { @media (pointer: fine) { * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--ink) 25%, transparent) transparent; } } }
+.ai-paste #aiAnswer { padding-right: 34px; box-sizing: border-box; }
+.ai-paste .paste-clear { top: 13px; right: 8px; }

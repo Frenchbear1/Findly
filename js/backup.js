@@ -101,6 +101,16 @@ export function alreadyHere(have) {
   };
 }
 const DOC_STORES = new Set(['docs', 'texts', 'files']);
+// what a document already on both devices takes from the other one when they're matched by contents, not id
+const META = ['name', 'names', 'nameAs', 'folderId', 'source', 'enabled'];
+const WATCHED = 'instant-search:watched', PREFS = 'instant-search:prefs';
+async function localDocs() {
+  if (!(await exists('instant-search'))) return [];
+  const db = await openDb('instant-search');
+  const out = [];
+  try { if (db.objectStoreNames.contains('docs')) await eachOf(db, 'docs', (d) => out.push(d)); } finally { db.close(); }
+  return out;
+}
 // On the iPhone page text lives in its own database, not here: the app hands over how to read it.
 let textSource = null; // { ids(): [doc id], pages(id): Promise<[text]> }
 export const setTextSource = (src) => { textSource = src; };
@@ -123,7 +133,9 @@ export async function backupStream({ have = null } = {}) {
     } else if (name === 'instant-search' && db.objectStoreNames.contains('docs')) await eachOf(db, 'docs', () => sending++);
     for (const s of db.objectStoreNames) {
       const rows = [];
-      const skipped = (row) => name === 'instant-search' && DOC_STORES.has(s) && skip.has(row.id);
+      // a document the other device already has still sends its details (names, folder, link, …) — just not its
+      // file or its text again
+      const skipped = (row) => name === 'instant-search' && DOC_STORES.has(s) && s !== 'docs' && skip.has(row.id);
       // in the iPhone app the documents themselves are files in the library folder: they're read when they're sent
       if (isNative && s === 'files') {
         const recs = [];
@@ -240,12 +252,16 @@ export async function readBackup(file) {
   };
   const ROW = 2048; // a little for every row, so many small rows still move the bar
   const total = Object.values(header.dbs).reduce((t, d) => t + Object.values(d.stores).reduce((u, rows) => u + rows.reduce((w, r) => w + ROW + weigh(r), 0), 0), 0) || 1;
-  let done = 0;
+  let done = 0, metaChanged = 0;
   // merge: add what's new and update what changed, keep everything else here (and this device's settings)
   async function restore(onProgress, { merge = false } = {}) {
     const here = merge ? alreadyHere(await inventory()) : null;
     const skip = new Set();
     if (merge) for (const d of await unpack(lib.docs || [], bins)) if (here(d)) skip.add(d.id);
+    // the documents already here, so their details can be brought up to date without touching their files
+    const mine = merge ? await localDocs() : [];
+    const mineById = new Map(mine.map((d) => [d.id, d]));
+    const twin = (d) => mineById.get(d.id) || mine.find((m) => (d.hash && m.hash === d.hash) || (m.name === d.name && (m.size || 0) === (d.size || 0)));
     for (const [name, { version, stores }] of Object.entries(header.dbs)) {
       // open at the backup's version so missing stores get made (same app, same versions); a newer app here
       // already has a higher version, so then just open it as it is
@@ -283,6 +299,16 @@ export async function readBackup(file) {
           const docRow = name === 'instant-search' && DOC_STORES.has(s);
           const w = ROW + weigh(rows[i]);
           const step = () => { done += w; onProgress?.(Math.min(done, total), total); };
+          if (merge && docRow && s === 'docs' && rows[i].id != null && skip.has(rows[i].id)) {
+            // already here: take the other device's details for it (its names, folder, link, how it's shown)
+            const d = await unpack(rows[i], bins);
+            const m = twin(d);
+            if (m) {
+              const upd = m.id === d.id ? { ...m, ...d } : { ...m, ...Object.fromEntries(META.filter((k) => k in d).map((k) => [k, d[k]])) };
+              if (JSON.stringify(upd) !== JSON.stringify(m)) { batch.push(upd); metaChanged++; }
+            }
+            step(); continue;
+          }
           if (merge && docRow && rows[i].id != null && skip.has(rows[i].id)) { step(); continue; }
           const readShare = isNative && s === 'files' ? 0.45 : 0.9; // in the app, writing the file is the other half
           count.part = (f) => onProgress?.(Math.min(done + w * readShare * f, total), total);
@@ -307,16 +333,31 @@ export async function readBackup(file) {
       }
       db.close();
     }
-    if (merge) return; // this device keeps its own settings
+    if (merge) { // this device keeps its own look and settings; the library's own bits still come across
+      const theirs = header.localStorage || {};
+      try { // pages being watched for new documents
+        const a = JSON.parse(localStorage.getItem(WATCHED) || '[]'), b = JSON.parse(theirs[WATCHED] || '[]');
+        const urls = new Set(a.map((w) => w.url));
+        const all = [...a.map((w) => b.find((x) => x.url === w.url) ? { ...w, ...b.find((x) => x.url === w.url) } : w), ...b.filter((w) => !urls.has(w.url))];
+        if (b.length) localStorage.setItem(WATCHED, JSON.stringify(all));
+      } catch {}
+      try { // how document names are shown
+        const tp = JSON.parse(theirs[PREFS] || 'null');
+        if (tp && tp.nameAs) { const mp = JSON.parse(localStorage.getItem(PREFS) || '{}'); mp.nameAs = tp.nameAs; localStorage.setItem(PREFS, JSON.stringify(mp)); }
+      } catch {}
+      return;
+    }
     const old = [];
     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(LS_PREFIX)) old.push(k); }
     old.forEach((k) => localStorage.removeItem(k));
     for (const [k, v] of Object.entries(header.localStorage || {})) localStorage.setItem(k, v);
   }
+  /** How many documents already here had their details changed by the last merge. */
+  const metaCount = () => metaChanged;
   /** How many of the backup's documents are new or changed here. */
   async function fresh() {
     const here = alreadyHere(await inventory());
     return (await unpack(lib.docs || [], bins)).filter((d) => !here(d)).length;
   }
-  return { summary, restore, fresh };
+  return { summary, restore, fresh, metaCount };
 }

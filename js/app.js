@@ -749,6 +749,7 @@ function fill(art) {
         r.show();
         art._cleanup = r.cleanup;
         art._edge = pageEdge(body);
+        noteEdge(art);
         swapped();
         keepBudget(art);
         const fr = body.querySelector('.pdf-page');
@@ -812,12 +813,23 @@ function pageEdge(body) {
     return { e: hx(rgb), d: hx(hr.map((v) => v * 255)) };
   } catch { return null; }
 }
+// Every tab of a document is painted the same: the paper colour of the first of its pages drawn (white
+// until then), so the tab above a page and the one below it never differ.
+const docEdge = new Map();
+function noteEdge(art) {
+  const id = art.dataset.doc;
+  if (!art._edge || docEdge.has(id)) return;
+  docEdge.set(id, art._edge);
+  for (const g of document.querySelectorAll(`.page[data-doc="${CSS.escape(id)}"] + .gap, .gap + .page[data-doc="${CSS.escape(id)}"]`)) {
+    if (g.classList.contains('gap')) paintGap(g); else tabsBeside(g);
+  }
+}
 function paintTab(tab, art) {
   if (!tab) return;
-  const pdf = !!art?.querySelector('.pdf-frame:not(.clone)');
+  const pdf = !!art && docById(art.dataset.doc)?.kind === 'pdf';
   tab.classList.toggle('pdf', pdf);
   tab.classList.toggle('extra', !pdf && !!art?.classList.contains('extra'));
-  const e = pdf ? art._edge : null;
+  const e = pdf ? docEdge.get(art.dataset.doc) || { e: '#ffffff', d: '#0a0a0a' } : null;
   if (e) { tab.style.setProperty('--e', e.e); tab.style.setProperty('--ed', e.d); }
   else { tab.style.removeProperty('--e'); tab.style.removeProperty('--ed'); }
 }
@@ -2630,6 +2642,8 @@ function topOffset() {
   return ($('.topbar')?.offsetHeight || 0) + 8;
 }
 const isPhone = () => matchMedia('(max-width: 900px)').matches;
+// a phone or tablet: the swipe settings only show there (the Windows app and mouse-driven browsers don't have them)
+const touchScreen = () => platform !== 'windows' && matchMedia('(pointer: coarse)').matches;
 
 // While the app scrolls by itself (jumping to a hit or page) the phone's top bar holds still, so the
 // spot it aims for doesn't move under the bar halfway through.
@@ -4316,7 +4330,7 @@ function compareVersions(doc, pages, size) {
 }
 
 // ---------- review dialog ----------
-function review({ title, intro = '', rows, options = [], apply = 'Apply', cancel = 'Cancel', danger = false, alwaysApply = false }) {
+function review({ title, intro = '', rows, options = [], apply = 'Apply', cancel = 'Cancel', danger = false, alwaysApply = false, onAction = null }) {
   return new Promise((resolve) => {
     const dlg = $('#reviewDlg');
     $('#reviewTitle').textContent = title;
@@ -4333,8 +4347,9 @@ function review({ title, intro = '', rows, options = [], apply = 'Apply', cancel
         inGroup = true;
         return `${close}<h4>${esc(r.header)}${bulk}</h4><div class="rgroup">`;
       }
-      const body = `<span class="rtext"><b>${esc(r.title)}</b><span>${r.detail || ''}</span></span>`;
-      if (r.info) return `<div class="rrow info ${r.tone || ''}">${body}</div>`;
+      const acts = r.actions?.length ? `<span class="ract">${r.actions.map(([a, l]) => `<button type="button" class="btn sm" data-ra="${i}:${a}">${esc(l)}</button>`).join('')}</span>` : '';
+      const body = `<span class="rtext"><b>${esc(r.title)}</b><span>${r.detail || ''}</span>${acts}</span>`;
+      if (r.info) return `<div class="rrow info ${r.tone || ''}" data-ri="${i}">${body}</div>`;
       return `<label class="rrow ${r.tone || ''}"><input type="checkbox" data-i="${i}" ${r.checked ? 'checked' : ''}>${body}</label>`;
     }).join('') + (inGroup ? '</div>' : '');
     $('#reviewOpts').innerHTML = options.map((o) => o.choices
@@ -4375,6 +4390,13 @@ function review({ title, intro = '', rows, options = [], apply = 'Apply', cancel
       count();
     };
     $('#reviewList').onclick = (e) => {
+      const ra = e.target.closest('[data-ra]');
+      if (ra && onAction) {
+        e.preventDefault();
+        const [i, a] = ra.dataset.ra.split(':');
+        onAction(rows[Number(i)], a, ra.closest('.rrow'), { close: () => finish(false) });
+        return;
+      }
       const b = e.target.closest('[data-sec]');
       if (!b) return;
       e.preventDefault();
@@ -4600,9 +4622,16 @@ function fillAiBox() {
   $('#aiBot').innerHTML = Object.entries(AI_BOTS).map(([k, b]) => `<option value="${k}">${b.label}</option>`).join('');
   $('#aiBot').value = AI_BOTS[prefs.aiBot] ? prefs.aiBot : 'chatgpt';
   $('#aiState').textContent = all.length ? `${plural(all.length, 'file')} not linked` : '';
-  $('#aiAfter').hidden = !$('#aiAnswer').value.trim();
+  // a fresh start each time it's opened: no old answer, and the answer box waits for Copy again (unless an
+  // answer was kept on purpose for the download helper to retry)
+  if (!keepAiAnswer) { $('#aiAnswer').value = ''; $('#aiAfter').hidden = true; }
+  else $('#aiAfter').hidden = !$('#aiAnswer').value.trim();
+  keepAiAnswer = false;
+  syncAiClear();
   setAiStatus('');
 }
+let keepAiAnswer = false;
+const syncAiClear = () => { const b = $('#aiClear'); if (b) b.hidden = !$('#aiAnswer').value; };
 // the place for the AI's answer shows once there's something to answer (after Copy), or an answer is already in it
 function showAiAfter() {
   const a = $('#aiAfter');
@@ -4961,8 +4990,10 @@ function helperFixHtml(hosts, picks) {
     <li>Come back and press <b>Try again</b>${picks ? ' in Find documents with AI' : ''}.</li></ol>
     <em>Your key is saved in the helper address. To use the helper on another device, open <b>Download helper › Manage</b> in the web link window and copy the address.</em></span>`;
 }
-async function linkWithAi() {
-  const items = parseAiAnswer($('#aiAnswer').value);
+// relink: documents that are linked already but whose link stopped working (from the updates popup): they take
+// the AI's new link in place of the old one
+async function linkWithAi({ answer = null, relink = null } = {}) {
+  const items = parseAiAnswer(answer ?? $('#aiAnswer').value);
   if (!items.length) {
     setAiStatus('Couldn’t find any answer lines in that. Paste the AI’s whole code block — lines look like <i>name | PAGE: … | FILE: …</i>', true);
     return;
@@ -5004,7 +5035,7 @@ async function linkWithAi() {
       continue;
     }
     used.add(d);
-    if (d.source) { groups.already.push({ info: true, title: d.name, detail: `Already linked to ${esc(d.source.page || d.source.url)}` }); continue; }
+    if (d.source && !relink?.has(d.id)) { groups.already.push({ info: true, title: d.name, detail: `Already linked to ${esc(d.source.page || d.source.url)}` }); continue; }
     if (!it.page && !it.file) { groups.unsure.push({ info: true, title: d.name, detail: 'The AI couldn’t find a reliable source, so it’s left as is.' }); continue; }
     jobs.push({ d, ...it });
   }
@@ -5205,7 +5236,7 @@ async function linkWithAi() {
     alwaysApply: !picks && groups.blocked.length > 0,
     apply: !picks ? (groups.blocked.length ? 'Try again' : 'OK') : groups.fresh.length && !linking ? 'Add' : linking && !groups.fresh.length ? 'Link' : 'Add and link',
   });
-  if (res && !picks && groups.blocked.length) { setTimeout(() => linkWithAi(), 50); return; }
+  if (res && !picks && groups.blocked.length) { setTimeout(() => linkWithAi({ answer, relink }), 50); return; }
   if (!res || !picks) return;
   const freshPicked = rows.filter((r) => r.kind === 'ainew' && res.picked.has(r));
   let destId = null;
@@ -5238,6 +5269,7 @@ async function linkWithAi() {
   }
   await store.updateDocs(picked.map((r) => stripMeta(r.doc))).catch(() => {});
   renderLibrary();
+  if (groups.blocked.length) keepAiAnswer = true;
   if (groups.blocked.length) toast(`${plural(groups.blocked.length, 'document')} still waiting on your download helper. After updating it, open Find documents with AI and press Check & add again — your answer is still there.`, { ms: 9000 });
   toast([freshPicked.length && `Adding ${plural(freshPicked.length, 'document')}`, picked.length && `linked ${plural(picked.length, 'file')}`].filter(Boolean).join(' · ').replace(/^l/, 'L') + '. Press ↻ next to Library any time to check for updates.', { ms: 6000 });
 }
@@ -5379,7 +5411,9 @@ async function checkSources({ docIds = null, folderIds = null, quiet = false } =
         });
       } catch (err) {
         failures++;
-        add('Couldn’t check', { info: true, tone: 'warn', title: d.name, detail: esc(helperProblem(err)) });
+        // a broken link: the popup offers to unlink it or have an AI find where it went
+        const why = helperProblem(err);
+        add('Couldn’t check', { info: true, tone: 'warn', title: d.name, detail: esc(why), doc: d, actions: [...(/download helper/i.test(why) ? [['helper', helper.get() ? 'Update the download helper' : 'Set up the download helper']] : []), ['unlink', 'Unlink'], ['ai', 'Find a new link with AI']] });
       }
     }
     // sizes for newly listed documents
@@ -5420,13 +5454,17 @@ function showUpdatesBtn() {
   const b = $('#updatesBtn');
   const rows = pendingUpdates;
   if (!rows) { b.classList.remove('on'); setTimeout(() => { if (!pendingUpdates) b.hidden = true; }, 260); return; }
-  const n = rows.filter((r) => r.kind).length;
+  const n = rows.filter((r) => r.kind && !r.gone).length;
   b.querySelector('span').textContent = n ? `${plural(n, 'update')} found` : 'Check results';
   b.classList.toggle('warn', !n);
   b.hidden = false;
   requestAnimationFrame(() => b.classList.add('on'));
 }
 async function openUpdates() {
+  if (pendingUpdates?.some((r) => r.gone)) { // drop what was dealt with last time, and any heading left empty
+    const left = pendingUpdates.filter((r) => !r.gone);
+    pendingUpdates = left.filter((r, i) => !r.header || (left[i + 1] && !left[i + 1].header));
+  }
   const rows = pendingUpdates;
   if (!rows) return;
   const actionable = rows.filter((r) => r.kind);
@@ -5436,6 +5474,7 @@ async function openUpdates() {
     rows,
     options: rows.some((r) => r.kind === 'update') ? [{ id: 'keep', label: 'Keep the old versions too (as “(previous)”, left out of searches)' }] : [],
     apply: 'Apply',
+    onAction: (r, a, rowEl, { close }) => fixBrokenLink(r, a, rowEl, close),
   });
   if (!actionable.length) { pendingUpdates = null; showUpdatesBtn(); return; } // nothing to apply: seen is enough
   if (!res || pendingUpdates !== rows) return; // closed: the button stays for later
@@ -5455,6 +5494,63 @@ async function openUpdates() {
   updateStorage();
   const added = rows.filter((r) => r.kind === 'new' && res.picked.has(r)).length;
   if (updated || added) libStatus.done([updated && `Updated ${plural(updated, 'document')}`, added && `adding ${plural(added, 'new document')}`].filter(Boolean).join(' · '), 3500);
+}
+
+// A document whose link stopped working, from the updates popup: unlink it there and then, or have an AI find
+// where it went — copy the request, paste the answer back into the same row, and it's checked and linked.
+function fixBrokenLink(r, a, rowEl, close) {
+  const d = r.doc;
+  if (!d) return;
+  const forget = () => { // this row is dealt with: it won't come back next time the results are opened
+    r.gone = true; // (left in place: the open popup still counts its rows by position)
+    if (pendingUpdates && !pendingUpdates.some((x) => !x.header && !x.gone)) pendingUpdates = null;
+    showUpdatesBtn();
+  };
+  if (a === 'helper') { close(); setTimeout(() => openHelper(), 60); return; } // the link is fine; the site needs the helper
+  if (a === 'unlink') {
+    delete d.source;
+    store.updateDoc(stripMeta(d)).catch(() => {});
+    renderLibrary();
+    forget();
+    rowEl.classList.remove('warn');
+    rowEl.querySelector('.rtext > span').textContent = 'Unlinked. Your copy stays; it just isn’t checked for updates any more.';
+    rowEl.querySelector('.ract')?.remove();
+    return;
+  }
+  if (a === 'ai') {
+    const box = rowEl.querySelector('.ract');
+    const bot = AI_BOTS[prefs.aiBot] || AI_BOTS.chatgpt;
+    box.className = 'ract ai';
+    box.innerHTML = `<span class="ract-row"><button type="button" class="btn sm" data-x="copy">Copy request</button><button type="button" class="btn sm primary" data-x="open">Copy &amp; open ${esc(bot.label)}</button></span>
+      <span class="ract-hint">Paste the AI’s answer here:</span>
+      <span class="ract-paste"><textarea rows="3" spellcheck="false" placeholder="name | PAGE: https://… | FILE: https://…"></textarea><button type="button" class="paste-clear" data-x="clear" aria-label="Clear" hidden>${I.x || '×'}</button></span>
+      <span class="ract-row"><button type="button" class="btn sm" data-x="paste">Paste from clipboard</button><button type="button" class="btn sm primary" data-x="check" disabled>Check &amp; link</button></span>`;
+    const ta = box.querySelector('textarea');
+    const sync = () => { box.querySelector('[data-x="check"]').disabled = !ta.value.trim(); box.querySelector('[data-x="clear"]').hidden = !ta.value; };
+    ta.addEventListener('input', sync);
+    box.onclick = async (e) => {
+      const b = e.target.closest('[data-x]');
+      if (!b) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const x = b.dataset.x;
+      if (x === 'copy' || x === 'open') {
+        const text = aiPrompt([d]);
+        copyText(text);
+        if (x === 'open') window.open(bot.q && text.length < 3500 ? bot.q(text) : bot.url, '_blank', 'noopener');
+        b.textContent = 'Copied ✓';
+        setTimeout(() => ta.focus(), 50);
+      } else if (x === 'clear') { ta.value = ''; sync(); ta.focus(); }
+      else if (x === 'paste') { try { ta.value = await navigator.clipboard.readText(); } catch { ta.focus(); } sync(); }
+      else if (x === 'check') {
+        const answer = ta.value;
+        if (!parseAiAnswer(answer).length) { ta.focus(); b.textContent = 'That isn’t an answer line'; setTimeout(() => (b.textContent = 'Check & link'), 2000); return; }
+        forget();
+        close();
+        setTimeout(() => linkWithAi({ answer, relink: new Set([d.id]) }), 60);
+      }
+    };
+  }
 }
 
 // ---------- removing things: pick folders, documents or everything, then confirm ----------
@@ -5514,8 +5610,8 @@ function openSettings() {
         ])}
         ${group('Reading', [
           `<div class="set-row static"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M9 3.5h6M9 20.5h6"/></svg></span><span class="set-t"><b>Opening cropped pages</b><small>${prefs.expand === 'drag' ? 'Drag the bars on a cropped page to pull it open' : 'Tap the arrows on a cropped page to open it'}</small></span><span class="seg small set-seg"><button type="button" data-s="xb" aria-pressed="${prefs.expand !== 'drag'}">Buttons</button><button type="button" data-s="xd" aria-pressed="${prefs.expand === 'drag'}">Drag</button></span></div>`,
-          `<div class="set-row static set-panels"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M8.5 4v16M15.5 4v16"/></svg></span><span class="set-t"><b>Side panels</b><small>${PANELS_TEXT[prefs.panels || 'buttons']}</small></span><span class="seg small set-seg">${[['buttons', 'Buttons'], ['swipe', 'Swipe'], ['both', 'Both']].map(([v, l]) => `<button type="button" data-s="pn-${v}" aria-pressed="${(prefs.panels || 'buttons') === v}">${l}</button>`).join('')}</span></div>`,
-          `<div class="set-row static"><span class="set-ic">${I.undo}</span><span class="set-t"><b>Undo &amp; redo</b><small>${prefs.undoStyle === 'buttons' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar: right to undo, left to redo'}</small></span><span class="seg small set-seg"><button type="button" data-s="ug" aria-pressed="${prefs.undoStyle !== 'buttons'}">Gestures</button><button type="button" data-s="ub" aria-pressed="${prefs.undoStyle === 'buttons'}">Buttons</button></span></div>`,
+          touchScreen() && `<div class="set-row static set-panels"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M8.5 4v16M15.5 4v16"/></svg></span><span class="set-t"><b>Side panels</b><small>${PANELS_TEXT[prefs.panels || 'buttons']}</small></span><span class="seg small set-seg">${[['buttons', 'Buttons'], ['swipe', 'Swipe'], ['both', 'Both']].map(([v, l]) => `<button type="button" data-s="pn-${v}" aria-pressed="${(prefs.panels || 'buttons') === v}">${l}</button>`).join('')}</span></div>`,
+          touchScreen() && `<div class="set-row static"><span class="set-ic">${I.undo}</span><span class="set-t"><b>Undo &amp; redo</b><small>${prefs.undoStyle === 'buttons' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar: right to undo, left to redo'}</small></span><span class="seg small set-seg"><button type="button" data-s="ug" aria-pressed="${prefs.undoStyle !== 'buttons'}">Gestures</button><button type="button" data-s="ub" aria-pressed="${prefs.undoStyle === 'buttons'}">Buttons</button></span></div>`,
         ])}
         ${group('Documents from websites', [
           row('helper', bolt, 'Download helper', helper.get() ? 'Set up' : 'Not set up · needed for some sites, like many government ones'),
@@ -5727,6 +5823,7 @@ async function refreshLibrary() {
   S.docs = docs.filter((d) => S.texts.has(d.id)).sort((a, b) => (a.order || 0) - (b.order || 0));
   for (const d of busyDocs) if (!S.docs.some((x) => x.id === d.id)) S.docs.push(d);
   try { S.watch = JSON.parse(localStorage.getItem(WATCH_KEY)) || []; } catch {}
+  try { const p = JSON.parse(localStorage.getItem(PREF_KEY)); if (p?.nameAs) prefs.nameAs = p.nameAs; } catch {} // how names are shown can come across too
   await boards.reload?.();
   renderLibrary();
   syncControls();
@@ -5742,7 +5839,7 @@ async function importBackup(file) {
   const fresh = await b.fresh().catch(() => s.docs);
   const res = await review({
     title: 'Import this backup?',
-    intro: `Made ${esc(new Date(s.made).toLocaleString())} with ${esc(plural(s.docs, 'document'))} (${fmtSize(s.size)}). ${fresh ? `<b>${esc(plural(fresh, 'document'))}</b> ${fresh === 1 ? 'is' : 'are'} new or changed here and will be added; the rest are already here and are skipped, so nothing is duplicated.` : 'Every document in it is already here; folders and boards will be brought up to date.'} Nothing on this device is removed.`,
+    intro: `Made ${esc(new Date(s.made).toLocaleString())} with ${esc(plural(s.docs, 'document'))} (${fmtSize(s.size)}). ${fresh ? `<b>${esc(plural(fresh, 'document'))}</b> ${fresh === 1 ? 'is' : 'are'} new or changed here and will be added; the rest are already here and are skipped, so nothing is duplicated.` : 'Every document in it is already here; their names, folders and boards will be brought up to date.'} Nothing on this device is removed.`,
     rows: [],
     options: [{ id: 'replace', label: 'Replace everything instead (this device becomes an exact copy of the backup, settings included)' }],
     apply: 'Import',
@@ -6179,12 +6276,12 @@ const GLASS_GROUPS = {
   sides: { vars: ['--a-side'], blur: '--blur-side' }, // the library on the left and the pages panel on the right (solid as designed)
 };
 // (what was set for the old "Popups" group carries over to Menus)
-// Where each group starts until you change it: the bars, headers and little menus fully clear with a light 4px
-// blur (blurPx(38) ≈ 4px); sheets and the side panels, which hold a lot of text, about half clear with an 8px blur
-// (blurPx(53) ≈ 8px) so they stay easy to read.
+// Where each group starts until you change it: just a little see-through with the slightest blur (blurPx(27) ≈
+// 2px), so everything reads easily out of the box; sheets and the side panels, which hold a lot of text, a touch
+// more solid with a 4px blur (blurPx(38)). Settings › Reading theme › Glass takes any of them clearer.
 const GLASS_START = {
-  top: { t: 100, b: 38 }, heads: { t: 100, b: 38 }, bottom: { t: 100, b: 38 }, menus: { t: 100, b: 38 },
-  sheets: { t: 75, b: 53 }, sides: { t: 75, b: 53 },
+  top: { t: 62, b: 27 }, heads: { t: 62, b: 27 }, bottom: { t: 62, b: 27 }, menus: { t: 62, b: 27 },
+  sheets: { t: 62, b: 38 }, sides: { t: 62, b: 38 },
 };
 const glassOf = (g) => {
   const o = prefs.glassG?.[g] ?? (g === 'menus' ? prefs.glassG?.popups : null);
@@ -6404,11 +6501,14 @@ function bind() {
   $('#aiCopy').addEventListener('click', () => aiCopy(false));
   $('#aiBot').addEventListener('change', (e) => { prefs.aiBot = e.target.value; savePrefs(); });
   $('#aiCheck').addEventListener('click', () => linkWithAi());
+  $('#aiAnswer').addEventListener('input', syncAiClear);
+  $('#aiClear').addEventListener('click', () => { $('#aiAnswer').value = ''; syncAiClear(); setAiStatus(''); $('#aiAnswer').focus(); });
   $('#aiPaste').addEventListener('click', async () => {
     try {
       const text = await navigator.clipboard.readText();
       if (!text.trim()) throw new Error('empty');
       $('#aiAnswer').value = text;
+      syncAiClear();
       linkWithAi();
     } catch {
       $('#aiAnswer').focus();
@@ -6849,7 +6949,7 @@ const PANELS_TEXT = {
   both: 'Buttons at the top, or swipe in from the edges',
 };
 function syncPanelsMode() {
-  const m = prefs.panels || 'buttons';
+  const m = touchScreen() ? prefs.panels || 'buttons' : 'buttons'; // no edge swipes without a touch screen
   document.body.classList.toggle('panels-swipe', m !== 'buttons');
   document.body.classList.toggle('panels-nobtn', m === 'swipe');
 }
@@ -8011,7 +8111,10 @@ async function start() {
   setTimeout(markOlderDocs, 15000);
   const sendTo_ = location.hash.match(/send-to=([A-Z0-9]{6})/i);
   if (sendTo_) { history.replaceState(null, '', location.pathname + location.search); sendTo({ code: sendTo_[1] }); }
-  if (prefs.autoCheck && hasSources() && checkDue()) {
+  // the clock starts the first time the app runs (a new install, or a library just brought over from another
+  // device): no check then, only once the period you set has gone by (or when you ask)
+  if (!prefs.lastAutoCheck) { prefs.lastAutoCheck = Date.now(); savePrefs(); }
+  else if (prefs.autoCheck && hasSources() && checkDue()) {
     prefs.lastAutoCheck = Date.now();
     savePrefs();
     setTimeout(() => checkSources({ quiet: true }), 1500);
