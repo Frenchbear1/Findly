@@ -393,7 +393,7 @@ async function runSearchLive() {
 }
 
 function runSearch({ keepScroll = false } = {}) {
-  if (nativeIndex) { runSearchNative({ keepScroll }); return; }
+  if (nativeIndex) return runSearchNative({ keepScroll }); // in the app the search finishes a moment later
   searchSeq++; // anything the worker is still doing is out of date now
   for (const [k, w] of workerWaits) { workerWaits.delete(k); w(null); }
   document.body.classList.remove('searching');
@@ -3959,7 +3959,6 @@ function nativeSetup() {
   addEventListener('focus', lookAgain);
   Files.takeIncoming().then((r) => { if (r?.files?.length) syncFolder(); }).catch(() => {});
   Link.addListener('open', openFromSystem);
-  Link.takePending().then(openFromSystem).catch(() => {});
 }
 
 // Swap a document's contents for a newer version, optionally keeping the old one as "(previous)".
@@ -5841,6 +5840,29 @@ function bind() {
   });
   $('#clearBtn').addEventListener('pointerdown', (e) => e.preventDefault()); // keep the keyboard up and the box focused
   $('#clearBtn').addEventListener('click', () => { record('Clear search'); q.value = ''; runSearch(); q.focus(); });
+  // A quick right-to-left swipe across the search box clears it too (like the ×) and puts the cursor in it.
+  // Swipes that start on the search-type pill (which drags sideways itself) or the arrows are left alone.
+  (() => {
+    const box = $('.search-box');
+    let s = null;
+    box.addEventListener('touchstart', (e) => {
+      const t = e.touches[0];
+      s = e.touches.length === 1 && !e.target.closest('#modePill, .nav, #clearBtn') ? { x: t.clientX, y: t.clientY, t: performance.now(), dx: 0, dy: 0 } : null;
+    }, { passive: true });
+    box.addEventListener('touchmove', (e) => { if (!s) return; const t = e.touches[0]; s.dx = t.clientX - s.x; s.dy = t.clientY - s.y; }, { passive: true });
+    box.addEventListener('touchcancel', () => (s = null));
+    box.addEventListener('touchend', (e) => {
+      const w = s;
+      s = null;
+      if (!w || !q.value || performance.now() - w.t > 600 || w.dx > -40 || Math.abs(w.dx) < Math.abs(w.dy) * 2) return;
+      e.preventDefault(); // not also a tap that places the caret somewhere
+      record('Clear search');
+      q.value = '';
+      runSearch();
+      q.focus();
+      q.animate([{ transform: 'translateX(14px)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 220, easing: 'cubic-bezier(.25,.8,.3,1)' });
+    });
+  })();
   $('#prevBtn').addEventListener('click', () => step(-1));
   $('#nextBtn').addEventListener('click', () => step(1));
 
@@ -7203,17 +7225,17 @@ async function openSearchLink() {
   syncControls();
   let doc = (name || src) ? findLinkedDoc(name, src) : null;
   if (!doc && src) {
-    toast(`Adding “${name || fileNameFor(src)}” to your library…`, { ms: 3000 });
+    if (!appOffered) toast(`Adding “${name || fileNameFor(src)}” to your library…`, { ms: 3000 });
     addRemote(src, {});
     await queue;
     doc = findLinkedDoc(name, src);
   }
-  if ((name || src) && !doc) {
+  if ((name || src) && !doc && !appOffered) {
     toast(`“${name || src}” isn’t in your library${src ? ' and couldn’t be downloaded' : ''}, so this searches everything.`, { ms: 6000 });
   }
   if (active === reader) closeReader();
   linkOnly = doc ? doc.id : null;
-  runSearch();
+  await runSearch();
   const page = Number(p.get('p')) - 1;
   if (!doc || !(page >= 0)) return;
   await new Promise((r) => requestAnimationFrame(r));
@@ -7227,6 +7249,7 @@ async function openSearchLink() {
 // typed or opened in Safari stays in Safari. There, a small "Open in the app" button hands the page (and any search in
 // its address) to the app through findly://. Once that has worked, later visits hand over straight away; Safari asks
 // before opening the app. If the app is gone, the next try notices and the button comes back.
+let appOffered = false; // the website on an iPhone, offering the app: no notes popping up over that button
 function offerApp() {
   const iOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
   if (isNative || platform !== 'web' || !iOS || navigator.standalone) return;
@@ -7242,6 +7265,7 @@ function offerApp() {
     setTimeout(() => { document.removeEventListener('visibilitychange', away); if (!left) { set(HAS, null); show(); } }, 15000);
     location.href = target;
   };
+  appOffered = !get(NO);
   const show = () => {
     if (pill || get(NO)) return;
     pill = el('div', 'app-offer', '<button class="ao-go"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>Open in the Findly app</button><button class="ao-x" aria-label="Don’t offer again"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>');
@@ -7280,7 +7304,11 @@ async function start() {
   updateStorage();
   labelOlderDocs();
   nativeSetup();
-  restorePlace();
+  // whatever opened the app (a link, Spotlight, a Shortcut) is picked up first, so a link's page wins over where
+  // you were last time
+  const pending = isNative ? await Link.takePending().catch(() => null) : null;
+  if (/^#find\?/.test(location.hash) || /#find\?/.test(pending?.url || '')) checkSuddenStop(null); else restorePlace();
+  openFromSystem(pending);
   for (const d of S.docs) if (d.marks) sendMarks(d);
   setTimeout(markOlderDocs, 15000);
   const sendTo_ = location.hash.match(/send-to=([A-Z0-9]{6})/i);
