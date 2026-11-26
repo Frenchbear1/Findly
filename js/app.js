@@ -593,7 +593,11 @@ const sizeRO = new ResizeObserver((es) => {
     art._h = h;
     if (was == null || !h || Math.abs(h - was) < 0.5 || !art._settling || anchorQuiet || dragging || kept(art) || !art.isConnected) continue;
     if (line == null) line = Math.max(safeTop(), $('.topbar')?.getBoundingClientRect().bottom || 0);
-    if (art.getBoundingClientRect().top < line - 1) shift += h - was;
+    const r = art.getBoundingClientRect();
+    // a page wholly above: everything below it moves by its change; the page you're in the middle of grows or
+    // shrinks evenly, so the line you're reading moves by only its share of the change
+    if (r.bottom <= line + 1) shift += h - was;
+    else if (r.top < line - 1) shift += (h - was) * Math.min(1, Math.max(0, (line - r.top) / h));
   }
   if (Math.abs(shift) >= 0.5) {
     autoScrollUntil = performance.now() + 120; // the top bar isn't moved by our own correction
@@ -837,7 +841,7 @@ const drawnMax = () => (isPhone() ? 10 : 16);
 // have never been drawn get their quick soft copy (which settles their height), one after another going up.
 // Scrolling back up then finds them the right size already, instead of the view being nudged as they
 // settle. (Pages below can settle whenever; that never moves what you're looking at.)
-let sweepT = 0, lastScrollAt = 0;
+let sweepT = 0, lastScrollAt = 0; // (see sweep: only a few screens up)
 addEventListener('scroll', () => { lastScrollAt = performance.now(); sweepSoon(); }, { passive: true });
 function sweepSoon(ms = 350) { clearTimeout(sweepT); sweepT = setTimeout(sweep, ms); }
 async function sweep() {
@@ -848,7 +852,15 @@ async function sweep() {
     // the last page whose bottom is above the screen, then upward
     let lo = 0, hi = pages.length - 1, k = -1;
     while (lo <= hi) { const m = (lo + hi) >> 1; if (pages[m].getBoundingClientRect().bottom <= 0) { k = m; lo = m + 1; } else hi = m - 1; }
-    for (let i = k; i >= 0; i--) { const a = pages[i]; if (!a._sized && !a._filled && !a.hidden && !a._web && !busy.has(a)) return a; }
+    // only the pages just above (a few screens' worth): further up they'd be let go again anyway, and each one
+    // settling nudges the scroll a little; on an iPhone, sizing hundreds of them one after another while you sat
+    // reading made the page creep and jiggle
+    const reach = -innerHeight * 3;
+    for (let i = k; i >= 0; i--) {
+      const a = pages[i];
+      if (a.getBoundingClientRect().bottom < reach) break;
+      if (!a._sized && !a._filled && !a.hidden && !a._web && !busy.has(a)) return a;
+    }
     return null;
   };
   // two at a time, so it keeps pace with the drawing queue
