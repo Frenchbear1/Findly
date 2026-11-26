@@ -636,8 +636,7 @@ function headHtml(v, doc, n, ctx, flat = false) {
     if (i >= 0) rank = `<span class="rank" title="Ranked ${fmt(i + 1)} by hits">${fmt(i + 1)}</span>`;
   }
   const lab = plabel(doc, n);
-  const pan = prefs.panBtn && doc.kind === 'pdf' ? `<button class="pan-btn" data-act="pan" aria-pressed="false" aria-label="Pinch and drag this page" title="Pinch and drag this page">${PAN_ICON}</button>` : '';
-  return `<span class="ph-pill">${rank}<span class="pno"${lab !== String(n + 1) ? ` title="Page ${lab} · ${fmt(n + 1)} of ${fmt(S.texts.get(doc.id)?.length || 0)} in the file"` : ''}>Page ${esc(lab)}</span>${badge}</span><span class="grow"></span>${pan}`;
+  return `<span class="ph-pill">${rank}<span class="pno"${lab !== String(n + 1) ? ` title="Page ${lab} · ${fmt(n + 1)} of ${fmt(S.texts.get(doc.id)?.length || 0)} in the file"` : ''}>Page ${esc(lab)}</span>${badge}</span><span class="grow"></span>`;
 }
 
 function pageEl(v, doc, n, R) {
@@ -1033,12 +1032,13 @@ function panParts(art) {
   const content = body?.querySelector('.pdf-frame:not(.clone)');
   return { body, content, clip: body?.querySelector(':scope > .crop-clip') };
 }
-function togglePan(art, btn) {
+function togglePan(art) {
   const { body, content } = panParts(art);
   if (art._pan) {
     art._pan = null;
     body.classList.remove('panning');
-    btn?.setAttribute('aria-pressed', 'false');
+    body.querySelector(':scope > .pan-done')?.remove();
+    panLock(null);
     frameSpan(content, content.dataset.tx ? content.dataset.tx.split(',').map(Number) : null);
     body._pieceSig = null;
     applyCrop(art);
@@ -1062,9 +1062,49 @@ function togglePan(art, btn) {
   const AR = content.offsetHeight / (Wf * ts); // the page's height over its width
   art._pan = { R0, R: { ...R0 }, AR, F0: R0.h * (Wf / R0.w) * AR };
   body.classList.add('panning');
-  btn?.setAttribute('aria-pressed', 'true');
+  body.append(el('button', 'pan-done', 'Done'));
+  body.lastElementChild.dataset.act = 'pan-done';
   bindPan(art, body);
+  panLock(art);
   layoutPan(art);
+  // the whole page box in view, so you can work with all of it
+  const r = body.getBoundingClientRect();
+  if (r.top < topOffset() || r.bottom > innerHeight - 90) scrollBy({ top: r.top - topOffset() - 16, behavior: 'smooth' });
+}
+// While a page is being pinched and dragged, nothing else moves: the results don't scroll and the app doesn't
+// zoom; only that page's box answers your fingers. A tap anywhere else (or Done) finishes.
+let panLocked = null;
+const panStop = (e) => { if (e.cancelable) e.preventDefault(); };
+// outside the page: a drag does nothing (it's held still), a plain tap finishes
+let panTap = null;
+const panOutside = (e) => {
+  if (!panLocked || e.target.closest?.('.page-body.panning')) return;
+  e.preventDefault();
+  e.stopPropagation();
+  panTap = { x: e.clientX, y: e.clientY, t: performance.now() };
+};
+const panOutsideUp = (e) => {
+  const art = panLocked, t = panTap;
+  panTap = null;
+  if (!art || !t || e.target.closest?.('.page-body.panning')) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (Math.hypot(e.clientX - t.x, e.clientY - t.y) < 10 && performance.now() - t.t < 500) togglePan(art);
+};
+const panEatClick = (e) => { if (panLocked && !e.target.closest?.('.page-body.panning')) { e.preventDefault(); e.stopPropagation(); } };
+function panLock(art) {
+  const on = !!art, was = !!panLocked;
+  panLocked = art;
+  if (on === was) return;
+  const fn = on ? 'addEventListener' : 'removeEventListener';
+  document[fn]('touchmove', panStop, { passive: false, capture: true });
+  document[fn]('gesturestart', panStop, { passive: false, capture: true }); // Safari's own pinch-zoom of the page
+  document[fn]('gesturechange', panStop, { passive: false, capture: true });
+  document[fn]('wheel', panStop, { passive: false, capture: true });
+  document[fn]('pointerdown', panOutside, { capture: true });
+  document[fn]('pointerup', panOutsideUp, { capture: true });
+  document[fn]('click', panEatClick, { capture: true });
+  document.documentElement.classList.toggle('pan-lock', on);
 }
 function layoutPan(art) {
   const P = art._pan;
@@ -1147,6 +1187,7 @@ function bindPan(art, body) {
     if (a.length >= 2) return { x: (a[0].x + a[1].x) / 2, y: (a[0].y + a[1].y) / 2, d: Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) };
     return a.length ? { x: a[0].x, y: a[0].y, d: 0 } : null;
   };
+  body.addEventListener('touchstart', (e) => { if (art._pan && !e.target.closest('button')) e.preventDefault(); }, { passive: false });
   body.addEventListener('pointerdown', (e) => {
     if (!art._pan || e.target.closest('button')) return;
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -5371,7 +5412,6 @@ function openSettings() {
         ])}
         ${group('Reading', [
           `<div class="set-row static"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M9 3.5h6M9 20.5h6"/></svg></span><span class="set-t"><b>Opening cropped pages</b><small>${prefs.expand === 'drag' ? 'Drag the bars on a cropped page to pull it open' : 'Tap the arrows on a cropped page to open it'}</small></span><span class="seg small set-seg"><button type="button" data-s="xb" aria-pressed="${prefs.expand !== 'drag'}">Buttons</button><button type="button" data-s="xd" aria-pressed="${prefs.expand === 'drag'}">Drag</button></span></div>`,
-          row('panbtn', '<svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>', 'Pan &amp; zoom button', prefs.panBtn ? 'A button beside each page’s number: then pinch and drag the page' : 'Off', sw(prefs.panBtn)),
           `<div class="set-row static set-panels"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M8.5 4v16M15.5 4v16"/></svg></span><span class="set-t"><b>Side panels</b><small>${PANELS_TEXT[prefs.panels || 'buttons']}</small></span><span class="seg small set-seg">${[['buttons', 'Buttons'], ['swipe', 'Swipe'], ['both', 'Both']].map(([v, l]) => `<button type="button" data-s="pn-${v}" aria-pressed="${(prefs.panels || 'buttons') === v}">${l}</button>`).join('')}</span></div>`,
           `<div class="set-row static"><span class="set-ic">${I.undo}</span><span class="set-t"><b>Undo &amp; redo</b><small>${prefs.undoStyle === 'buttons' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar: right to undo, left to redo'}</small></span><span class="seg small set-seg"><button type="button" data-s="ug" aria-pressed="${prefs.undoStyle !== 'buttons'}">Gestures</button><button type="button" data-s="ub" aria-pressed="${prefs.undoStyle === 'buttons'}">Buttons</button></span></div>`,
         ])}
@@ -5433,22 +5473,6 @@ function openSettings() {
         if (!body?.classList.contains('cropped')) continue;
         body._pieceSig = null;
         applyCrop(art);
-      }
-      return;
-    }
-    if (k === 'panbtn') {
-      prefs.panBtn = !prefs.panBtn;
-      savePrefs();
-      b.querySelector('.set-sw').classList.toggle('on', prefs.panBtn);
-      b.querySelector('small').textContent = prefs.panBtn ? 'A button beside each page’s number: then pinch and drag the page' : 'Off';
-      // the page headers already shown get (or lose) the button
-      for (const art of $$('article.page')) {
-        const head = art.querySelector(':scope > .page-head');
-        const doc = docById(art.dataset.doc);
-        if (!head || !doc || !art._v || art.classList.contains('visit')) continue;
-        if (!prefs.panBtn && art._pan) togglePan(art, head.querySelector('.pan-btn'));
-        head.querySelector('.pan-btn')?.remove();
-        if (prefs.panBtn && doc.kind === 'pdf') head.insertAdjacentHTML('beforeend', `<button class="pan-btn" data-act="pan" aria-pressed="false" aria-label="Pinch and drag this page" title="Pinch and drag this page">${PAN_ICON}</button>`);
       }
       return;
     }
@@ -6060,6 +6084,9 @@ function applyGlass() {
   // cards inside a sheet: as clear as the sheet, with a touch more body
   const sa = parseFloat(root.getPropertyValue('--a-sheet')) || 100;
   root.setProperty('--a-sheet-card', `${(sa + (100 - sa) * 0.18).toFixed(1)}%`);
+  // …and the cards inside the side panels (the library list) the same way
+  const sd = parseFloat(root.getPropertyValue('--a-side')) || 100;
+  root.setProperty('--a-side-card', `${(sd + (100 - sd) * 0.18).toFixed(1)}%`);
   root.setProperty('--bpx', `${blurPx(prefs.blurL ?? BLUR_DEF).toFixed(1)}px`);
 }
 function openThemes() {
@@ -6121,6 +6148,78 @@ function updateScrollLock() {
   document[fn]('touchmove', lockTouchMove, { passive: false, capture: true });
   document[fn]('wheel', lockWheel, { passive: false, capture: true });
 }
+// ---------- pull a sheet down to close it (phones), as on the iPhone ----------
+// Any sheet with the little grab bar at its top follows your finger down when you drag it, from anywhere on it,
+// as long as what's under your finger is scrolled to its top (otherwise the drag scrolls, as usual). Let go
+// past about a quarter of its height, or with a flick, and it slides away and closes; otherwise it springs back.
+function sheetOf(t) {
+  const d = t instanceof Element ? t.closest('dialog[open]') : null;
+  if (!d || !isPhone() || !d.matches(':modal') || d.matches('.bv-item, .xfer')) return null;
+  return d;
+}
+function sheetPull() {
+  let g = null;
+  const scrollerIn = (t, d) => {
+    for (let n = t; n && n !== d.parentElement; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (/(auto|scroll)/.test(cs.overflowY) && n.scrollHeight > n.clientHeight + 1) return n;
+    }
+    return null;
+  };
+  document.addEventListener('touchstart', (e) => {
+    g = null;
+    const d = sheetOf(e.target);
+    if (!d || e.touches.length > 1 || e.target.closest('input[type="range"], textarea, select, .tbar-row, [data-nopull]')) return;
+    const box = d.classList.contains('set-dlg') ? d.querySelector('.set-sheet') : d;
+    if (!box) return;
+    const sc = scrollerIn(e.target, d);
+    const t = e.touches[0];
+    g = { d, box, sc, top: !sc || sc.scrollTop <= 0, x: t.clientX, y: t.clientY, on: false, dy: 0, h: box.offsetHeight, last: t.clientY, lastT: performance.now(), v: 0 };
+  }, { passive: true, capture: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!g) return;
+    const t = e.touches[0];
+    const dx = t.clientX - g.x, dy = t.clientY - g.y;
+    if (!g.on) {
+      if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) { g = null; return; } // sideways: not a pull
+      if (dy < -4 || (g.sc && g.sc.scrollTop > 0)) { if (Math.abs(dy) > 8) g = null; return; } // scrolling the content
+      if (!g.top || dy < 8) return;
+      g.on = true;
+      g.y = t.clientY; // start from here, so it doesn't jump
+      g.box.style.transition = 'none';
+    }
+    e.preventDefault();
+    const now = performance.now();
+    g.v = (t.clientY - g.last) / Math.max(1, now - g.lastT);
+    g.last = t.clientY; g.lastT = now;
+    const d2 = t.clientY - g.y;
+    g.dy = d2 >= 0 ? d2 : -Math.sqrt(-d2) * 2; // a little give upward, like the real thing
+    g.box.style.transform = `translateY(${g.dy}px)`;
+  }, { passive: false, capture: true });
+  const end = () => {
+    const w = g;
+    g = null;
+    if (!w?.on) return;
+    const ease = 'cubic-bezier(0.32, 0.72, 0, 1)';
+    if (w.dy > w.h * 0.25 || (w.v > 0.5 && w.dy > 20)) {
+      const ms = Math.max(160, Math.min(320, ((w.h - w.dy) / Math.max(0.8, w.v)) | 0));
+      w.box.animate([{ transform: `translateY(${w.dy}px)` }, { transform: `translateY(${w.h + 40}px)` }], { duration: ms, easing: ease, fill: 'forwards' }).onfinish = () => {
+        w.d.classList.add('pulled');
+        w.d.close();
+        w.d.classList.remove('pulled', 'closing');
+        w.box.style.transform = '';
+        w.box.style.transition = '';
+        w.box.getAnimations().forEach((a) => a.cancel());
+      };
+    } else {
+      w.box.animate([{ transform: `translateY(${w.dy}px)` }, { transform: 'none' }], { duration: 320, easing: ease });
+      w.box.style.transform = '';
+      w.box.style.transition = '';
+    }
+  };
+  document.addEventListener('touchend', end, { capture: true });
+  document.addEventListener('touchcancel', end, { capture: true });
+}
 function watchPopups() {
   let queued = false;
   const later = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; updateScrollLock(); }); } };
@@ -6134,6 +6233,7 @@ function watchPopups() {
 // ---------- events ----------
 function bind() {
   watchPopups();
+  sheetPull();
   syncPanelsMode();
   bindEdgeSwipes();
   $('#fileInput').accept = ACCEPT;
@@ -6482,7 +6582,7 @@ function bind() {
     else if (act === 'open' && art) openReader(art.dataset.doc, Number(art.dataset.n));
     else if (act === 'web' && art) { override.set(pkey(art.dataset.doc, WEB), 'original'); openReader(art.dataset.doc, Number(art.dataset.n)); }
     else if (act === 'pmode' && art) togglePageMode(art);
-    else if (act === 'pan' && art) togglePan(art, b);
+    else if (act === 'pan-done' && art) togglePan(art);
     else if ((act === 'col-next' || act === 'col-prev') && art) shiftColumn(art, Number(b.dataset.piece), act === 'col-next' ? 1 : -1);
     else if ((act === 'edge-top' || act === 'edge-bottom') && art) expandEdge(art, act === 'edge-top' ? 'top' : 'bottom');
     else if (act === 'visit-back' && art?._home) goVisit(art._home, Number(art._home.dataset.n), Number(art.dataset.n) > Number(art._home.dataset.n) ? -1 : 1);
@@ -7252,6 +7352,7 @@ function pageItems(art) {
       else if (cropOpen.has(pkey(doc.id, n))) items.push({ label: 'Crop to the hits again', icon: I.crop, run: () => expandCrop(art, 'crop') });
     }
   }
+  if (doc.kind === 'pdf' && !art._web && art.lastElementChild.querySelector('.pdf-frame:not(.clone)')) items.push({ label: 'Pinch & drag this page', sub: 'Everything else holds still until you tap Done', icon: PAN_ICON, run: () => togglePan(art) });
   if (art._flat && doc.kind === 'html') items.push({ label: 'Open the web page', icon: I.globe, run: () => { override.set(pkey(doc.id, WEB), 'original'); openReader(doc.id, n); } });
   if (v.kind === 'results') items.push({ label: 'Read it in the document', icon: I.book, run: () => openReader(doc.id, art._web ? undefined : n) });
   const text = art._web ? '' : S.texts.get(doc.id)?.[n] || '';

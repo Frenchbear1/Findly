@@ -425,3 +425,7 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
   .content > .outline { background: color-mix(in srgb, var(--panel) var(--a-side, 100%), transparent); }
   :root:not([style*="--a-side: 100"]) .content > .outline { -webkit-backdrop-filter: var(--blur-side, var(--blur)); backdrop-filter: var(--blur-side, var(--blur)); }
 }
+/* the library list inside the left panel clears with the panel (Glass › Side panels), like Settings' cards */
+@media (max-width: 900px) {
+  .sidebar .lib, .outline .ol-sort select { background: color-mix(in srgb, var(--card) var(--a-side-card, 100%), transparent); }
+}
