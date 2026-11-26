@@ -3643,7 +3643,7 @@ function helperProblem(err) {
 }
 
 // Add one document from a link (download → read → save). Shows progress in the library.
-function addRemote(url, { folderId = null, linkText = '', note = '', page = '', info = null } = {}) {
+function addRemote(url, { folderId = null, linkText = '', note = '', page = '', info = null, quiet = false } = {}) {
   const name = linkText ? nameFromLink(linkText, url, info?.type) : fileNameFor(url, info?.type);
   const kind = kindOf(name) || 'html';
   const order = S.docs.reduce((m, d) => Math.max(m, d.order || 0), 0) + 1;
@@ -3667,7 +3667,9 @@ function addRemote(url, { folderId = null, linkText = '', note = '', page = '', 
     } catch (err) {
       S.docs = S.docs.filter((d) => d !== meta);
       renderLibrary();
-      if (err instanceof NeedsHelper) { toast(`“${meta.name}”: ${helperProblem(err)}`); openLinkDialog(folderId, { url, helperOpen: true }); }
+      // from a link someone opened: a note with a button, never dialogs piling up over the page
+      if (err instanceof NeedsHelper && quiet) { if (!appOffered) toast(`“${meta.name}” needs the download helper on this device`, { ms: 8000, action: 'Set up', onAction: () => openLinkDialog(folderId, { url, helperOpen: true }) }); }
+      else if (err instanceof NeedsHelper) { toast(`“${meta.name}”: ${helperProblem(err)}`); openLinkDialog(folderId, { url, helperOpen: true }); }
       else toast(`Couldn’t add “${meta.name}”: ${helperProblem(err)}`, { ms: 6000 });
     }
   });
@@ -5840,7 +5842,8 @@ function bind() {
   });
   $('#clearBtn').addEventListener('pointerdown', (e) => e.preventDefault()); // keep the keyboard up and the box focused
   $('#clearBtn').addEventListener('click', () => { record('Clear search'); q.value = ''; runSearch(); q.focus(); });
-  // A quick right-to-left swipe across the search box clears it too (like the ×) and puts the cursor in it.
+  // A quick right-to-left swipe across the search box removes the last word (swipe again for the next) and puts the
+  // cursor at the end, ready to type.
   // Swipes that start on the search-type pill (which drags sideways itself) or the arrows are left alone.
   (() => {
     const box = $('.search-box');
@@ -5856,11 +5859,12 @@ function bind() {
       s = null;
       if (!w || !q.value || performance.now() - w.t > 600 || w.dx > -40 || Math.abs(w.dx) < Math.abs(w.dy) * 2) return;
       e.preventDefault(); // not also a tap that places the caret somewhere
-      record('Clear search');
-      q.value = '';
-      runSearch();
+      q.value = q.value.replace(/\s*\S+\s*$/, ''); // the last word (and the space before it) goes
+      q.dispatchEvent(new Event('input', { bubbles: true })); // the search and the × follow, as when typing
       q.focus();
-      q.animate([{ transform: 'translateX(14px)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 220, easing: 'cubic-bezier(.25,.8,.3,1)' });
+      const end = q.value.length;
+      try { q.setSelectionRange(end, end); } catch {}
+      q.animate([{ transform: 'translateX(6px)', opacity: 0.6 }, { transform: 'none', opacity: 1 }], { duration: 180, easing: 'cubic-bezier(.25,.8,.3,1)' });
     });
   })();
   $('#prevBtn').addEventListener('click', () => step(-1));
@@ -7224,9 +7228,9 @@ async function openSearchLink() {
   savePrefs();
   syncControls();
   let doc = (name || src) ? findLinkedDoc(name, src) : null;
-  if (!doc && src) {
-    if (!appOffered) toast(`Adding “${name || fileNameFor(src)}” to your library…`, { ms: 3000 });
-    addRemote(src, {});
+  if (!doc && src && !appOffered) { // on an iPhone with the app on offer, the document is the app's business
+    toast(`Adding “${name || fileNameFor(src)}” to your library…`, { ms: 3000 });
+    addRemote(src, { quiet: true });
     await queue;
     doc = findLinkedDoc(name, src);
   }
