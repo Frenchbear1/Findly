@@ -2589,7 +2589,6 @@ function idleState() {
     : `Search ${plural(scope.length, 'document')} · ${plural(pages, 'page')}${busy ? ` <span class="muted">(${fmt(busy)} still reading)</span>` : ''}`;
   box.innerHTML = `
     <h3>${title}</h3>
-    <p class="muted">Results show the actual pages, not snippets. Pages without hits are folded away — open them whenever you want to keep reading.</p>
     <div class="tips" data-mode="${prefs.mode}">${tipsFor(prefs.mode)}</div>
 `; // (no list of documents here: the library is in the side panel)
   const tips = box.querySelector('.tips');
