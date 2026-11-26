@@ -4659,7 +4659,7 @@ Several of my files often come from the same page — for example one handbook p
 Also give each document's names, from the document itself or its publisher (write NONE for any it doesn't have):
 - NUMBER: its official number or designation, e.g. FAA-H-8083-25C, AC 91-48, 14 CFR Part 91
 - TITLE: its full written-out title, e.g. Pilot's Handbook of Aeronautical Knowledge
-- ABBR: the abbreviation people usually call it, e.g. PHAK, AFH, AIM
+- ABBR: the abbreviation people usually call it, e.g. PHAK, AFH, AIM. If it has no official one, search for what pilots, instructors and other readers commonly call it (training sites, forums, study guides) and give that; a common nickname is better than nothing. Write NONE only if people really don't shorten it.
 
 Reply with one code block and nothing else, one line per file, in exactly this format, with the file name copied exactly as I wrote it:
 <file name> | PAGE: <link or NOT FOUND> | FILE: <link or NOT FOUND> | NUMBER: <number or NONE> | TITLE: <title or NONE> | ABBR: <abbreviation or NONE>
@@ -4689,7 +4689,7 @@ For US federal regulations (the CFR, such as the FARs in Title 14), list each pa
 
 I already have these, so leave them out: ${have.join('; ')}` : ''}
 
-Also give each document's names (NONE for any it doesn't have): NUMBER, its official number or designation (e.g. FAA-H-8083-25C, AC 91-48, 14 CFR Part 91); TITLE, its full written-out title; ABBR, the abbreviation people usually call it (e.g. PHAK, AIM).
+Also give each document's names (NONE for any it doesn't have): NUMBER, its official number or designation (e.g. FAA-H-8083-25C, AC 91-48, 14 CFR Part 91); TITLE, its full written-out title; ABBR, the abbreviation people usually call it (e.g. PHAK, AIM) — if there's no official one, search for what pilots and other readers commonly call it and give that; a common nickname is better than nothing.
 
 Reply with one code block and nothing else, in exactly this format:
 <title> | PAGE: <link or NOT FOUND> | FILE: <link> | NUMBER: <number or NONE> | TITLE: <title or NONE> | ABBR: <abbreviation or NONE>`;
@@ -4701,11 +4701,11 @@ function aiNamesPrompt(docs) {
     return t ? ` — begins “${t.replace(/["“”]/g, '')}…”` : '';
   };
   const line = (d) => `- ${d.name}${d.source?.url ? ` (from ${d.source.url})` : ''}${opening(d)}`;
-  return `I keep the documents listed below in a document search app. For each one, tell me its names, from the document itself or its publisher. Use the opening words and links to identify each one; search the web to confirm if you need to. Write NONE for any name a document doesn't have, and never make one up.
+  return `I keep the documents listed below in a document search app. For each one, tell me its names, from the document itself or its publisher. Use the opening words and links to identify each one; search the web to confirm if you need to. Write NONE for a NUMBER or TITLE a document doesn't have, and never make those up.
 
 - NUMBER: its official number or designation, e.g. FAA-H-8083-25C, AC 91-48, 14 CFR Part 91, Order 8900.1
 - TITLE: its full written-out title, e.g. Pilot's Handbook of Aeronautical Knowledge
-- ABBR: the abbreviation people usually call it, e.g. PHAK, AFH, AIM, IFH
+- ABBR: the abbreviation people usually call it, e.g. PHAK, AFH, AIM, IFH. If it has no official one, search for what pilots, instructors and other readers commonly call it (training sites, forums, study guides) and give that; a common nickname is better than nothing, even if it isn't official. Write NONE only if people really don't shorten it.
 
 Reply with one code block and nothing else, one line per document, in exactly this format, with the file name copied exactly as I wrote it:
 <file name> | NUMBER: <number or NONE> | TITLE: <title or NONE> | ABBR: <abbreviation or NONE>
