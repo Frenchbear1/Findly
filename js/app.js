@@ -2581,7 +2581,7 @@ function idleState() {
     <h3>${title}</h3>
     <p class="muted">Results show the actual pages, not snippets. Pages without hits are folded away — open them whenever you want to keep reading.</p>
     <div class="tips" data-mode="${prefs.mode}">${tipsFor(prefs.mode)}</div>
-    <div class="idle-docs">${ready.map((d) => `<button class="doc-card" data-act="read" data-doc="${d.id}"><span class="ftype ${d.kind}">${KIND_LABEL[d.kind]}</span><span class="dc-name">${esc(d.name)}</span><span class="dc-meta">${plural(S.texts.get(d.id)?.length || 0, 'page')}</span></button>`).join('')}</div>`;
+`; // (no list of documents here: the library is in the side panel)
   const tips = box.querySelector('.tips');
   requestAnimationFrame(() => animateTips(tips));
   return box;
