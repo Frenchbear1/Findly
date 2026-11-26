@@ -2874,6 +2874,7 @@ function updateSummary() {
   dock.hidden = !(v.kind === 'reader' || showHead);
   $('#mbar').hidden = dock.hidden;
   document.body.classList.toggle('has-dock', !dock.hidden);
+  placeFloats();
 }
 
 function updateOutline() {
@@ -5902,7 +5903,20 @@ const libStatus = (() => {
   };
 })();
 
+// Toasts (and the website's open-in-app pill) sit just above the floating bottom bar when it's showing and
+// at the bottom of the screen when it isn't — measured from where the bar really is, so they never float
+// halfway up the screen.
+function placeFloats() {
+  const bar = window.innerWidth <= 900 ? $('#mbar') : $('#dock');
+  const r = bar && !bar.hidden ? bar.getBoundingClientRect() : null;
+  const root = document.documentElement;
+  if (r && r.height && r.top < window.innerHeight) root.style.setProperty('--float-b', `${Math.max(0, Math.round(window.innerHeight - r.top)) + 10}px`);
+  else root.style.removeProperty('--float-b');
+}
+addEventListener('resize', () => placeFloats());
+
 function toast(msg, { action, onAction, ms = 4200 } = {}) {
+  placeFloats();
   const t = el('div', 'toast', `<span>${esc(msg)}</span>`);
   if (action) {
     const b = el('button', 'toast-btn', esc(action));

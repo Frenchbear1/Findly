@@ -153,12 +153,12 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   /* ---- toasts: a glass capsule ---- */
   .toast {
     border-radius: 22px; padding: 11px 14px 11px 18px; font-size: 14px; font-weight: 500;
-    background: color-mix(in srgb, #1c1c1e 88%, transparent); color: #fff;
+    background: color-mix(in srgb, var(--card) var(--a-menu, 80%), transparent); color: var(--ink);
     -webkit-backdrop-filter: var(--blur-pop, var(--blur)); backdrop-filter: var(--blur-pop, var(--blur));
-    box-shadow: 0 6px 20px -8px rgba(0, 0, 0, 0.28);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 0 0 0.5px color-mix(in srgb, var(--ink) 14%, transparent), 0 6px 22px -8px rgba(0, 0, 0, 0.2);
     animation: toastIn 0.42s var(--spring);
   }
-  .toasts { bottom: max(18px, calc(env(safe-area-inset-bottom) + 8px)); }
+  .toasts { bottom: var(--float-b, max(18px, calc(env(safe-area-inset-bottom) + 8px))) !important; }
 }
 @keyframes bar-up { from { transform: translateY(24px); opacity: 0; } }
 
