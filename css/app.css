@@ -1812,7 +1812,9 @@ html.pan-lock, html.pan-lock body { overscroll-behavior: none; }
 
 /* ---------- device to device: the scene ---------- */
 .xf-info { position: relative; display: flex; flex-direction: column; }
-.xf-step { display: flex; flex-direction: column; gap: 10px; }
+.xf-step { display: flex; flex-direction: column; gap: 8px; }
+.xf-run { display: flex; flex-direction: column; gap: 10px; }
+.xf-run .xf-big { margin: 0; }
 .xf-step.out { left: 0; right: 0; top: 0; pointer-events: none; }
 @keyframes xf-rise { from { opacity: 0; transform: translateY(12px) scale(0.94); } }
 /* waiting for a sender: soft rings ripple out from behind the code, and the code's letters drop in one by one */
@@ -1838,12 +1840,12 @@ html.pan-lock, html.pan-lock body { overscroll-behavior: none; }
 .xf-cam.got::after { content: ""; position: absolute; inset: 0; background: #fff; animation: xf-flash 0.4s ease-out forwards; }
 @keyframes xf-flash { from { opacity: 0.55; } to { opacity: 0; } }
 /* the two devices and the line between them */
-.xf-stage { --c: var(--accent); position: relative; display: flex; align-items: center; justify-content: center; gap: 0; height: 118px; margin: 4px 0 2px; }
+.xf-stage { --c: var(--accent); position: relative; display: flex; align-items: center; justify-content: center; gap: 0; height: 132px; margin: 10px 0 18px; }
 .xf-stage[hidden] { display: none; }
 .xf-dev { position: relative; z-index: 1; display: grid; place-items: center; flex: none; width: 76px; height: 76px; transition: transform 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.3); }
 .xf-dev .xf-glyph { position: relative; z-index: 2; display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; background: var(--card); box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.35), 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); transition: color 0.3s, background 0.3s; }
 .xf-dev .xf-glyph svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.xf-dev small { position: absolute; top: calc(100% + 2px); left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.xf-dev small { position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .xf-halo { position: absolute; inset: 6px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--c) 32%, transparent), transparent 68%); opacity: 0; transition: opacity 0.4s; }
 .xf-pr { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
 .xf-pr circle { fill: none; stroke-width: 3; stroke: transparent; }
@@ -1903,7 +1905,7 @@ html.pan-lock, html.pan-lock body { overscroll-behavior: none; }
 .xf-stage.is-error { --c: var(--danger); }
 .xf-stage.is-error .xf-line { opacity: 0.35; background: repeating-linear-gradient(90deg, var(--c) 0 6px, transparent 6px 13px); }
 /* the numbers while it runs */
-.xf-pct { margin: -4px 0 2px; font: 700 40px/1 system-ui, -apple-system, sans-serif; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.xf-pct { margin: 4px 0 6px; font: 700 40px/1 system-ui, -apple-system, sans-serif; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
 .xf-pct span { margin-left: 2px; font-size: 22px; color: var(--muted); }
 .xf-pct[hidden] { display: none; }
 .xf-bar { position: relative; height: 6px; }
@@ -1916,3 +1918,5 @@ html.pan-lock, html.pan-lock body { overscroll-behavior: none; }
 @media (prefers-reduced-motion: reduce) {
   .xf-wave, .xf-scan, .xf-aim, .xf-bar i::after, .xf-halo, .xf-pulse { animation: none !important; }
 }
+.xf-run .xf-sub { margin-top: 2px; }
+.xfer .xf-body { gap: 12px; padding-bottom: 26px; }

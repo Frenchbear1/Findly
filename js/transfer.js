@@ -18,7 +18,28 @@ const PEER_OPTS = () => ({ debug: 0, ...(globalThis.__peerOpts || {}) });
 const peerId = (code) => `findly-xfer-${code.toLowerCase()}`;
 const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => ALPHA[b % ALPHA.length]).join('');
 const fmt = (b) => (b < 1048576 ? `${Math.max(b ? 1 : 0, Math.round(b / 1024))} KB` : b < 1073741824 ? `${(b / 1048576).toFixed(b < 10485760 ? 1 : 0)} MB` : `${(b / 1073741824).toFixed(2)} GB`);
-const device = () => (platform === 'ios' ? (/iPad/.test(navigator.userAgent) || navigator.maxTouchPoints > 1 && /Mac/.test(navigator.userAgent) ? 'iPad' : 'iPhone') : platform === 'windows' ? 'Windows PC' : /Android/i.test(navigator.userAgent) ? 'Android device' : /iPhone|iPad/i.test(navigator.userAgent) ? 'iPhone' : /Mac/i.test(navigator.platform) ? 'Mac' : 'computer');
+// What this device is, as the other one will show it: its kind (for the picture) and a name.
+const ua = navigator.userAgent;
+function deviceKind() {
+  const touchMac = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1; // an iPad asking for the desktop site
+  if (platform === 'ios') return /iPad/.test(ua) || touchMac ? 'ipad' : 'iphone';
+  if (platform === 'windows') return 'windows';
+  if (/iPad/.test(ua) || touchMac) return 'ipad';
+  if (/iPhone|iPod/.test(ua)) return 'iphone';
+  if (/Android/i.test(ua)) return /Mobile/i.test(ua) ? 'android' : 'android-tablet';
+  if (/CrOS/.test(ua)) return 'chromebook';
+  const p = navigator.userAgentData?.platform || navigator.platform || '';
+  if (/Mac/i.test(p) || /Macintosh/.test(ua)) return 'mac';
+  if (/Win/i.test(p) || /Windows/.test(ua)) return 'windows';
+  if (/Linux|X11/i.test(p + ua)) return 'linux';
+  return 'computer';
+}
+const KIND_NAME = { iphone: 'iPhone', ipad: 'iPad', android: 'Android phone', 'android-tablet': 'Android tablet', mac: 'Mac', windows: 'Windows PC', chromebook: 'Chromebook', linux: 'Linux PC', computer: 'Computer' };
+const device = () => KIND_NAME[deviceKind()];
+// the model, where the browser will say (Android: "Pixel 8"), worked out once
+let modelName = null;
+(async () => { try { const v = await navigator.userAgentData?.getHighEntropyValues?.(['model']); if (v?.model) modelName = v.model; } catch {} })();
+const me = () => ({ kind: deviceKind(), name: modelName || device() });
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const keepAwake = (on) => { if (isNative) Files.keepAwake?.({ on }).catch?.(() => {}); };
@@ -42,20 +63,27 @@ const loadPeer = () => load('vendor/transfer/peerjs.min.js', 'peerjs').then((m) 
 // slide in as the last ones slip away.
 const GLYPH = {
   phone: '<svg viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/><path d="M10.5 5h3"/></svg>',
+  tablet: '<svg viewBox="0 0 24 24"><rect x="4" y="2.5" width="16" height="19" rx="2.4"/><path d="M11 18.5h2"/></svg>',
   laptop: '<svg viewBox="0 0 24 24"><rect x="4.5" y="5" width="15" height="10.5" rx="1.6"/><path d="M2.5 18.5h19"/></svg>',
+  desktop: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="1.8"/><path d="M9 20h6M12 16v4"/></svg>',
+  unknown: '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="11" height="9" rx="1.5"/><rect x="15.5" y="8" width="5.5" height="10" rx="1.5"/><path d="M6 18.5h5"/></svg>',
 };
-const glyphFor = (name) => (/iPhone|Android|iPad/i.test(name || '') ? GLYPH.phone : GLYPH.laptop);
+const KIND_GLYPH = { iphone: 'phone', android: 'phone', ipad: 'tablet', 'android-tablet': 'tablet', mac: 'laptop', chromebook: 'laptop', windows: 'desktop', linux: 'desktop', computer: 'laptop' };
+// (older versions of the app only send a name: work the picture out from that)
+const kindFromName = (n) => (/iPad|tablet/i.test(n) ? 'ipad' : /iPhone|Android|phone/i.test(n) ? 'iphone' : /Mac/i.test(n) ? 'mac' : /Windows|PC/i.test(n) ? 'windows' : n ? 'computer' : '');
+const glyphFor = (kind) => GLYPH[KIND_GLYPH[kind]] || GLYPH.unknown;
 const reduce = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 let current = null; // one transfer at a time
 function panel(kind) {
   const title = kind === 'send' ? 'Send to another device' : 'Receive from another device';
-  const me = device();
+  const self = me();
   const d = document.createElement('dialog');
   d.className = 'xfer';
-  const dev = (side, name, label) => `<div class="xf-dev ${side}"><div class="xf-halo"></div><svg class="xf-pr" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29"/><circle class="v" cx="32" cy="32" r="29" pathLength="100"/></svg><div class="xf-glyph">${glyphFor(name)}</div><svg class="xf-ok" viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9" pathLength="100"/></svg><small>${esc(label)}</small></div>`;
+  const dev = (side, k, label) => `<div class="xf-dev ${side}"><div class="xf-halo"></div><svg class="xf-pr" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29"/><circle class="v" cx="32" cy="32" r="29" pathLength="100"/></svg><div class="xf-glyph">${glyphFor(k)}</div><svg class="xf-ok" viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9" pathLength="100"/></svg><small>${esc(label)}</small></div>`;
   // the sender's always on the left, the receiver on the right: documents flow left to right
-  const left = kind === 'send' ? dev('a', me, `This ${me}`) : dev('a', '', 'Other device');
-  const right = kind === 'send' ? dev('b', '', 'Other device') : dev('b', me, `This ${me}`);
+  const mine = `This ${self.name}`;
+  const left = kind === 'send' ? dev('a', self.kind, mine) : dev('a', '', 'Other device');
+  const right = kind === 'send' ? dev('b', '', 'Other device') : dev('b', self.kind, mine);
   d.innerHTML = `<div class="xf-head"><h3>${esc(title)}</h3><button class="xf-stop" data-cancel hidden>Stop</button><button class="icon-btn sm" data-x aria-label="Hide"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button></div>
     <div class="xf-body"><div class="xf-stage" hidden>${left}<div class="xf-link"><i class="xf-line"></i><div class="xf-flow"></div><b class="xf-pulse"></b></div>${right}</div><div class="xf-info"></div></div>
     <div class="xf-foot" hidden><button class="btn primary" data-hide>Keep using the app</button></div>`;
@@ -163,12 +191,13 @@ function panel(kind) {
     // the pill's words when the sheet is tucked away and nothing is being sent yet
     note(text) { if (!t.active) { pill.querySelector('span').textContent = text; pill.querySelector('.v').style.strokeDasharray = '0 100'; } },
     // the other device introduced itself: show it by name
-    other(name) {
+    other(name, k) {
       const side = kind === 'send' ? 'b' : 'a';
       const host = stage.querySelector(`.xf-dev.${side}`);
-      host.querySelector('.xf-glyph').innerHTML = glyphFor(name);
+      host.querySelector('.xf-glyph').innerHTML = glyphFor(k || kindFromName(name));
+      host.animate([{ transform: 'scale(0.85)', opacity: 0.4 }, { transform: 'none', opacity: 1 }], { duration: 380, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1.4)' });
       const n = String(name || '').replace(/^an? /i, '');
-      host.querySelector('small').textContent = n.charAt(0).toUpperCase() + n.slice(1);
+      host.querySelector('small').textContent = n === n.toLowerCase() ? n.charAt(0).toUpperCase() + n.slice(1) : n; // ("computer" → "Computer", but iPhone stays iPhone)
     },
     // something went wrong: say what, and offer to start again
     fail(msg, retry) {
@@ -314,13 +343,13 @@ export async function receive({ reload }) {
           if (session) { c.close(); return; } // already busy with another device
           conn = c;
           session = msg.sid;
-          t.other(msg.from);
+          t.other(msg.from, msg.kind);
           // the usual: just what's new or changed, added to what's here; or start over with exactly what the other device has
-          const pick = await choose(t, `<p class="xf-big">A ${esc(msg.from)} wants to send its library (${msg.docs} document${msg.docs === 1 ? '' : 's'}).</p>`);
+          const pick = await choose(t, `<p class="xf-big">${/^[aeiou]/i.test(msg.from) ? 'An' : 'A'} ${esc(msg.from)} wants to send its library (${msg.docs} document${msg.docs === 1 ? '' : 's'}).</p>`);
           if (!pick) { c.send(JSON.stringify({ t: 'no' })); t.destroy(); stop(); return; }
           mode = pick;
           t.set('<p class="xf-big">Comparing libraries…</p><p class="xf-sub">Working out what’s new</p>', 'linked');
-          c.send(JSON.stringify({ t: 'go', mode, from: device(), have: mode === 'merge' ? await inventory() : null }));
+          c.send(JSON.stringify({ t: 'go', mode, from: me().name, kind: me().kind, have: mode === 'merge' ? await inventory() : null }));
         } else if (msg.t === 'resume' && msg.sid === session) {
           // the same transfer, after a dropped connection: carry on from what arrived
           conn = c;
@@ -429,7 +458,7 @@ export async function send({ code: given = '' } = {}) {
       else {
         t.set('<p class="xf-big">Connected</p><p class="xf-sub">Waiting for the other device to accept…</p>', 'linked');
         t.note('Waiting for the other device…');
-        c.send(JSON.stringify({ t: 'hello', sid, from: device(), docs: stream.summary.docs }));
+        c.send(JSON.stringify({ t: 'hello', sid, from: me().name, kind: me().kind, docs: stream.summary.docs }));
       }
     });
     c.on('data', async (m) => {
@@ -437,7 +466,7 @@ export async function send({ code: given = '' } = {}) {
       const msg = JSON.parse(m);
       if (msg.t === 'no') t.finish('<p class="xf-sub">The other device said no.</p>');
       else if (msg.t === 'go') {
-        if (msg.from) t.other(msg.from);
+        if (msg.from) t.other(msg.from, msg.kind);
         t.set('<p class="xf-big">Accepted</p><p class="xf-sub">Working out what to send…</p>', 'linked');
         try { stream = await backupStream({ have: msg.mode === 'merge' ? msg.have || [] : null }); } catch (e) { t.set(`<p class="xf-err">Couldn’t read your library: ${esc(e?.message || e)}</p>`, 'error'); return; }
         c.send(JSON.stringify({ t: 'size', size: stream.size, sending: stream.summary.sending }));
