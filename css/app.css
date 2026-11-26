@@ -1747,7 +1747,7 @@ html, body { overflow-anchor: none; }
 
 /* while a popup is up the page behind stays put (see watchPopups); popups don't hand their scrolling on to it */
 dialog, .pop-menu, #themeBar, .sidebar, .outline, dialog *, .pop-menu *, #themeBar *, .sidebar *, .outline * { overscroll-behavior: contain; }
-@media (pointer: coarse) { html.scroll-lock, html.scroll-lock body { overflow: hidden; } }
+@media (pointer: coarse) { html.scroll-lock { overflow: hidden; } } /* the root only: hiding the body's overflow too would make it a scroller of its own, and the sticky bars and headers would jump */
 /* no double-tap zoom anywhere (pinching still zooms); touch-action narrows down the tree, so this covers everything */
 html { touch-action: manipulation; }
 /* iPhones zoom in on any text box whose writing is smaller than 16px when you tap into it: on touch screens every

@@ -208,9 +208,10 @@ async function markOlderDocs() {
   const gaveUp = crashed && docById(crashed);
   if (gaveUp && gaveUp.marksV !== MARKS_V) { gaveUp.marksV = MARKS_V; gaveUp.marks = null; store.updateDoc(stripMeta(gaveUp)).catch(() => {}); }
   const todo = S.docs.filter((d) => d.kind === 'pdf' && !d.status && d.marksV !== MARKS_V && S.texts.has(d.id));
+  let changed = false;
   for (const d of todo) {
-    // only while you're not scrolling, one document at a time
-    while (performance.now() - lastScrollAt < 3000 || document.hidden) await new Promise((r) => setTimeout(r, 1000));
+    // only while you're not using the app (scrolling anywhere, touching, typing), one document at a time
+    while (performance.now() - Math.max(lastScrollAt, lastTouchAt) < 3000 || document.hidden) await new Promise((r) => setTimeout(r, 1000));
     if (!S.docs.includes(d) || d.status) continue;
     try {
       const bytes = await pdfSource(d.id);
@@ -223,10 +224,19 @@ async function markOlderDocs() {
       d.marksV = MARKS_V;
       store.updateDoc(stripMeta(d)).catch(() => {});
       sendMarks(d);
-      if (prefs.where && prefs.where !== 'any' && S.matcher) runSearch();
+      changed = true;
     } catch { try { localStorage.removeItem(KEY); } catch {} }
   }
+  // A search looking only in headings or captions picks up the new ones once, at the end, and only when you've
+  // left the app alone for a while: never a refresh under your finger (it used to run again after every document,
+  // rebuilding the results and the pages panel mid-scroll and closing pages you'd swiped to).
+  if (!changed) return;
+  while (performance.now() - Math.max(lastScrollAt, lastTouchAt) < 8000 || document.hidden) await new Promise((r) => setTimeout(r, 1000));
+  if (prefs.where && prefs.where !== 'any' && S.matcher && !$$('#results .page.visit').length) runSearch({ keepScroll: true });
 }
+// the last time you touched, clicked, scrolled anything (a side panel too) or typed
+let lastTouchAt = 0;
+for (const ev of ['pointerdown', 'touchstart', 'wheel', 'keydown', 'scroll']) addEventListener(ev, () => { lastTouchAt = performance.now(); }, { capture: true, passive: true });
 // A group is one section: a whole document, or (when ranking pages) a single hit page and the pages opened around it.
 const groupKey = (R, doc) => (R?.flat ? pkey(doc.id, R.pages[0].n) : doc.id);
 const searchable = (d) => !d.status;
