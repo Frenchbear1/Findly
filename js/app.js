@@ -178,6 +178,16 @@ function orderedDocs() {
   return out;
 }
 const pkey = (docId, n) => `${docId}:${n}`;
+// What a document is called in the app: its file name, or (Settings › Document names, or that document's own
+// choice in its ••• menu) the full title, document number or abbreviation the AI found for it, when it has one.
+const NAME_KINDS = { file: 'File name', title: 'Full title', number: 'Document number', abbr: 'Abbreviation' };
+const NAME_FALLBACK = { title: ['title'], number: ['number', 'title'], abbr: ['abbr', 'number', 'title'] };
+function shownName(d) {
+  if (!d) return '';
+  const want = d.nameAs || prefs.nameAs || 'file';
+  for (const k of NAME_FALLBACK[want] || []) if (d.names?.[k]) return d.names[k];
+  return d.name;
+}
 // A page's number as the document prints it ("2-4", "iv"), or its position when it doesn't say.
 const plabel = (doc, n) => doc?.labels?.[n] || String(n + 1);
 const LABELS_V = 2; // 2: chapter title pages numbered (8-1 before 8-2)
@@ -2307,7 +2317,7 @@ function docHeadHtml(v, doc, R) {
   const count = S.texts.get(doc.id)?.length || 0;
   if (R?.flat) {
     const f = folderOf(doc);
-    return `<span class="ftype ${doc.kind}">${KIND_LABEL[doc.kind] || 'TXT'}</span><h2 title="${esc(doc.name)}">${esc(doc.name)}</h2>${f ? `<span class="dfolder" title="Folder">${I.folder}${esc(f.name)}</span>` : ''}<span class="grow"></span>`;
+    return `<span class="ftype ${doc.kind}">${KIND_LABEL[doc.kind] || 'TXT'}</span><h2 title="${esc(doc.name)}">${esc(shownName(doc))}</h2>${f ? `<span class="dfolder" title="Folder">${I.folder}${esc(f.name)}</span>` : ''}<span class="grow"></span>`;
   }
   const stat = R && webMode(doc, R) ? `<b class="dcount" title="${plural(R.hits, 'hit')}">${fmt(R.hits)}</b>`
     : R
@@ -2316,7 +2326,7 @@ function docHeadHtml(v, doc, R) {
   const btn = '';
   const f = folderOf(doc);
   const where = f ? `<span class="dfolder" title="Folder">${I.folder}${esc(f.name)}</span>` : '';
-  return `<span class="ftype ${doc.kind}">${KIND_LABEL[doc.kind] || 'TXT'}</span><h2 title="${esc(doc.name)}">${esc(doc.name)}</h2>${where}<span class="dstat">${stat}</span><span class="grow"></span>${btn}`;
+  return `<span class="ftype ${doc.kind}">${KIND_LABEL[doc.kind] || 'TXT'}</span><h2 title="${esc(doc.name)}">${esc(shownName(doc))}</h2>${where}<span class="dstat">${stat}</span><span class="grow"></span>${btn}`;
 }
 
 function sectionEl(v, doc, R) {
@@ -2878,7 +2888,7 @@ function updateOutline() {
   if (v.list[0]?.flat) {
     const rows = v.list.slice(0, 400).map((R, i) => {
       const p = R.pages[0];
-      return `<button class="ol-row" data-doc="${R.doc.id}" data-n="${p.n}" title="${esc(R.doc.name)} · page ${esc(plabel(R.doc, p.n))}"><span class="ol-rank">${i + 1}</span><span class="ol-where"><b>p. ${esc(plabel(R.doc, p.n))}</b><span>${esc(R.doc.name)}</span></span><em>${fmt(R.hits)}</em></button>`;
+      return `<button class="ol-row" data-doc="${R.doc.id}" data-n="${p.n}" title="${esc(shownName(R.doc))} · page ${esc(plabel(R.doc, p.n))}"><span class="ol-rank">${i + 1}</span><span class="ol-where"><b>p. ${esc(plabel(R.doc, p.n))}</b><span>${esc(shownName(R.doc))}</span></span><em>${fmt(R.hits)}</em></button>`;
     }).join('');
     const more = v.list.length > 400 ? `<span class="ol-more">+${fmt(v.list.length - 400)} more pages</span>` : '';
     setHTML(box, `<div class="ol-title">Pages by hits</div><div class="ol-rows">${rows}${more}</div>`);
@@ -2913,7 +2923,7 @@ function docItemHtml(d, hits) {
   const h = S.matcher && d.enabled && !d.status ? `<span class="lhits${hits.get(d.id) ? '' : ' zero'}">${fmt(hits.get(d.id) || 0)}</span>` : '';
   return `<li class="lib-item${d.enabled ? ' on' : ''}${d.status ? ' busy' : ''}${reader.docId === d.id && active === reader ? ' reading' : ''}" data-id="${d.id}">
     <label class="chk" title="Include in search"><input type="checkbox" ${d.enabled ? 'checked' : ''} ${d.status ? 'disabled' : ''}><span></span></label>
-    <button class="lib-main" data-act="read" title="${esc(d.name)}" draggable="false"><span class="lname">${esc(d.name)}</span><span class="lmeta"><span class="ftype ${d.kind}">${KIND_LABEL[d.kind]}</span>${meta}</span></button>
+    <button class="lib-main" data-act="read" title="${esc(d.name)}" draggable="false"><span class="lname">${esc(shownName(d))}</span><span class="lmeta"><span class="ftype ${d.kind}">${KIND_LABEL[d.kind]}</span>${meta}</span></button>
     ${h}
     <span class="lib-acts"><button class="mini" data-act="solo" title="Search only this document">${I.target}</button><button class="mini" data-act="dmenu" title="More">${I.more}</button></span>
     ${d.status === 'indexing' ? `<div class="prog"><i style="width:${Math.round((d.progress || 0) * 100)}%"></i></div>` : ''}
@@ -3687,6 +3697,7 @@ function docMenu(anchor, id) {
       }] : []),
     ] : []),
     { sep: true },
+    { label: 'Show its name as', sub: d.nameAs ? NAME_KINDS[d.nameAs] : 'As in Settings', icon: I.pencil, submenu: () => nameAsItems(d) },
     { label: 'Rearrange', icon: I.arrows, disabled: !!d.status, submenu: () => rearrangeDocItems(id) },
     { label: 'Move to folder', icon: I.folder, submenu: () => moveItems(d).slice(1) },
     { sep: true },
@@ -3930,11 +3941,22 @@ function helperProblem(err) {
 }
 
 // Add one document from a link (download → read → save). Shows progress in the library.
+// a document's own choice of name, overriding Settings › Document names
+function nameAsItems(d) {
+  const set = (v) => { d.nameAs = v; store.updateDoc(stripMeta(d)).catch(() => {}); renderLibrary(); runSearch({ keepScroll: true }); };
+  const items = [{ label: `As in Settings (${NAME_KINDS[prefs.nameAs || 'file']})`, checked: !d.nameAs, run: () => set(null) }, { label: 'File name', sub: d.name, checked: d.nameAs === 'file', run: () => set('file') }];
+  for (const k of ['title', 'number', 'abbr']) if (d.names?.[k]) items.push({ label: NAME_KINDS[k], sub: d.names[k], checked: d.nameAs === k, run: () => set(k) });
+  if (!d.names) items.push({ label: 'No other names yet', sub: 'Add documents › Find documents with AI › Name my documents', disabled: true });
+  return items;
+}
+// names the AI gave for documents still downloading (by their file link)
+const aiNamesFor = new Map();
 function addRemote(url, { folderId = null, linkText = '', note = '', page = '', info = null, quiet = false } = {}) {
   const name = linkText ? nameFromLink(linkText, url, info?.type) : fileNameFor(url, info?.type);
   const kind = kindOf(name) || 'html';
   const order = S.docs.reduce((m, d) => Math.max(m, d.order || 0), 0) + 1;
   const meta = { id: uid(), name, kind, size: info?.size || 0, addedAt: Date.now(), order, enabled: true, status: 'indexing', phase: 'download', progress: 0, v: EXTRACTOR_VERSION, folderId, source: { url, linkText, note, page } };
+  for (const [u, nm] of aiNamesFor) if (sameUrl(u, url)) { meta.names = nm; aiNamesFor.delete(u); break; }
   S.docs.push(meta);
   renderLibrary();
   queue = queue.then(async () => {
@@ -4551,6 +4573,20 @@ function fillAiBox() {
     const n = all.filter((d) => d.folderId === f.id).length;
     if (n) opts.push(`<option value="f:${f.id}">Folder “${esc(f.name)}” (${fmt(n)})</option>`);
   }
+  // Name my documents: any of them, linked or not
+  const named = S.docs.filter((d) => !d.status);
+  const noNames = named.filter((d) => !d.names);
+  const nopts = [`<option value="all">All documents (${fmt(named.length)})</option>`];
+  if (noNames.length && noNames.length < named.length) nopts.push(`<option value="unnamed">Only ones without names yet (${fmt(noNames.length)})</option>`);
+  for (const f of S.folders) {
+    const n = named.filter((d) => d.folderId === f.id).length;
+    if (n) nopts.push(`<option value="f:${f.id}">Folder “${esc(f.name)}” (${fmt(n)})</option>`);
+  }
+  const whichN = $('#aiWhichN');
+  const wasN = whichN.value;
+  whichN.innerHTML = nopts.join('');
+  if ([...whichN.options].some((o) => o.value === wasN)) whichN.value = wasN;
+  else if (noNames.length && noNames.length < named.length) whichN.value = 'unnamed';
   const which = $('#aiWhich');
   const was = which.value;
   which.innerHTML = opts.join('');
@@ -4571,7 +4607,8 @@ function setAiMode(m) {
   aiMode = m;
   $$('#aiMode button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.m === m)));
   $$('#aiBox [data-for]').forEach((x) => (x.hidden = x.dataset.for !== m));
-  $('#aiGo').disabled = $('#aiCopy').disabled = m === 'link' && !unlinked().length;
+  $('#aiGo').disabled = $('#aiCopy').disabled = (m === 'link' && !unlinked().length) || (m === 'names' && !S.docs.some((d) => !d.status));
+  $('#aiAnswer').placeholder = m === 'names' ? 'name | NUMBER: … | TITLE: … | ABBR: …' : 'name | PAGE: https://… | FILE: https://…';
 }
 function setAiStatus(msg, err) {
   const s = $('#aiStatus');
@@ -4611,8 +4648,13 @@ For each file give:
 
 Several of my files often come from the same page — for example one handbook page that lists the whole book and every chapter separately, or a page listing a manual and each of its changes. That's expected: still write one line per file, repeat the same PAGE on each of those lines, and give each line the FILE link for that particular file (the chapter's own link for a chapter, the whole-book link only for the whole book). Match by what the file is (its title and opening words), not just its name. Never put two of my files on the same FILE link unless they really are the same document.
 
+Also give each document's names, from the document itself or its publisher (write NONE for any it doesn't have):
+- NUMBER: its official number or designation, e.g. FAA-H-8083-25C, AC 91-48, 14 CFR Part 91
+- TITLE: its full written-out title, e.g. Pilot's Handbook of Aeronautical Knowledge
+- ABBR: the abbreviation people usually call it, e.g. PHAK, AFH, AIM
+
 Reply with one code block and nothing else, one line per file, in exactly this format, with the file name copied exactly as I wrote it:
-<file name> | PAGE: <link or NOT FOUND> | FILE: <link or NOT FOUND>
+<file name> | PAGE: <link or NOT FOUND> | FILE: <link or NOT FOUND> | NUMBER: <number or NONE> | TITLE: <title or NONE> | ABBR: <abbreviation or NONE>
 
 My files (folder names, page counts and opening words are there to help you identify them):
 
@@ -4639,8 +4681,30 @@ For US federal regulations (the CFR, such as the FARs in Title 14), list each pa
 
 I already have these, so leave them out: ${have.join('; ')}` : ''}
 
+Also give each document's names (NONE for any it doesn't have): NUMBER, its official number or designation (e.g. FAA-H-8083-25C, AC 91-48, 14 CFR Part 91); TITLE, its full written-out title; ABBR, the abbreviation people usually call it (e.g. PHAK, AIM).
+
 Reply with one code block and nothing else, in exactly this format:
-<title> | PAGE: <link or NOT FOUND> | FILE: <link>`;
+<title> | PAGE: <link or NOT FOUND> | FILE: <link> | NUMBER: <number or NONE> | TITLE: <title or NONE> | ABBR: <abbreviation or NONE>`;
+}
+// names only, for documents already in the library (linked or not): nothing is relinked
+function aiNamesPrompt(docs) {
+  const opening = (d) => {
+    const t = openingOf(d.id).replace(/\s+/g, ' ').trim().slice(0, 120);
+    return t ? ` — begins “${t.replace(/["“”]/g, '')}…”` : '';
+  };
+  const line = (d) => `- ${d.name}${d.source?.url ? ` (from ${d.source.url})` : ''}${opening(d)}`;
+  return `I keep the documents listed below in a document search app. For each one, tell me its names, from the document itself or its publisher. Use the opening words and links to identify each one; search the web to confirm if you need to. Write NONE for any name a document doesn't have, and never make one up.
+
+- NUMBER: its official number or designation, e.g. FAA-H-8083-25C, AC 91-48, 14 CFR Part 91, Order 8900.1
+- TITLE: its full written-out title, e.g. Pilot's Handbook of Aeronautical Knowledge
+- ABBR: the abbreviation people usually call it, e.g. PHAK, AFH, AIM, IFH
+
+Reply with one code block and nothing else, one line per document, in exactly this format, with the file name copied exactly as I wrote it:
+<file name> | NUMBER: <number or NONE> | TITLE: <title or NONE> | ABBR: <abbreviation or NONE>
+
+My documents:
+
+${docs.map(line).join('\n')}`;
 }
 function copyText(text) {
   const ta = document.createElement('textarea');
@@ -4664,6 +4728,13 @@ function aiCopy(go) {
     if (!ask) { setAiStatus('Write what you’re looking for first.', true); $('#aiAsk').focus(); return; }
     text = aiNewPrompt(ask);
     what = 'your request';
+  } else if (aiMode === 'names') {
+    const v = $('#aiWhichN').value;
+    const all = S.docs.filter((d) => !d.status);
+    const docs = v === 'unnamed' ? all.filter((d) => !d.names) : v.startsWith('f:') ? all.filter((d) => d.folderId === v.slice(2)) : all;
+    if (!docs.length) return;
+    text = aiNamesPrompt(docs);
+    what = plural(docs.length, 'document name');
   } else {
     const docs = aiFiles();
     if (!docs.length) return;
@@ -4701,7 +4772,7 @@ function parseAiAnswer(text) {
   const out = [];
   for (let line of String(text || '').split(/\r?\n/)) {
     line = line.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').trim();
-    if (!line.includes('|') || !/(PAGE|FILE)\s*:/i.test(line)) continue;
+    if (!line.includes('|') || !/(PAGE|FILE|NUMBER|TITLE|ABBR)\s*:/i.test(line)) continue;
     const parts = line.split('|').map((s) => s.trim());
     const name = parts[0].replace(/^[`"'*“”]+|[`"'*“”]+$/g, '').trim();
     const get = (k) => {
@@ -4709,7 +4780,13 @@ function parseAiAnswer(text) {
       const m = p && p.match(/https?:\/\/[^\s<>()"'`\[\]]+/i);
       return m ? cleanUrl(m[0].replace(/[.,;:]+$/, '')) : '';
     };
-    if (name) out.push({ name, page: get('PAGE'), file: get('FILE') });
+    const text = (k) => {
+      const p = parts.find((x) => new RegExp(`^\\**${k}\\**\\s*:`, 'i').test(x));
+      const v = p ? p.replace(/^[^:]*:\s*/, '').replace(/^[`"'*“”]+|[`"'*“”]+$/g, '').trim() : '';
+      return /^(none|not found|n\/?a|-|—|unknown)$/i.test(v) ? '' : v.slice(0, 160);
+    };
+    const names = { number: text('NUMBER'), title: text('TITLE'), abbr: text('ABBR') };
+    if (name) out.push({ name, page: get('PAGE'), file: get('FILE'), names: names.number || names.title || names.abbr ? names : null });
   }
   return out;
 }
@@ -4883,6 +4960,21 @@ async function linkWithAi() {
   }
   const norm = (s) => String(s).toLowerCase().replace(/\.[a-z0-9]{2,5}$/, '').replace(/[^a-z0-9]+/g, '');
   const pool = S.docs.filter((d) => !d.status);
+  // names first: they go straight onto the documents they're for (and onto new ones once they've downloaded)
+  let named = 0;
+  for (const it of items) {
+    if (!it.names) continue;
+    const d = pool.find((x) => x.name === it.name) || pool.find((x) => norm(x.name) === norm(it.name));
+    if (d) { d.names = { ...(d.names || {}), ...Object.fromEntries(Object.entries(it.names).filter(([, v]) => v)) }; store.updateDoc(stripMeta(d)).catch(() => {}); named++; }
+    else if (it.file) aiNamesFor.set(it.file, it.names);
+  }
+  if (named) renderLibrary();
+  if (!items.some((it) => it.page || it.file)) { // a names-only answer: done
+    $('#linkDlg').close();
+    if (named) runSearch({ keepScroll: true });
+    toast(named ? `Names added to ${plural(named, 'document')}. Settings › Document names picks which the app shows.` : 'None of those names matched a document in your library.', { ms: 5000 });
+    return;
+  }
   const rows = [];
   const groups = { ok: [], warn: [], bad: [], unsure: [], already: [], missing: [], fresh: [], freshBad: [], blocked: [] };
   // the download helper refuses sites that aren't in its list: collect them for one clear fix
@@ -5409,6 +5501,7 @@ function openSettings() {
       <div class="set-body">
         ${group('Appearance', [
           row('theme', palette, 'Reading theme', 'Colours, paper, accent, transparency and blur'),
+          `<div class="set-row static"><span class="set-ic">${I.pencil}</span><span class="set-t"><b>Document names</b><small>${S.docs.some((d) => d.names) ? 'What documents are called throughout the app (a document’s ••• menu can choose its own)' : 'Get titles, numbers and abbreviations with Add documents › Find documents with AI › Name my documents'}</small></span><span class="seg small set-seg">${[['file', 'File'], ['title', 'Title'], ['number', 'Number'], ['abbr', 'Abbr.']].map(([v, l]) => `<button type="button" data-s="nm-${v}" aria-pressed="${(prefs.nameAs || 'file') === v}">${l}</button>`).join('')}</span></div>`,
         ])}
         ${group('Reading', [
           `<div class="set-row static"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M9 3.5h6M9 20.5h6"/></svg></span><span class="set-t"><b>Opening cropped pages</b><small>${prefs.expand === 'drag' ? 'Drag the bars on a cropped page to pull it open' : 'Tap the arrows on a cropped page to open it'}</small></span><span class="seg small set-seg"><button type="button" data-s="xb" aria-pressed="${prefs.expand !== 'drag'}">Buttons</button><button type="button" data-s="xd" aria-pressed="${prefs.expand === 'drag'}">Drag</button></span></div>`,
@@ -5474,6 +5567,14 @@ function openSettings() {
         body._pieceSig = null;
         applyCrop(art);
       }
+      return;
+    }
+    if (k.startsWith('nm-')) {
+      prefs.nameAs = k.slice(3);
+      savePrefs();
+      b.closest('.set-row').querySelectorAll('[data-s^="nm-"]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      renderLibrary();
+      runSearch({ keepScroll: true });
       return;
     }
     if (k.startsWith('pn-')) {
