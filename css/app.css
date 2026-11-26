@@ -1755,3 +1755,8 @@ html { touch-action: manipulation; }
 @media (pointer: coarse) {
   input:not([type="range"], [type="checkbox"], [type="radio"], [type="color"], [type="file"]), textarea, select, [contenteditable]:not([contenteditable="false"]) { font-size: max(16px, 1em) !important; }
 }
+
+/* start-page examples swapping with the search type: the old set, fading away over the new one */
+.tips { position: relative; }
+.tips-ghost { position: absolute; inset: 0 0 auto 0; pointer-events: none; z-index: 1; background: inherit; }
+.tip-mode { display: inline-block; padding: 2px 9px; border-radius: 7px; background: var(--accent-soft); color: var(--accent); font-weight: 650; }

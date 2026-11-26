@@ -2279,6 +2279,69 @@ function emptyLibrary() {
   return box;
 }
 
+// The examples on the start page are for the search type that's picked, and change (animated) with it.
+function tipsFor(mode) {
+  const near = Number(prefs.near) || 8;
+  const T = {
+    any: [
+      ['stall spin', 'Pages with either word, or both'],
+      ['METAR TAF SIGMET', 'List other names for it to cast a wide net'],
+      ['"fuel pump"', 'Quotes keep words together'],
+      ['hydraul*', 'A star matches any ending'],
+      ['-checklist', 'A minus leaves out pages with that word'],
+    ],
+    all: [
+      ['engine failure', 'Pages with both words, anywhere on the page'],
+      ['VFR minimums class E', 'Each word you add narrows it down'],
+      ['"fuel pump" magneto', 'Quotes keep words together'],
+      ['hydraul*', 'A star matches any ending'],
+      ['-checklist', 'A minus leaves out pages with that word'],
+    ],
+    phrase: [
+      ['engine failure after takeoff', 'These exact words, in this order'],
+      ['cleared for the option', 'Handy for a full line of phraseology'],
+      ['go-around', 'Any dash or curly quote style matches'],
+      ['hydraul* system', 'A star still matches any ending'],
+    ],
+    near: [
+      ['carburetor ice', `Both words within ${near} words of each other`],
+      ['spin recovery rudder', 'Every word close together, in any order'],
+      ['"angle of attack" stall', 'Quotes keep a phrase together'],
+      ['crosswind -landing', 'A minus leaves out pages with that word'],
+      ['Near', 'Tap the search type to change how close'],
+    ],
+    boolean: [
+      ['(stall OR spin) NOT training', 'AND, OR, NOT and parentheses, in capitals'],
+      ['VOR OR NDB OR GPS', 'Any one of them'],
+      ['"fuel pump" AND failure', 'Quotes keep words together'],
+      ['hydraul* AND NOT gear', 'A star matches any ending'],
+      ['(METAR OR TAF) AND (IFR OR LIFR)', 'Group as deep as you like'],
+    ],
+  }[mode] || [];
+  return T.map(([c, t]) => `<div>${c === 'Near' ? '<span class="tip-mode">Near</span>' : `<code>${esc(c)}</code>`}<span>${esc(t)}</span></div>`).join('')
+    + '<div><span class="keys"><kbd>Enter</kbd> <kbd>⇧ Enter</kbd></span><span>Jump between hits</span></div>';
+}
+// When the search type changes, the old examples lift away as the new ones settle in one by one, and the card
+// grows or shrinks smoothly to fit.
+let tipsLast = null;
+function animateTips(t) {
+  const prev = tipsLast;
+  tipsLast = { mode: t.dataset.mode, node: t, h: t.offsetHeight };
+  if (!prev || prev.mode === t.dataset.mode || !t.isConnected || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const ease = 'cubic-bezier(.25,.8,.3,1)';
+  const ghost = prev.node.cloneNode(true);
+  ghost.classList.add('tips-ghost');
+  ghost.style.height = prev.h + 'px';
+  t.style.overflow = 'hidden';
+  t.append(ghost);
+  ghost.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-10px)' }], { duration: 200, easing: 'ease-in', fill: 'forwards' }).onfinish = () => ghost.remove();
+  [...t.children].filter((c) => c !== ghost).forEach((c, i) => c.animate(
+    [{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'none' }],
+    { duration: 340, delay: 90 + i * 40, easing: ease, fill: 'backwards' },
+  ));
+  t.animate([{ height: prev.h + 'px' }, { height: tipsLast.h + 'px' }], { duration: 360, easing: ease }).onfinish = () => { t.style.overflow = ''; };
+}
+
 function idleState() {
   const ready = orderedDocs().filter(searchable);
   const scope = ready.filter((d) => d.enabled);
@@ -2291,15 +2354,10 @@ function idleState() {
   box.innerHTML = `
     <h3>${title}</h3>
     <p class="muted">Results show the actual pages, not snippets. Pages without hits are folded away — open them whenever you want to keep reading.</p>
-    <div class="tips">
-      <div><code>engine failure</code><span>All words mode finds pages with both words</span></div>
-      <div><code>"fuel pump"</code><span>Quotes keep words together</span></div>
-      <div><code>-checklist</code><span>A minus excludes pages with that word</span></div>
-      <div><code>hydraul*</code><span>A star matches any ending</span></div>
-      <div><code>(stall OR spin) NOT training</code><span>Boolean mode for full logic</span></div>
-      <div><span class="keys"><kbd>Enter</kbd> <kbd>⇧ Enter</kbd></span><span>Jump between hits</span></div>
-    </div>
+    <div class="tips" data-mode="${prefs.mode}">${tipsFor(prefs.mode)}</div>
     <div class="idle-docs">${ready.map((d) => `<button class="doc-card" data-act="read" data-doc="${d.id}"><span class="ftype ${d.kind}">${KIND_LABEL[d.kind]}</span><span class="dc-name">${esc(d.name)}</span><span class="dc-meta">${plural(S.texts.get(d.id)?.length || 0, 'page')}</span></button>`).join('')}</div>`;
+  const tips = box.querySelector('.tips');
+  requestAnimationFrame(() => animateTips(tips));
   return box;
 }
 
