@@ -81,12 +81,15 @@ async function unpack(v, bins, count) {
 
 // ---- syncing without duplicates ----
 // A document counts as already here when it's the same one (same id, same text) or the same text added separately
-// (same text fingerprint, or same name and size). A document with the same id but different text is an update.
+// (same text fingerprint, or same name and size). The same file — same size to the byte and the same number of
+// pages — counts too, even when its text differs: the iPhone reads scanned pages with Live Text and Windows
+// doesn't, so the very same PDF has different text (and so a different fingerprint) on each, and every scanned
+// document used to be sent again in full. A document with the same id and a different file is an update.
 export async function inventory() {
   if (!(await exists('instant-search'))) return [];
   const db = await openDb('instant-search');
   const out = [];
-  try { if (db.objectStoreNames.contains('docs')) await eachOf(db, 'docs', (d) => out.push({ id: d.id, name: d.name, size: d.size || 0, hash: d.hash || '' })); }
+  try { if (db.objectStoreNames.contains('docs')) await eachOf(db, 'docs', (d) => out.push({ id: d.id, name: d.name, size: d.size || 0, pages: d.pages || 0, hash: d.hash || '' })); }
   finally { db.close(); }
   return out;
 }
@@ -94,10 +97,12 @@ export function alreadyHere(have) {
   const byId = new Map(have.map((d) => [d.id, d]));
   const hashes = new Set(have.map((d) => d.hash).filter(Boolean));
   const named = new Set(have.map((d) => `${d.name}|${d.size}`));
+  const file = (d) => (d.size > 0 && d.pages > 0 ? `${d.size}|${d.pages}` : '');
+  const files = new Set(have.map(file).filter(Boolean));
   return (d) => {
     const mine = byId.get(d.id);
-    if (mine) return !!d.hash && mine.hash === d.hash;
-    return (d.hash && hashes.has(d.hash)) || named.has(`${d.name}|${d.size || 0}`);
+    if (mine) return (!!d.hash && mine.hash === d.hash) || (!!file(d) && file(mine) === file(d));
+    return (d.hash && hashes.has(d.hash)) || named.has(`${d.name}|${d.size || 0}`) || (!!file(d) && files.has(file(d)));
   };
 }
 const DOC_STORES = new Set(['docs', 'texts', 'files']);
@@ -261,7 +266,8 @@ export async function readBackup(file) {
     // the documents already here, so their details can be brought up to date without touching their files
     const mine = merge ? await localDocs() : [];
     const mineById = new Map(mine.map((d) => [d.id, d]));
-    const twin = (d) => mineById.get(d.id) || mine.find((m) => (d.hash && m.hash === d.hash) || (m.name === d.name && (m.size || 0) === (d.size || 0)));
+    const twin = (d) => mineById.get(d.id) || mine.find((m) => (d.hash && m.hash === d.hash) || (m.name === d.name && (m.size || 0) === (d.size || 0)))
+      || mine.find((m) => d.size > 0 && d.pages > 0 && m.size === d.size && m.pages === d.pages);
     for (const [name, { version, stores }] of Object.entries(header.dbs)) {
       // open at the backup's version so missing stores get made (same app, same versions); a newer app here
       // already has a higher version, so then just open it as it is
@@ -304,7 +310,9 @@ export async function readBackup(file) {
             const d = await unpack(rows[i], bins);
             const m = twin(d);
             if (m) {
-              const upd = m.id === d.id ? { ...m, ...d } : { ...m, ...Object.fromEntries(META.filter((k) => k in d).map((k) => [k, d[k]])) };
+              // the very same text: take everything; the same file read differently here (Live Text on one device only):
+              // only its details, so this device's own text, headings and fingerprint stay together
+              const upd = m.id === d.id && d.hash && m.hash === d.hash ? { ...m, ...d } : { ...m, ...Object.fromEntries(META.filter((k) => k in d).map((k) => [k, d[k]])) };
               if (JSON.stringify(upd) !== JSON.stringify(m)) { batch.push(upd); metaChanged++; }
             }
             step(); continue;

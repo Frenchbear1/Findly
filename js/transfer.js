@@ -223,11 +223,14 @@ function panel(kind) {
       setPhase(paused ? 'paused' : placing ? 'placing' : 'sending');
       // how fast: a gentle average, so it doesn't jitter
       const now = performance.now();
-      if (!paused && !placing && last && done > last.done && now > last.at) {
+      // (measured over at least a second: the connection takes a few MB at once whenever its buffer empties, and
+      // measuring across that burst showed impossible speeds like 900 MB/s)
+      if (paused || placing || !last || done < last.done) { if (!paused) last = { done, at: now }; }
+      else if (now - last.at >= 1000) {
         const r = ((done - last.done) / (now - last.at)) * 1000;
-        rate = rate ? rate * 0.7 + r * 0.3 : r;
+        rate = rate ? rate * 0.6 + r * 0.4 : r;
+        last = { done, at: now };
       }
-      if (!paused) last = { done, at: now };
       if (!info.querySelector('.xf-run')) {
         setInfo('<div class="xf-run"><p class="xf-big"></p><p class="xf-pct"><b>0</b><span>%</span></p><div class="xf-bar"><i></i></div><p class="xf-sub"></p></div>');
         shown = 0;
@@ -509,7 +512,9 @@ export async function send({ code: given = '' } = {}) {
     dc.bufferedAmountLowThreshold = 1 << 20;
     const drain = () => new Promise((ok) => { if (dc.bufferedAmount < 4 << 20 || dc.readyState !== 'open') return ok(); dc.addEventListener('bufferedamountlow', ok, { once: true }); setTimeout(ok, 5000); });
     sent = from;
-    t.status('Sending…', sent, stream.size);
+    const n = stream.summary.sending;
+    const what = n ? `Sending ${n} new or changed document${n === 1 ? '' : 's'}…` : 'Sending names, folders and boards…'; // so you can see what's going
+    t.status(what, sent, stream.size);
     let pos = 0;
     const segs = [{ size: stream.head.length, read: async () => stream.head }, ...stream.parts.map((p) => ({ size: p.size, read: async () => new Uint8Array(await (await p.read()).arrayBuffer()) }))];
     try {
@@ -523,7 +528,7 @@ export async function send({ code: given = '' } = {}) {
           const piece = u8.slice(i, i + CHUNK);
           dc.send(piece.buffer);
           sent = pos + i + piece.length;
-          if (sent === stream.size || sent % (CHUNK * 32) < CHUNK) t.status('Sending…', sent, stream.size);
+          if (sent === stream.size || sent % (CHUNK * 32) < CHUNK) t.status(what, sent, stream.size);
         }
         pos += seg.size;
       }
