@@ -66,7 +66,8 @@ export function lineSizes(text, map, items) {
   return lines;
 }
 // From every page's lines, the marks for each page: [kind, start, end, …] with kind 1 a heading, 2 a caption.
-export const MARKS_V = 3;
+export const MARKS_V = 4; // bump to have every document's headings worked out again
+const lineAt = (lines, start) => lines.find((l) => l[0] === start);
 export function marksFrom(pageLines, texts) {
   // the body: the type size, and the font, most of the document's characters are set in
   const sizes = new Map(), fonts = new Map();
@@ -90,7 +91,11 @@ export function marksFrom(pageLines, texts) {
       if (/\.{4,}|…{2,}/.test(str)) continue; // a contents line with dot leaders
       const big = body && h >= body * 1.15 && str.length <= 120 && !/^\d+([.-]\d+)*$/.test(str);
       // a short line all in capitals, at body size, reads as a heading too
-      const caps = str.length <= 70 && str.length >= 4 && /[A-Z]{3}/.test(str) && str === str.toUpperCase() && !/[.,;]$/.test(str);
+      // …but not a list item (starting with a bullet or star), and not one of a run of such lines: a table's rows,
+      // a list of manoeuvres or a form all in capitals aren't headings
+      const isCaps = (x) => x.length <= 70 && x.length >= 4 && /[A-Z]{3}/.test(x) && x === x.toUpperCase() && !/[.,;]$/.test(x);
+      const capsAt = (j) => j >= 0 && j < lines.length && isCaps(t.slice(lines[j][0], lines[j][1]).trim());
+      const caps = isCaps(str) && /^[A-Z0-9§(]/.test(str) && !(capsAt(li - 1) && capsAt(li + 1)) && !(capsAt(li + 1) && capsAt(li + 2)) && !(capsAt(li - 1) && capsAt(li - 2));
       // a whole line in another font than the text (bold, a different face), short, not a sentence carrying on:
       // the second- and third-level headings set at body size
       const own = f && bodyFont && f !== bodyFont && (fonts.get(f) || 0) < bodyChars * 0.25
@@ -105,8 +110,16 @@ export function marksFrom(pageLines, texts) {
     }
     // a page where many lines are set apart only by their font is a list, table or index, not headings
     const tooMany = byFont > 6 && byFont > lines.length * 0.3;
+    // the same for capitals: a page with lots of short lines in capitals is a table or a form
+    let capsLines = 0;
+    for (const l of lines) if (/[A-Z]{3}/.test(t.slice(l[0], l[1])) && t.slice(l[0], l[1]).trim() === t.slice(l[0], l[1]).trim().toUpperCase() && l[1] - l[0] <= 70) capsLines++;
+    const capsy = capsLines > 8 && capsLines > lines.length * 0.3;
     const kept = [];
-    for (let i = 0; i < out.length; i += 4) if (!(tooMany && out[i + 3])) kept.push(out[i], out[i + 1], out[i + 2]);
+    for (let i = 0; i < out.length; i += 4) {
+      if (tooMany && out[i + 3]) continue;
+      if (capsy && out[i] === 1 && out[i + 3] === 0 && !(body && lineAt(lines, out[i + 1])?.[2] >= body * 1.15)) continue; // capitals only, not bigger type
+      kept.push(out[i], out[i + 1], out[i + 2]);
+    }
     return kept.length ? kept : null;
   });
 }
