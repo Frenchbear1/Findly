@@ -5763,8 +5763,73 @@ function openThemes() {
   openThemeBar(prefs, { save: savePrefs, glass: applyGlass });
 }
 
+
+// ---------- popups hold the page still ----------
+// While anything is up over the page (every dialog and sheet, menus, the reading-theme bar, and on the phone the
+// library drawer and the pages panel), the page behind doesn't scroll. Scrolling inside the popup itself still works,
+// and stops at its ends instead of carrying on into the page. The listeners that do this are only attached while a
+// popup is open, so normal scrolling never waits on them.
+const POPUPS = ':is(dialog[open], body > .pop-menu, #themeBar:not([hidden]))';
+let scrollLocked = false;
+function popupUp() {
+  if (document.querySelector(POPUPS)) return true;
+  const b = document.body.classList;
+  return isPhone() && (b.contains('drawer') || b.contains('panel'));
+}
+// the element (inside a popup) that this gesture may scroll in that direction, if any
+function popupScroller(t, dx, dy) {
+  for (let n = t instanceof Element ? t : t?.parentElement; n && n !== document.body; n = n.parentElement) {
+    const cs = getComputedStyle(n);
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      if (/(auto|scroll)/.test(cs.overflowY) && n.scrollHeight > n.clientHeight + 1) {
+        if ((dy < 0 && n.scrollTop > 0) || (dy > 0 && n.scrollTop + n.clientHeight < n.scrollHeight - 1) || dy === 0) return n;
+      }
+    } else if (/(auto|scroll)/.test(cs.overflowX) && n.scrollWidth > n.clientWidth + 1) {
+      if ((dx < 0 && n.scrollLeft > 0) || (dx > 0 && n.scrollLeft + n.clientWidth < n.scrollWidth - 1)) return n;
+    }
+  }
+  return null;
+}
+const inPopup = (t) => t instanceof Element && (t.closest('dialog[open], .pop-menu, #themeBar, .sidebar, .outline'));
+let lockTouch = null;
+function lockTouchStart(e) { const t = e.touches[0]; lockTouch = t ? { x: t.clientX, y: t.clientY } : null; }
+function lockTouchMove(e) {
+  if (!e.cancelable || e.touches.length > 1) return;
+  const t = e.touches[0], tg = e.target;
+  if (!lockTouch || !t) return;
+  if (!inPopup(tg)) { e.preventDefault(); return; } // the page behind: still
+  if (tg.closest('input, textarea, select, [contenteditable]')) return; // sliders and fields keep their own drags
+  // finger moving down = content scrolling up
+  if (!popupScroller(tg, lockTouch.x - t.clientX, lockTouch.y - t.clientY)) e.preventDefault();
+  lockTouch = { x: t.clientX, y: t.clientY };
+}
+function lockWheel(e) {
+  if (e.ctrlKey) return; // pinch-zoom on a trackpad
+  if (!inPopup(e.target) || !popupScroller(e.target, e.deltaX, e.deltaY)) e.preventDefault();
+}
+function updateScrollLock() {
+  const up = popupUp();
+  if (up === scrollLocked) return;
+  scrollLocked = up;
+  document.documentElement.classList.toggle('scroll-lock', up);
+  const fn = up ? 'addEventListener' : 'removeEventListener';
+  document[fn]('touchstart', lockTouchStart, { passive: true, capture: true });
+  document[fn]('touchmove', lockTouchMove, { passive: false, capture: true });
+  document[fn]('wheel', lockWheel, { passive: false, capture: true });
+}
+function watchPopups() {
+  let queued = false;
+  const later = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; updateScrollLock(); }); } };
+  // two observers: observing the same element twice with one would replace the first set of options
+  new MutationObserver(later).observe(document.body, { attributes: true, attributeFilter: ['class'], childList: true });
+  new MutationObserver(later).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open', 'hidden'] });
+  addEventListener('resize', later);
+  updateScrollLock();
+}
+
 // ---------- events ----------
 function bind() {
+  watchPopups();
   $('#fileInput').accept = ACCEPT;
   $('#fileInput').addEventListener('change', (e) => {
     const files = [...e.target.files];

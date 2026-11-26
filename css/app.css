@@ -1744,3 +1744,14 @@ html, body { overflow-anchor: none; }
 .app-offer .ao-go { padding: 9px 12px 9px 14px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; white-space: nowrap; }
 .app-offer .ao-x { width: 34px; height: 34px; justify-content: center; border-radius: 50%; color: var(--muted); }
 .app-offer svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* while a popup is up the page behind stays put (see watchPopups); popups don't hand their scrolling on to it */
+dialog, .pop-menu, #themeBar, .sidebar, .outline, dialog *, .pop-menu *, #themeBar *, .sidebar *, .outline * { overscroll-behavior: contain; }
+@media (pointer: coarse) { html.scroll-lock, html.scroll-lock body { overflow: hidden; } }
+/* no double-tap zoom anywhere (pinching still zooms); touch-action narrows down the tree, so this covers everything */
+html { touch-action: manipulation; }
+/* iPhones zoom in on any text box whose writing is smaller than 16px when you tap into it: on touch screens every
+   text box writes at 16px or more, so none of them zoom (board notes, the search box, settings fields…) */
+@media (pointer: coarse) {
+  input:not([type="range"], [type="checkbox"], [type="radio"], [type="color"], [type="file"]), textarea, select, [contenteditable]:not([contenteditable="false"]) { font-size: max(16px, 1em) !important; }
+}
