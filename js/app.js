@@ -6032,7 +6032,13 @@ const GLASS_GROUPS = {
   sides: { vars: ['--a-side'], blur: '--blur-side' }, // the library on the left and the pages panel on the right (solid as designed)
 };
 // (what was set for the old "Popups" group carries over to Menus)
-const glassOf = (g) => { const o = prefs.glassG?.[g] ?? (g === 'menus' ? prefs.glassG?.popups : null); return { t: o?.t ?? prefs.glassT ?? 50, b: o?.b ?? prefs.blurL ?? BLUR_DEF }; };
+// Sheets start fully clear with a light 4px blur (blurPx(38) ≈ 4px); everything else starts as designed.
+const GLASS_START = { sheets: { t: 100, b: 38 } };
+const glassOf = (g) => {
+  const o = prefs.glassG?.[g] ?? (g === 'menus' ? prefs.glassG?.popups : null);
+  const start = GLASS_START[g];
+  return { t: o?.t ?? start?.t ?? prefs.glassT ?? 50, b: o?.b ?? start?.b ?? prefs.blurL ?? BLUR_DEF };
+};
 function applyGlass() {
   const root = document.documentElement.style;
   for (const [g, { vars, blur }] of Object.entries(GLASS_GROUPS)) {
@@ -6046,6 +6052,9 @@ function applyGlass() {
     // blur on a curve (see themes.js): fine control at the light end, heavy frosting only at the far end
     root.setProperty(blur, `saturate(180%) blur(${blurPx(b).toFixed(1)}px)`);
   }
+  // cards inside a sheet: as clear as the sheet, with a touch more body
+  const sa = parseFloat(root.getPropertyValue('--a-sheet')) || 100;
+  root.setProperty('--a-sheet-card', `${(sa + (100 - sa) * 0.18).toFixed(1)}%`);
   root.setProperty('--bpx', `${blurPx(prefs.blurL ?? BLUR_DEF).toFixed(1)}px`);
 }
 function openThemes() {

@@ -260,7 +260,7 @@ export function openThemeBar(prefs, { save, glass, glassOf } = {}) {
       const gt = vals[0]?.t ?? 50, gb = vals[0]?.b ?? BLUR_DEF;
       const mixed = (k) => vals.some((v) => v[k] !== vals[0][k]);
       const all = parts.length === GLASS_PARTS.length;
-      const custom = GLASS_PARTS.some(([g]) => { const v = bar._glassOf?.(g); return v && (v.t !== 50 || v.b !== BLUR_DEF); });
+      const custom = Object.keys(prefs.glassG || {}).length > 0 || (prefs.glassT ?? 50) !== 50 || (prefs.blurL ?? BLUR_DEF) !== BLUR_DEF;
       body = `<div class="tbar-sliders">
         <div class="tb-parts" role="group" aria-label="Which surfaces"><button data-part="all" aria-pressed="${all}">All</button>${GLASS_PARTS.map(([k, l]) => `<button data-part="${k}" aria-pressed="${!all && bar._parts.has(k)}">${l}</button>`).join('')}</div>
         ${parts.length ? `${field('Transparency', mixed('t') ? 'Mixed' : gt === 50 ? 'As designed' : pct(gt), `<input type="range" min="0" max="100" value="${gt}" data-gt>`, ['Solid', 'Clear'])}
