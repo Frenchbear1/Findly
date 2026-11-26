@@ -6100,7 +6100,8 @@ function openThemes() {
 // library drawer and the pages panel), the page behind doesn't scroll. Scrolling inside the popup itself still works,
 // and stops at its ends instead of carrying on into the page. The listeners that do this are only attached while a
 // popup is open, so normal scrolling never waits on them.
-const POPUPS = ':is(dialog[open], body > .pop-menu, #themeBar:not([hidden]))';
+// (the reading-theme panel isn't one: you scroll the page behind it to see what your changes look like)
+const POPUPS = ':is(dialog[open], body > .pop-menu)';
 let scrollLocked = false;
 function popupUp() {
   if (document.querySelector(POPUPS)) return true;
