@@ -6032,8 +6032,13 @@ const GLASS_GROUPS = {
   sides: { vars: ['--a-side'], blur: '--blur-side' }, // the library on the left and the pages panel on the right (solid as designed)
 };
 // (what was set for the old "Popups" group carries over to Menus)
-// Sheets start fully clear with a light 4px blur (blurPx(38) ≈ 4px); everything else starts as designed.
-const GLASS_START = { sheets: { t: 100, b: 38 } };
+// Where each group starts until you change it: the bars, headers and little menus fully clear with a light 4px
+// blur (blurPx(38) ≈ 4px); sheets and the side panels, which hold a lot of text, about half clear with an 8px blur
+// (blurPx(53) ≈ 8px) so they stay easy to read.
+const GLASS_START = {
+  top: { t: 100, b: 38 }, heads: { t: 100, b: 38 }, bottom: { t: 100, b: 38 }, menus: { t: 100, b: 38 },
+  sheets: { t: 75, b: 53 }, sides: { t: 75, b: 53 },
+};
 const glassOf = (g) => {
   const o = prefs.glassG?.[g] ?? (g === 'menus' ? prefs.glassG?.popups : null);
   const start = GLASS_START[g];
