@@ -415,3 +415,13 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
   }
   .doc-head { background: color-mix(in srgb, var(--bg) var(--a-top, 72%), transparent) !important; box-shadow: none; border: 0; }
 }
+
+/* Glass › Side panels: the library (left) and the pages panel (right) when they slide over the results */
+@media (max-width: 900px) {
+  .sidebar { background: color-mix(in srgb, var(--bg) var(--a-side, 100%), transparent); }
+  :root:not([style*="--a-side: 100"]) .sidebar { -webkit-backdrop-filter: var(--blur-side, var(--blur)); backdrop-filter: var(--blur-side, var(--blur)); }
+}
+@media (max-width: 1240px) {
+  .content > .outline { background: color-mix(in srgb, var(--panel) var(--a-side, 100%), transparent); }
+  :root:not([style*="--a-side: 100"]) .content > .outline { -webkit-backdrop-filter: var(--blur-side, var(--blur)); backdrop-filter: var(--blur-side, var(--blur)); }
+}

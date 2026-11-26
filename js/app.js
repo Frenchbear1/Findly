@@ -4,7 +4,7 @@ import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, r
 import { NativeTexts } from './texts.js';
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
-import { detectLabels, cleanPdfLabels } from './pagelabels.js';
+import { detectLabels, cleanPdfLabels, fillChapterStarts } from './pagelabels.js';
 import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION, MARKS_V, marksForPdf, openPdfIds } from './pdf.js';
 import { renderHtmlPage, forgetHtml, renderedText } from './htmlview.js';
 import { remoteFetch, remoteInfo, remoteChanged, download, documentLinks, looksLikeDocument, fileNameFor, editionKey, linkKey, linkSimilarity, SAME_DOC_SCORE, helper, NeedsHelper } from './remote.js';
@@ -180,7 +180,7 @@ function orderedDocs() {
 const pkey = (docId, n) => `${docId}:${n}`;
 // A page's number as the document prints it ("2-4", "iv"), or its position when it doesn't say.
 const plabel = (doc, n) => doc?.labels?.[n] || String(n + 1);
-const LABELS_V = 1;
+const LABELS_V = 2; // 2: chapter title pages numbered (8-1 before 8-2)
 function docLabels(kind, pages, fromPdf) {
   if (kind !== 'pdf') return null;
   return cleanPdfLabels(fromPdf, pages.length) || detectLabels(pages);
@@ -192,7 +192,8 @@ function labelOlderDocs() {
   const step = async () => {
     const d = todo.shift();
     if (!d) { store.updateDocs(S.docs.filter((x) => x.labelsV === LABELS_V && !x.status).map(stripMeta)).catch(() => {}); return; }
-    d.labels = detectLabels((await S.texts.all(d.id).catch(() => [])) || []);
+    // labels already worked out (maybe the PDF's own) just get the chapter starts filled in; the rest are read now
+    d.labels = d.labels ? fillChapterStarts(d.labels) : detectLabels((await S.texts.all(d.id).catch(() => [])) || []);
     d.labelsV = LABELS_V;
     setTimeout(step, 0);
   };
@@ -5830,12 +5831,13 @@ function applyTheme() {
 // Each surface keeps its own designed opacity at 50 and scales from there in both directions.
 // Settings › Reading theme › Glass sets these per group of surfaces (prefs.glassG[group] = { t, b }); a group
 // with nothing of its own follows the overall setting (prefs.glassT / blurL). Sheets are solid as designed.
-const GLASS = { '--a-top': 76, '--a-bar': 40, '--a-menu': 80, '--a-head': 74, '--a-dock': 88, '--a-sheet': 100 };
+const GLASS = { '--a-top': 76, '--a-bar': 40, '--a-menu': 80, '--a-head': 74, '--a-dock': 88, '--a-sheet': 100, '--a-side': 100 };
 const GLASS_GROUPS = {
   top: { vars: ['--a-top'], blur: '--blur-top' },
   heads: { vars: ['--a-head'], blur: '--blur-head' },
   bottom: { vars: ['--a-bar', '--a-dock'], blur: '--blur-bottom' },
-  popups: { vars: ['--a-menu', '--a-sheet'], blur: '--blur-pop' }, // not the theme panel itself: it stays readable while you change these
+  popups: { vars: ['--a-menu', '--a-sheet'], blur: '--blur-pop' },
+  sides: { vars: ['--a-side'], blur: '--blur-side' }, // the library on the left and the pages panel on the right (solid as designed) // not the theme panel itself: it stays readable while you change these
 };
 const glassOf = (g) => ({ t: prefs.glassG?.[g]?.t ?? prefs.glassT ?? 50, b: prefs.glassG?.[g]?.b ?? prefs.blurL ?? BLUR_DEF });
 function applyGlass() {

@@ -210,7 +210,7 @@ function paperCard(pp, on, t) {
 }
 
 // Glass: which surfaces the sliders below act on (any several at once)
-const GLASS_PARTS = [['top', 'Top bar'], ['heads', 'Headers'], ['bottom', 'Bottom bars'], ['popups', 'Popups']];
+const GLASS_PARTS = [['top', 'Top bar'], ['heads', 'Headers'], ['bottom', 'Bottom bars'], ['popups', 'Popups'], ['sides', 'Side panels']];
 export function openThemeBar(prefs, { save, glass, glassOf } = {}) {
   let bar = document.getElementById('themeBar');
   if (bar && !bar.hidden) { closeBar(bar, save); return; }

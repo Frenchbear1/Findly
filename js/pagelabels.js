@@ -84,7 +84,7 @@ export function detectLabels(pages) {
   }
   const labelled = chosen.filter(Boolean).length;
   if (labelled < Math.max(3, N * 0.3)) return null;
-  const labels = chosen.map((c) => (c ? c.text : null));
+  const labels = fillChapterStarts(chosen.map((c) => (c ? c.text : null)));
   // printed numbers that just repeat the position add nothing
   if (labels.every((l, n) => l == null || l === String(n + 1))) return null;
   return labels;
@@ -102,5 +102,22 @@ export function cleanPdfLabels(labels, N) {
   if (!Array.isArray(labels) || labels.length !== N) return null;
   const out = labels.map((l) => (l == null ? null : String(l).trim() || null));
   if (out.every((l, n) => l == null || l === String(n + 1))) return null;
+  return fillChapterStarts(out);
+}
+
+/**
+ * A chapter's first page often prints no number (a title page: "8  Messages"), so it would show its position
+ * (561) between 7-24 and 8-2. Unnumbered pages just before a chapter-page run take the numbers counting back:
+ * 8-1 before 8-2 (and 8-2, 8-1 before an 8-3), never below 1.
+ */
+export function fillChapterStarts(labels) {
+  if (!Array.isArray(labels)) return labels;
+  const out = labels.slice();
+  for (let n = out.length - 1; n > 0; n--) {
+    const c = out[n] != null ? parse(String(out[n])) : null;
+    if (!c || (c.kind !== 'cp' && c.kind !== 'ap') || out[n - 1] != null) continue;
+    let v = c.value - 1;
+    for (let m = n - 1; m >= 0 && out[m] == null && v >= 1; m--, v--) out[m] = String(out[n]).replace(/\d+$/, String(v));
+  }
   return out;
 }
