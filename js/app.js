@@ -3946,7 +3946,7 @@ function nameAsItems(d) {
   const set = (v) => { d.nameAs = v; store.updateDoc(stripMeta(d)).catch(() => {}); renderLibrary(); runSearch({ keepScroll: true }); };
   const items = [{ label: `As in Settings (${NAME_KINDS[prefs.nameAs || 'file']})`, checked: !d.nameAs, run: () => set(null) }, { label: 'File name', sub: d.name, checked: d.nameAs === 'file', run: () => set('file') }];
   for (const k of ['title', 'number', 'abbr']) if (d.names?.[k]) items.push({ label: NAME_KINDS[k], sub: d.names[k], checked: d.nameAs === k, run: () => set(k) });
-  if (!d.names) items.push({ label: 'No other names yet', sub: 'Add documents › Find documents with AI › Name my documents', disabled: true });
+  if (!d.names) items.push({ label: 'No other names yet', sub: 'Add documents › Find documents with AI › Names', disabled: true });
   return items;
 }
 // names the AI gave for documents still downloading (by their file link)
@@ -4600,7 +4600,15 @@ function fillAiBox() {
   $('#aiBot').innerHTML = Object.entries(AI_BOTS).map(([k, b]) => `<option value="${k}">${b.label}</option>`).join('');
   $('#aiBot').value = AI_BOTS[prefs.aiBot] ? prefs.aiBot : 'chatgpt';
   $('#aiState').textContent = all.length ? `${plural(all.length, 'file')} not linked` : '';
+  $('#aiAfter').hidden = !$('#aiAnswer').value.trim();
   setAiStatus('');
+}
+// the place for the AI's answer shows once there's something to answer (after Copy), or an answer is already in it
+function showAiAfter() {
+  const a = $('#aiAfter');
+  if (!a.hidden) return;
+  a.hidden = false;
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) a.animate([{ opacity: 0, transform: 'translateY(-6px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.25,.8,.3,1)' });
 }
 let aiMode = 'link';
 function setAiMode(m) {
@@ -4742,6 +4750,7 @@ function aiCopy(go) {
     what = plural(docs.length, 'file name');
   }
   const ok = copyText(text);
+  showAiAfter();
   const bot = AI_BOTS[$('#aiBot').value] || AI_BOTS.chatgpt;
   prefs.aiBot = $('#aiBot').value;
   savePrefs();
@@ -5501,7 +5510,7 @@ function openSettings() {
       <div class="set-body">
         ${group('Appearance', [
           row('theme', palette, 'Reading theme', 'Colours, paper, accent, transparency and blur'),
-          `<div class="set-row static"><span class="set-ic">${I.pencil}</span><span class="set-t"><b>Document names</b><small>${S.docs.some((d) => d.names) ? 'What documents are called throughout the app (a document’s ••• menu can choose its own)' : 'Get titles, numbers and abbreviations with Add documents › Find documents with AI › Name my documents'}</small></span><span class="seg small set-seg">${[['file', 'File'], ['title', 'Title'], ['number', 'Number'], ['abbr', 'Abbr.']].map(([v, l]) => `<button type="button" data-s="nm-${v}" aria-pressed="${(prefs.nameAs || 'file') === v}">${l}</button>`).join('')}</span></div>`,
+          `<div class="set-row static"><span class="set-ic">${I.pencil}</span><span class="set-t"><b>Document names</b><small>${S.docs.some((d) => d.names) ? 'What documents are called throughout the app (a document’s ••• menu can choose its own)' : 'Get titles, numbers and abbreviations with Add documents › Find documents with AI › Names'}</small></span><span class="seg small set-seg">${[['file', 'File'], ['title', 'Title'], ['number', 'Number'], ['abbr', 'Abbr.']].map(([v, l]) => `<button type="button" data-s="nm-${v}" aria-pressed="${(prefs.nameAs || 'file') === v}">${l}</button>`).join('')}</span></div>`,
         ])}
         ${group('Reading', [
           `<div class="set-row static"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M9 3.5h6M9 20.5h6"/></svg></span><span class="set-t"><b>Opening cropped pages</b><small>${prefs.expand === 'drag' ? 'Drag the bars on a cropped page to pull it open' : 'Tap the arrows on a cropped page to open it'}</small></span><span class="seg small set-seg"><button type="button" data-s="xb" aria-pressed="${prefs.expand !== 'drag'}">Buttons</button><button type="button" data-s="xd" aria-pressed="${prefs.expand === 'drag'}">Drag</button></span></div>`,

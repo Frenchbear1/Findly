@@ -1764,7 +1764,7 @@ html { touch-action: manipulation; }
 /* Glass › Sheets: solid as designed, and can be made see-through */
 dialog:not(.set-dlg), dialog.xfer, dialog.helper-dlg, .set-sheet { background: color-mix(in srgb, var(--card) var(--a-sheet, 100%), transparent); }
 /* the cards inside a sheet clear with it, a little more solid so the groups still read as groups */
-.set-group, .hs-box, .hs-url input, .hs-body code { background: color-mix(in srgb, var(--card) var(--a-sheet-card, 100%), transparent); }
+.set-group, .hs-box, .hs-url input, .hs-body code, .helper-row, #aiAnswer { background: color-mix(in srgb, var(--card) var(--a-sheet-card, 100%), transparent); }
 .set-sheet { background: color-mix(in srgb, var(--bg) var(--a-sheet, 100%), transparent); }
 :root:not([style*="--a-sheet: 100"]) :is(dialog:not(.set-dlg), dialog.xfer, dialog.helper-dlg, .set-sheet) { -webkit-backdrop-filter: var(--blur-sheet, var(--blur)); backdrop-filter: var(--blur-sheet, var(--blur)); }
 /* the theme panel is a sheet too: it frosts and clears with Glass › Sheets */
