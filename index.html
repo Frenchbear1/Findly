@@ -193,8 +193,8 @@
   <dialog id="linkDlg" aria-label="Add from a web link">
     <form class="link-dlg" method="dialog" id="linkForm">
       <header><h3>Add from a web link</h3><button class="icon-btn sm" type="button" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
-      <p class="muted">Paste a link to a document (like a PDF), or to a page that lists documents — for example an FAA handbook page. Linked documents can be checked for updates later.</p>
-      <input id="linkUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.faa.gov/…" required />
+      <p class="muted">Paste a link to a document (like a PDF), or to a page that lists documents, like a publisher’s downloads page. Linked documents can be checked for updates later.</p>
+      <input id="linkUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" required />
       <label class="link-row">Put it in
         <select id="linkFolder"></select>
       </label>
@@ -209,12 +209,12 @@
         </div>
         <div data-for="new" hidden>
           <p>Say what you want, in your own words. The AI finds the official downloads, and the app adds them and keeps them up to date.</p>
-          <textarea id="aiAsk" rows="2" placeholder="e.g. all the FARs for aviation, Part 1 to the last one I need"></textarea>
+          <textarea id="aiAsk" rows="2" placeholder="e.g. the IRS publications for small businesses, or every part of a building code"></textarea>
           <label class="link-row">Put them in <select id="aiDest"></select></label>
           <label class="link-row" id="aiDestNameRow">Folder name <input id="aiDestName" type="text" autocomplete="off" placeholder="New folder" /></label>
         </div>
         <div data-for="names" hidden>
-          <p>For documents you already have, linked or not: the AI gives each one its document number (FAA-H-8083-25C), full title (Pilot’s Handbook of Aeronautical Knowledge) and usual abbreviation (PHAK). Nothing is relinked. Settings › Document names picks which one the app shows.</p>
+          <p>For documents you already have, linked or not: the AI gives each one its document number (NFPA 70), full title (National Electrical Code) and usual abbreviation (NEC). Nothing is relinked. Settings › Document names picks which one the app shows.</p>
           <label class="link-row">Documents <select id="aiWhichN"></select></label>
         </div>
         <label class="link-row">AI <select id="aiBot"></select></label>
@@ -227,7 +227,7 @@
         </div>
       </details>
       <div class="helper-row" id="helperBox">
-        <div><b>Download helper</b> <span id="helperState"></span><small>Lets Findly download from sites like faa.gov. Free, about 5 minutes, once.</small></div>
+        <div><b>Download helper</b> <span id="helperState"></span><small>Lets Findly download from sites that block other apps, like many government sites. Free, about 5 minutes, once.</small></div>
         <button class="btn" type="button" id="helperOpen">Set up</button>
       </div>
       <label class="check-row"><input type="checkbox" id="autoCheck" /> Check linked sources for updates automatically when I open the app (how often is in Settings)</label>

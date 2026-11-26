@@ -4647,7 +4647,7 @@ function aiPrompt(docs) {
   if (loose.length) groups.push(`${groups.length ? 'Not in a folder:\n' : ''}${loose.map(line).join('\n')}`);
   return `I keep the documents listed below in a document search app. I want to link each one to its official source on the web, so the app can check that source for newer editions later.
 
-For each file, search the web and find the official publisher's copy (for example faa.gov for FAA handbooks and orders). Open the pages to confirm. Only give links you have confirmed exist and that come from the official publisher — not mirrors, shops, school sites or file-sharing sites. If you are not sure, write NOT FOUND. A wrong link is worse than no link, so never guess or build a URL from a pattern.
+For each file, search the web and find the official publisher's copy (the government agency, standards body, manufacturer or publisher that issues it). Open the pages to confirm. Only give links you have confirmed exist and that come from the official publisher — not mirrors, shops, school sites or file-sharing sites. If you are not sure, write NOT FOUND. A wrong link is worse than no link, so never guess or build a URL from a pattern.
 
 For each file give:
 - PAGE: the publisher's web page that lists this document and its download, i.e. the page they update when a new edition comes out. This matters most, because the app watches that page for new editions.
@@ -4656,9 +4656,9 @@ For each file give:
 Several of my files often come from the same page — for example one handbook page that lists the whole book and every chapter separately, or a page listing a manual and each of its changes. That's expected: still write one line per file, repeat the same PAGE on each of those lines, and give each line the FILE link for that particular file (the chapter's own link for a chapter, the whole-book link only for the whole book). Match by what the file is (its title and opening words), not just its name. Never put two of my files on the same FILE link unless they really are the same document.
 
 Also give each document's names, from the document itself or its publisher (write NONE for any it doesn't have):
-- NUMBER: its official number or designation, e.g. FAA-H-8083-25C, AC 91-48, 14 CFR Part 91
-- TITLE: its full written-out title, e.g. Pilot's Handbook of Aeronautical Knowledge
-- ABBR: the abbreviation people usually call it, e.g. PHAK, AFH, AIM. If it has no official one, search for what pilots, instructors and other readers commonly call it (training sites, forums, study guides) and give that; a common nickname is better than nothing. Write NONE only if people really don't shorten it.
+- NUMBER: its official number or designation, e.g. ISO 9001:2015, NFPA 70, IRS Publication 17, 29 CFR Part 1910, a model or part number
+- TITLE: its full written-out title, e.g. National Electrical Code
+- ABBR: the abbreviation people usually call it, e.g. NEC, DSM-5, APA. If it has no official one, search for what the people who use it commonly call it (training sites, forums, study guides) and give that; a common nickname is better than nothing. Write NONE only if people really don't shorten it.
 
 Reply with one code block and nothing else, one line per file, in exactly this format, with the file name copied exactly as I wrote it:
 <file name> | PAGE: <link or NOT FOUND> | FILE: <link or NOT FOUND> | NUMBER: <number or NONE> | TITLE: <title or NONE> | ABBR: <abbreviation or NONE>
@@ -4677,18 +4677,18 @@ ${ask}${where ? `
 
 (They'll go in a folder called “${where}”.)` : ''}
 
-Search the web and open the pages to confirm every link. Only give links you have confirmed exist and that come from the official publisher (for example faa.gov, ecfr.gov, govinfo.gov) — not mirrors, shops, school sites or file-sharing sites. Never guess or build a URL you haven't opened. Leave out anything you're not sure about.
+Search the web and open the pages to confirm every link. Only give links you have confirmed exist and that come from the official publisher (for example a government agency's own site, govinfo.gov, a standards body or the manufacturer) — not mirrors, shops, school sites or file-sharing sites. Never guess or build a URL you haven't opened. Leave out anything you're not sure about.
 
 One line per document. Each needs a direct download of a file (PDF preferred), not a web page for reading online:
 - the document's title, short, the way the publisher names it
 - PAGE: a publisher's page that itself links to that file and is updated when a new edition comes out — or NOT FOUND
 - FILE: the direct download link of the current edition
 If several documents come from the same page, repeat that PAGE on each of their lines and give each its own FILE link. Don't list a combined whole-book file and its separate parts both, unless I asked for that.
-For US federal regulations (the CFR, such as the FARs in Title 14), list each part as its own document, using govinfo.gov's PDF of that part from the most recent annual edition, with PAGE: NOT FOUND.${have.length ? `
+For US federal regulations (the Code of Federal Regulations), list each part as its own document, using govinfo.gov's PDF of that part from the most recent annual edition, with PAGE: NOT FOUND.${have.length ? `
 
 I already have these, so leave them out: ${have.join('; ')}` : ''}
 
-Also give each document's names (NONE for any it doesn't have): NUMBER, its official number or designation (e.g. FAA-H-8083-25C, AC 91-48, 14 CFR Part 91); TITLE, its full written-out title; ABBR, the abbreviation people usually call it (e.g. PHAK, AIM) — if there's no official one, search for what pilots and other readers commonly call it and give that; a common nickname is better than nothing.
+Also give each document's names (NONE for any it doesn't have): NUMBER, its official number or designation (e.g. ISO 9001:2015, NFPA 70, 29 CFR Part 1910); TITLE, its full written-out title; ABBR, the abbreviation people usually call it (e.g. NEC, DSM-5) — if there's no official one, search for what the people who use it commonly call it and give that; a common nickname is better than nothing.
 
 Reply with one code block and nothing else, in exactly this format:
 <title> | PAGE: <link or NOT FOUND> | FILE: <link> | NUMBER: <number or NONE> | TITLE: <title or NONE> | ABBR: <abbreviation or NONE>`;
@@ -4702,9 +4702,9 @@ function aiNamesPrompt(docs) {
   const line = (d) => `- ${d.name}${d.source?.url ? ` (from ${d.source.url})` : ''}${opening(d)}`;
   return `I keep the documents listed below in a document search app. For each one, tell me its names, from the document itself or its publisher. Use the opening words and links to identify each one; search the web to confirm if you need to. Write NONE for a NUMBER or TITLE a document doesn't have, and never make those up.
 
-- NUMBER: its official number or designation, e.g. FAA-H-8083-25C, AC 91-48, 14 CFR Part 91, Order 8900.1
-- TITLE: its full written-out title, e.g. Pilot's Handbook of Aeronautical Knowledge
-- ABBR: the abbreviation people usually call it, e.g. PHAK, AFH, AIM, IFH. If it has no official one, search for what pilots, instructors and other readers commonly call it (training sites, forums, study guides) and give that; a common nickname is better than nothing, even if it isn't official. Write NONE only if people really don't shorten it.
+- NUMBER: its official number or designation, e.g. ISO 9001:2015, NFPA 70, IRS Publication 17, 29 CFR Part 1910, a model or part number
+- TITLE: its full written-out title, e.g. National Electrical Code
+- ABBR: the abbreviation people usually call it, e.g. NEC, DSM-5, APA. If it has no official one, search for what the people who use it commonly call it (training sites, forums, study guides) and give that; a common nickname is better than nothing, even if it isn't official. Write NONE only if people really don't shorten it.
 
 Reply with one code block and nothing else, one line per document, in exactly this format, with the file name copied exactly as I wrote it:
 <file name> | NUMBER: <number or NONE> | TITLE: <title or NONE> | ABBR: <abbreviation or NONE>
@@ -4912,7 +4912,7 @@ function openHelper() {
       <p class="hs-result${result ? (result.ok ? ' ok' : ' bad') : ''}">${result ? esc(result.ok ? 'Working ✓' : result.msg) : ''}</p>`;
     return `<div class="hs-done ${result?.ok === false ? 'bad' : ''}"><span class="hs-check">${result?.ok === false ? '!' : '✓'}</span>
         <h4>${result?.ok === false ? 'Your helper isn’t answering' : 'Your download helper is set up'}</h4>
-        <p>${result?.ok === false ? esc(result.msg) : 'Findly can now add documents from any website, including faa.gov, and check them for updates.'}${result?.ok && !result.any ? ' <b>It only allows the sites listed in it:</b> copy the code again (step 3) and re-deploy to allow any site.' : ''}</p></div>
+        <p>${result?.ok === false ? esc(result.msg) : 'Findly can now add documents from any website and check them for updates.'}${result?.ok && !result.any ? ' <b>It only allows the sites listed in it:</b> copy the code again (step 3) and re-deploy to allow any site.' : ''}</p></div>
       <div class="hs-box"><b>Using Findly on another device?</b><p>Copy this address there: Add from a web link › Download helper › Manage › Connect.</p>
         <div class="hs-url"><input readonly value="${esc(helper.get() || '')}"><button type="button" class="btn" data-copyurl>Copy</button></div></div>
       <div class="hs-acts"><button type="button" class="btn" data-test>Test again</button><button type="button" class="btn" data-goto="2">Update the code</button><button type="button" class="btn" data-goto="3">Change address</button></div>`;
@@ -5517,7 +5517,7 @@ function openSettings() {
           `<div class="set-row static"><span class="set-ic">${I.undo}</span><span class="set-t"><b>Undo &amp; redo</b><small>${prefs.undoStyle === 'buttons' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar: right to undo, left to redo'}</small></span><span class="seg small set-seg"><button type="button" data-s="ug" aria-pressed="${prefs.undoStyle !== 'buttons'}">Gestures</button><button type="button" data-s="ub" aria-pressed="${prefs.undoStyle === 'buttons'}">Buttons</button></span></div>`,
         ])}
         ${group('Documents from websites', [
-          row('helper', bolt, 'Download helper', helper.get() ? 'Set up' : 'Not set up · needed for sites like faa.gov'),
+          row('helper', bolt, 'Download helper', helper.get() ? 'Set up' : 'Not set up · needed for some sites, like many government ones'),
           linked && row('check', refresh, 'Check for updates now', 'Looks for newer editions of linked documents'),
           row('auto', refresh, 'Check automatically', prefs.autoCheck ? `${checkEveryText()}, when you open the app` : 'Off', sw(prefs.autoCheck)),
           `<div class="set-row static set-every"${prefs.autoCheck ? '' : ' hidden'}><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg></span><span class="set-t"><b>How often</b></span><span class="stepper set-step"><button type="button" data-s="cn-" aria-label="Less often">${I.minus}</button><output>${checkEvery().n}</output><button type="button" data-s="cn+" aria-label="More">${I.plus}</button></span><span class="seg small set-seg set-units">${['day', 'week', 'month'].map((u) => `<button type="button" data-s="cu-${u}" aria-pressed="${checkEvery().unit === u}">${u[0].toUpperCase() + u.slice(1)}${checkEvery().n === 1 ? '' : 's'}</button>`).join('')}</span></div>`,
