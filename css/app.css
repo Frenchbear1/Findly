@@ -1798,3 +1798,9 @@ dialog:not(.set-dlg), .set-sheet { background: color-mix(in srgb, var(--card) va
   body.edge-dragging.edge-panel .content > .outline { visibility: visible; }
   body.edge-dragging .scrim { display: block; pointer-events: none; }
 }
+/* pan & zoom a page by hand */
+.pan-btn { display: grid; place-items: center; flex: none; width: 32px; height: 32px; margin-left: 4px; padding: 0; border: 0; border-radius: 9px; background: none; color: var(--muted); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.pan-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pan-btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.page-body.panning, .page-body.panning * { touch-action: none !important; }
+.page-body.panning { box-shadow: 0 0 0 2px var(--accent), var(--shadow); cursor: grab; }

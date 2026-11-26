@@ -632,7 +632,8 @@ function headHtml(v, doc, n, ctx, flat = false) {
     if (i >= 0) rank = `<span class="rank" title="Ranked ${fmt(i + 1)} by hits">${fmt(i + 1)}</span>`;
   }
   const lab = plabel(doc, n);
-  return `<span class="ph-pill">${rank}<span class="pno"${lab !== String(n + 1) ? ` title="Page ${lab} · ${fmt(n + 1)} of ${fmt(S.texts.get(doc.id)?.length || 0)} in the file"` : ''}>Page ${esc(lab)}</span>${badge}</span><span class="grow"></span>`;
+  const pan = prefs.panBtn && doc.kind === 'pdf' ? `<button class="pan-btn" data-act="pan" aria-pressed="false" aria-label="Pinch and drag this page" title="Pinch and drag this page">${PAN_ICON}</button>` : '';
+  return `<span class="ph-pill">${rank}<span class="pno"${lab !== String(n + 1) ? ` title="Page ${lab} · ${fmt(n + 1)} of ${fmt(S.texts.get(doc.id)?.length || 0)} in the file"` : ''}>Page ${esc(lab)}</span>${badge}</span><span class="grow"></span>${pan}`;
 }
 
 function pageEl(v, doc, n, R) {
@@ -1007,7 +1008,168 @@ function cropBand(art, content) {
   if (a <= 0 && b >= 1) return null;
   return [Math.max(0, a), Math.min(1, b)];
 }
+// ---------- pan & zoom a page by hand ----------
+// With the button beside a page's number turned on, that page is a window you move: drag to slide it over the page,
+// pinch to zoom. Zooming out shows more around the part you were on, keeping the box the same size; when a side
+// reaches the page's edge, the growing goes to the other side; once the whole width shows, it grows taller instead.
+// Pinching back in shrinks it back the same way, and near where it started it settles back to the cropped shape.
+// Turning the button off puts the page back as it was. The window is kept as fractions of the page:
+// R = { x, y, w, h } (left, top, width, height), and drawn with the same tools the crop uses (side trim + band).
+const PAN_ICON = '<svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-2.5 2.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5"/></svg>';
+function panParts(art) {
+  const body = art.lastElementChild;
+  const content = body?.querySelector('.pdf-frame:not(.clone)');
+  return { body, content, clip: body?.querySelector(':scope > .crop-clip') };
+}
+function togglePan(art, btn) {
+  const { body, content } = panParts(art);
+  if (art._pan) {
+    art._pan = null;
+    body.classList.remove('panning');
+    btn?.setAttribute('aria-pressed', 'false');
+    frameSpan(content, content.dataset.tx ? content.dataset.tx.split(',').map(Number) : null);
+    body._pieceSig = null;
+    applyCrop(art);
+    return;
+  }
+  if (!content) { toast('This page is still being drawn'); return; }
+  if (body.classList.contains('pieces')) unpiece(art, body, content);
+  let { clip } = panParts(art);
+  if (!clip) { // a page shown whole gets the same box the crop uses
+    clip = el('div', 'crop-clip');
+    const inner = el('div', 'crop-inner');
+    clip.append(inner);
+    body.replaceChildren(clip);
+    inner.append(content);
+  }
+  for (const b of body.querySelectorAll(':scope > .edge-nav, :scope > .edge-drag')) b.remove();
+  const ts = parseFloat(content.style.getPropertyValue('--ts')) || 1, tx0 = parseFloat(content.style.getPropertyValue('--tx0')) || 0;
+  const y = art._band || [0, 1];
+  const R0 = { x: tx0, y: y[0], w: 1 / ts, h: y[1] - y[0] };
+  const Wf = clip.clientWidth || body.clientWidth;
+  const AR = content.offsetHeight / (Wf * ts); // the page's height over its width
+  art._pan = { R0, R: { ...R0 }, AR, F0: R0.h * (Wf / R0.w) * AR };
+  body.classList.add('panning');
+  btn?.setAttribute('aria-pressed', 'true');
+  bindPan(art, body);
+  layoutPan(art);
+}
+function layoutPan(art) {
+  const P = art._pan;
+  const { body, content, clip } = panParts(art);
+  if (!P || !content || !clip) return;
+  const { x, y, w, h } = P.R;
+  frameSpan(content, [x, x + w]);
+  const H = content.offsetHeight;
+  clip.style.height = Math.max(24, Math.round(h * H)) + 'px';
+  clip.firstElementChild.style.marginTop = -Math.round(y * H) + 'px';
+  body.classList.remove('cut-top', 'cut-bottom');
+  clearTimeout(P.sharpT);
+  P.sharpT = setTimeout(() => content._sharpen?.([y, y + h], [x, x + w]), 160);
+}
+// one step of a pinch: f > 1 zooms in, f < 1 out, about the point (fx, fy) of the box
+function panZoom(art, f, fx, fy) {
+  const P = art._pan;
+  const Wf = panParts(art).clip.clientWidth;
+  let { x, y, w, h } = P.R;
+  const px = x + fx * w, py = y + fy * h; // the spot under your fingers stays put
+  const Fof = (hh, ww) => hh * (Wf / ww) * P.AR;
+  let w2 = w, h2 = h;
+  if (f < 1) {
+    w2 = w / f;
+    let extra = 1;
+    if (w2 > 1) { extra = w2; w2 = 1; } // the whole width shows: the rest of the zoom makes it taller
+    h2 = Math.min(1, h * (w2 / w) * extra);
+  } else if (f > 1) {
+    let left = f;
+    if (Fof(h, w) > P.F0 + 0.5) { // taller than it started: shrink back to that height first
+      const hMin = (P.F0 * w) / (Wf * P.AR);
+      h2 = Math.max(hMin, h / f);
+      left = f / (h / h2);
+    }
+    if (left > 1.0001) {
+      const w3 = Math.max(P.R0.w / 5, w / left);
+      h2 = h2 * (w3 / w);
+      w2 = w3;
+    }
+  }
+  x = Math.min(Math.max(0, px - fx * w2), 1 - w2);
+  y = Math.min(Math.max(0, py - fy * h2), 1 - h2);
+  P.R = { x, y, w: w2, h: h2 };
+  layoutPan(art);
+}
+function panMove(art, dx, dy) {
+  const P = art._pan;
+  const { clip, content } = panParts(art);
+  const Wf = clip.clientWidth, H = content.offsetHeight;
+  const { w, h } = P.R;
+  P.R.x = Math.min(Math.max(0, P.R.x - (dx * w) / Wf), 1 - w);
+  P.R.y = Math.min(Math.max(0, P.R.y - dy / H), 1 - h);
+  layoutPan(art);
+}
+// near where it started: glide back to exactly the cropped shape
+function panSettle(art) {
+  const P = art._pan;
+  if (!P) return;
+  const { R, R0 } = P;
+  const Wf = panParts(art).clip.clientWidth;
+  const F = R.h * (Wf / R.w) * P.AR;
+  if (Math.abs(R.w - R0.w) / R0.w > 0.07 || Math.abs(F - P.F0) / P.F0 > 0.07) return;
+  const from = { ...R }, t0 = performance.now();
+  const step = (now) => {
+    if (art._pan !== P) return;
+    const k = Math.min(1, (now - t0) / 220), e = 1 - (1 - k) ** 3;
+    P.R = { x: from.x + (R0.x - from.x) * e, y: from.y + (R0.y - from.y) * e, w: from.w + (R0.w - from.w) * e, h: from.h + (R0.h - from.h) * e };
+    layoutPan(art);
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+function bindPan(art, body) {
+  if (body._panBound) return;
+  body._panBound = true;
+  const pts = new Map();
+  let last = null;
+  const state = () => {
+    const a = [...pts.values()];
+    if (a.length >= 2) return { x: (a[0].x + a[1].x) / 2, y: (a[0].y + a[1].y) / 2, d: Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) };
+    return a.length ? { x: a[0].x, y: a[0].y, d: 0 } : null;
+  };
+  body.addEventListener('pointerdown', (e) => {
+    if (!art._pan || e.target.closest('button')) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { body.setPointerCapture(e.pointerId); } catch {}
+    last = state();
+    art._panMoved = false;
+  });
+  body.addEventListener('pointermove', (e) => {
+    if (!art._pan || !pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const now = state();
+    if (!last || !now) { last = now; return; }
+    const dx = now.x - last.x, dy = now.y - last.y;
+    if (Math.abs(dx) + Math.abs(dy) > 0 || (now.d && last.d)) art._panMoved = true;
+    if (now.d && last.d) {
+      const r = panParts(art).clip.getBoundingClientRect();
+      panZoom(art, now.d / last.d, (now.x - r.left) / r.width, (now.y - r.top) / r.height);
+    }
+    if (dx || dy) panMove(art, dx, dy);
+    last = now;
+  });
+  const up = (e) => {
+    if (!pts.delete(e.pointerId)) return;
+    last = state();
+    if (!pts.size) {
+      if (art._panMoved) art._swiped = performance.now(); // not also a tap on the page
+      panSettle(art);
+    }
+  };
+  body.addEventListener('pointerup', up);
+  body.addEventListener('pointercancel', up);
+}
+
 function applyCrop(art) {
+  if (art._pan) { layoutPan(art); return; } // pinched and dragged by hand: it keeps the view you've made
   const body = art.lastElementChild;
   const content = body.querySelector('.pdf-frame:not(.clone), .page-text');
   if (!content) return;
@@ -1866,7 +2028,7 @@ function bindPageSwipe(host) {
     s = null;
     if (prefs.pageNav !== 'swipe' || e.pointerType === 'mouse' || e.target.closest('button, a, input, textarea, .menu')) return;
     const art = pageOf(e.target);
-    if (art && !art._busy) s = { art, x: e.clientX, y: e.clientY, t: performance.now(), moved: 0, on: false, id: e.pointerId, dir: 0, prep: null, go: false };
+    if (art && !art._busy && !art._pan) s = { art, x: e.clientX, y: e.clientY, t: performance.now(), moved: 0, on: false, id: e.pointerId, dir: 0, prep: null, go: false };
   }, { passive: true });
   host.addEventListener('pointermove', (e) => {
     if (!s || e.pointerId !== s.id) return;
@@ -5197,6 +5359,7 @@ function openSettings() {
         ])}
         ${group('Reading', [
           `<div class="set-row static"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M9 3.5h6M9 20.5h6"/></svg></span><span class="set-t"><b>Opening cropped pages</b><small>${prefs.expand === 'drag' ? 'Drag the bars on a cropped page to pull it open' : 'Tap the arrows on a cropped page to open it'}</small></span><span class="seg small set-seg"><button type="button" data-s="xb" aria-pressed="${prefs.expand !== 'drag'}">Buttons</button><button type="button" data-s="xd" aria-pressed="${prefs.expand === 'drag'}">Drag</button></span></div>`,
+          row('panbtn', '<svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>', 'Pan &amp; zoom button', prefs.panBtn ? 'A button beside each page’s number: then pinch and drag the page' : 'Off', sw(prefs.panBtn)),
           `<div class="set-row static set-panels"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M8.5 4v16M15.5 4v16"/></svg></span><span class="set-t"><b>Side panels</b><small>${PANELS_TEXT[prefs.panels || 'buttons']}</small></span><span class="seg small set-seg">${[['buttons', 'Buttons'], ['swipe', 'Swipe'], ['both', 'Both']].map(([v, l]) => `<button type="button" data-s="pn-${v}" aria-pressed="${(prefs.panels || 'buttons') === v}">${l}</button>`).join('')}</span></div>`,
           `<div class="set-row static"><span class="set-ic">${I.undo}</span><span class="set-t"><b>Undo &amp; redo</b><small>${prefs.undoStyle === 'buttons' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar: right to undo, left to redo'}</small></span><span class="seg small set-seg"><button type="button" data-s="ug" aria-pressed="${prefs.undoStyle !== 'buttons'}">Gestures</button><button type="button" data-s="ub" aria-pressed="${prefs.undoStyle === 'buttons'}">Buttons</button></span></div>`,
         ])}
@@ -5258,6 +5421,22 @@ function openSettings() {
         if (!body?.classList.contains('cropped')) continue;
         body._pieceSig = null;
         applyCrop(art);
+      }
+      return;
+    }
+    if (k === 'panbtn') {
+      prefs.panBtn = !prefs.panBtn;
+      savePrefs();
+      b.querySelector('.set-sw').classList.toggle('on', prefs.panBtn);
+      b.querySelector('small').textContent = prefs.panBtn ? 'A button beside each page’s number: then pinch and drag the page' : 'Off';
+      // the page headers already shown get (or lose) the button
+      for (const art of $$('article.page')) {
+        const head = art.querySelector(':scope > .page-head');
+        const doc = docById(art.dataset.doc);
+        if (!head || !doc || !art._v || art.classList.contains('visit')) continue;
+        if (!prefs.panBtn && art._pan) togglePan(art, head.querySelector('.pan-btn'));
+        head.querySelector('.pan-btn')?.remove();
+        if (prefs.panBtn && doc.kind === 'pdf') head.insertAdjacentHTML('beforeend', `<button class="pan-btn" data-act="pan" aria-pressed="false" aria-label="Pinch and drag this page" title="Pinch and drag this page">${PAN_ICON}</button>`);
       }
       return;
     }
@@ -6275,6 +6454,7 @@ function bind() {
     else if (act === 'open' && art) openReader(art.dataset.doc, Number(art.dataset.n));
     else if (act === 'web' && art) { override.set(pkey(art.dataset.doc, WEB), 'original'); openReader(art.dataset.doc, Number(art.dataset.n)); }
     else if (act === 'pmode' && art) togglePageMode(art);
+    else if (act === 'pan' && art) togglePan(art, b);
     else if ((act === 'col-next' || act === 'col-prev') && art) shiftColumn(art, Number(b.dataset.piece), act === 'col-next' ? 1 : -1);
     else if ((act === 'edge-top' || act === 'edge-bottom') && art) expandEdge(art, act === 'edge-top' ? 'top' : 'bottom');
     else if (act === 'visit-back' && art?._home) goVisit(art._home, Number(art._home.dataset.n), Number(art.dataset.n) > Number(art._home.dataset.n) ? -1 : 1);
