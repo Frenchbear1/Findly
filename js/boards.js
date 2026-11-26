@@ -139,6 +139,8 @@ export function initBoards(api) {
       d.innerHTML = `<form method="dialog"><h3>${esc(title)}</h3><input name="n" value="${esc(value)}" placeholder="Board name" maxlength="80" autocomplete="off"><footer><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ok">${esc(ok)}</button></footer></form>`;
       document.body.append(d);
       const input = d.querySelector('input');
+      // Enter means Create (the form's first button is Cancel, which Enter would otherwise press)
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); d.close('ok'); } });
       d.addEventListener('close', () => { const v = d.returnValue === 'ok' ? input.value.trim() : null; d.remove(); resolve(v || null); });
       d.showModal();
       setTimeout(() => { input.focus(); input.select(); }, 30);
@@ -255,8 +257,9 @@ export function initBoards(api) {
 
   function render() {
     if (!view || view.hidden) return;
-    const crumbs = [{ id: null, name: 'Boards' }, ...path(B.at)];
-    view.querySelector('.bv-crumbs').innerHTML = crumbs.map((c, i) => `${i ? '<span>›</span>' : ''}<button data-go="${c.id ?? ''}" ${i === crumbs.length - 1 ? 'aria-current="page"' : ''}>${esc(c.name)}</button>`).join('');
+    // just where you are: the back arrow takes you up a level
+    const here = [{ id: null, name: 'Boards' }, ...path(B.at)].at(-1);
+    view.querySelector('.bv-crumbs').innerHTML = `<button data-go="${here.id ?? ''}" aria-current="page">${esc(here.name)}</button>`;
     view.querySelector('[data-bmenu]').hidden = !B.at;
     view.querySelector('[data-back]').hidden = !B.at;
     view.querySelectorAll('.bv-type button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.type === B.type)));
@@ -371,7 +374,7 @@ export function initBoards(api) {
     }
     const bm = t.closest('[data-bm]');
     if (bm) { e.stopPropagation(); return boardMenu(bm, board(bm.dataset.bm)); }
-    if (t.closest('[data-bmenu]')) return boardMenu(t.closest('[data-bmenu]'), board(B.at));
+    if (t.closest('[data-bmenu]')) { e.stopPropagation(); return boardMenu(t.closest('[data-bmenu]'), board(B.at)); } // not also the tap that closes it
     const im = t.closest('[data-imenu]');
     if (im) { e.stopPropagation(); return itemMenu(im, B.items.find((x) => x.id === im.dataset.imenu)); }
     const bc = t.closest('[data-board]');
@@ -384,7 +387,7 @@ export function initBoards(api) {
     if (!b) return;
     api.menu(anchor, [
       { header: b.name },
-      { label: 'Open', icon: I.board, run: () => { B.at = b.id; render(); } },
+      ...(b.id === B.at ? [] : [{ label: 'Open', icon: I.board, run: () => { B.at = b.id; render(); } }]), // already in it: no Open
       { label: b.pinned ? 'Unpin' : 'Pin to the top', icon: api.pinIcon, run: async () => { b.pinned = !b.pinned; await saveBoard(b); render(); } },
       { label: 'Rename…', icon: I.pencil, run: async () => { const name = await ask('Rename board', b.name, 'Rename'); if (name && name !== b.name) { const old = b.name; b.name = name; await saveBoard(b); recordCustom('Rename board', async () => { b.name = old; await saveBoard(b); render(); }, async () => { b.name = name; await saveBoard(b); render(); }); render(); } } },
       { label: 'Move…', icon: I.out, run: async () => { const id = await pick(`Move “${b.name}”`, { action: 'Move here', start: b.parentId, exclude: b.id, allowTop: true }); if (id !== undefined && id !== b.parentId) moveTo([{ kind: 'board', b }], id); } },
