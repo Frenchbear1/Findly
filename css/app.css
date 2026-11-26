@@ -820,7 +820,7 @@ dialog[open] { animation: dlg 0.2s ease-out; }
 .link-dlg, .review { padding: 20px 22px 18px; max-height: 86vh; overflow-y: auto; }
 .link-dlg header, .review header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .link-dlg h3, .review h3 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
-.link-dlg > p.muted, .review > p.muted { margin: 6px 0 14px; font-size: 13.5px; }
+.link-dlg > p.muted, .review > p.muted, .review-scroll > p.muted { margin: 6px 0 14px; font-size: 13.5px; }
 #linkUrl, .link-dlg input[type="url"] { width: 100%; height: 42px; padding: 0 12px; border-radius: 11px; border: 1px solid var(--line-2); background: var(--card); font-size: 15px; outline: 0; }
 #linkUrl:focus, .link-dlg input[type="url"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .link-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 13px; color: var(--muted); }
@@ -1724,18 +1724,25 @@ html, body { overflow-anchor: none; }
 .review-opts { border-top: 0; margin-top: 14px; padding: 12px 14px; border-radius: 14px; background: color-mix(in srgb, var(--bg) 70%, var(--card)); }
 .review-opts .check-row { margin: 0; align-items: flex-start; font-size: 13.5px; line-height: 1.4; }
 .review-opts .check-row input { flex: none; margin-top: 2px; accent-color: var(--accent); width: 17px; height: 17px; }
-/* the buttons stay at the bottom while the list scrolls under them */
+/* the buttons stay at the bottom while the list scrolls above them. Only the middle scrolls, so the buttons
+   sit straight on the sheet's own glass (a sticky footer with a backdrop of its own came out whiter than the
+   sheet around it) */
+.review { overflow: hidden; }
+.review-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0 -22px; padding: 0 22px 2px; }
+.review > p.muted, .review-scroll > p.muted { margin: 4px 0 14px; line-height: 1.4; }
+.review-scroll > p.muted:empty { margin: 0 0 4px; }
 .review .link-actions {
-  position: sticky; bottom: 0; z-index: 2; margin: 14px -22px 0; padding: 12px 22px max(14px, env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--card) 82%, transparent); -webkit-backdrop-filter: saturate(180%) blur(18px); backdrop-filter: saturate(180%) blur(18px);
-  box-shadow: inset 0 0.5px 0 var(--line);
+  flex: none; z-index: 2; margin: 0 -22px; padding: 12px 22px max(14px, env(safe-area-inset-bottom));
+  background: transparent; box-shadow: inset 0 0.5px 0 var(--line);
 }
 /* phones: a full-width sheet from the bottom (an id rule was holding it narrower, off to one side) */
 @media (max-width: 600px) {
   #reviewDlg, #linkDlg { max-width: none; }
-  #reviewDlg { overflow-y: auto; overscroll-behavior: contain; padding-bottom: 0; }
-  .review { padding: 14px 20px 0; }
-  .review .link-actions { margin: 14px -20px 0; padding-left: 20px; padding-right: 20px; }
+  #reviewDlg { overflow: hidden; overscroll-behavior: contain; padding-bottom: 0; }
+  #reviewDlg[open] { display: flex; flex-direction: column; }
+  .review { flex: 1 1 auto; min-height: 0; padding: 14px 20px 0; }
+  .review-scroll { margin: 0 -20px; padding: 0 20px 2px; }
+  .review .link-actions { margin: 0 -20px; padding-left: 20px; padding-right: 20px; }
 }
 
 .review > header { gap: 12px; align-items: center; }

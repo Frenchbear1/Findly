@@ -237,10 +237,12 @@
   <dialog id="reviewDlg" aria-labelledby="reviewTitle">
     <div class="review">
       <header><h3 id="reviewTitle"></h3><button class="icon-btn sm review-x" type="button" id="reviewX" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
+      <div class="review-scroll">
       <p class="muted" id="reviewIntro"></p>
       <div class="review-bulk" id="reviewBulk" hidden><button type="button" class="link" data-all="1">Select all</button><button type="button" class="link" data-all="0">Select none</button><span class="grow"></span><span class="muted" id="reviewCount"></span></div>
       <div class="review-list" id="reviewList"></div>
       <div class="review-opts" id="reviewOpts"></div>
+      </div>
       <div class="link-actions"><button class="btn" type="button" id="reviewCancel">Cancel</button><button class="btn primary" type="button" id="reviewApply">Apply</button></div>
     </div>
   </dialog>
