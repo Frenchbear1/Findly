@@ -207,46 +207,146 @@ function textBox(items, base) {
 // Where something is actually printed: the page drawn small and scanned for ink, as fractions like textBox.
 // Text positions alone can lie: official PDFs (eCFR, GPO) carry invisible print-shop text out in the margins,
 // which made a blank margin look used. The ink tells the truth, so trimming never keeps an empty side.
+// Scanned pages get two more things: specks of dust and the dark strip a scanner leaves at an edge don't count as
+// ink (they kept whole margins open), and a page that went through the scanner crooked is measured for how far it
+// leans (rot, in degrees, to turn it back upright; s, the little zoom that keeps its corners filled), with the ink
+// box measured on the page as it will be shown, upright.
 const inkCache = new Map();
 async function inkBox(page, base, key, draw) {
   if (inkCache.has(key)) return inkCache.get(key);
   let out = null;
   try {
-    const W = 420;
+    const W = 560;
     const vp = page.getViewport({ scale: W / base.width });
     const c = document.createElement('canvas');
     c.width = W;
-    c.height = Math.max(1, Math.round(vp.height));
+    const H = c.height = Math.max(1, Math.round(vp.height));
     const ctx = c.getContext('2d', { alpha: false, willReadFrequently: true });
     let drawn = false;
-    if (draw) try { const img = await draw(W, [0, 1, 0, 1], 0.7); ctx.drawImage(img, 0, 0, c.width, c.height); draw.forget?.([img._path]); drawn = true; } catch {}
+    if (draw) try { const img = await draw(W, [0, 1, 0, 1], 0.7); ctx.drawImage(img, 0, 0, W, H); draw.forget?.([img._path]); drawn = true; } catch {}
     if (!drawn) await page.render({ canvasContext: ctx, viewport: vp }).promise;
-    const { data } = ctx.getImageData(0, 0, c.width, c.height);
-    // the paper's colour: what most of the page's outer edge is (not always white)
-    const tally = new Map();
-    const note = (x, y) => { const i = (y * c.width + x) * 4; const k = ((data[i] >> 3) << 10) | ((data[i + 1] >> 3) << 5) | (data[i + 2] >> 3); tally.set(k, (tally.get(k) || 0) + 1); };
-    for (let x = 0; x < c.width; x += 2) { note(x, 1); note(x, c.height - 2); }
-    for (let y = 0; y < c.height; y += 2) { note(1, y); note(c.width - 2, y); }
-    let bk = 0x7fff, bn = 0;
-    for (const [k, n] of tally) if (n > bn) { bn = n; bk = k; }
-    const br = ((bk >> 10) << 3) + 4, bg = (((bk >> 5) & 31) << 3) + 4, bb = ((bk & 31) << 3) + 4;
-    // anything printed differs from it: dark text, and also pale pictures, tints and chart backgrounds
-    const cols = new Uint16Array(c.width), rows = new Uint16Array(c.height);
-    for (let y = 0; y < c.height; y++) {
-      for (let x = 0; x < c.width; x++) {
-        const i = (y * c.width + x) * 4;
-        if (Math.abs(data[i] - br) + Math.abs(data[i + 1] - bg) + Math.abs(data[i + 2] - bb) > 30) { cols[x]++; rows[y]++; }
-      }
-    }
-    // ignore specks: a column/row needs a couple of dark pixels to count
-    const first = (a) => a.findIndex((v) => v >= 2);
-    const last = (a) => { for (let i = a.length - 1; i >= 0; i--) if (a[i] >= 2) return i; return -1; };
-    const x0 = first(cols), x1 = last(cols), y0 = first(rows), y1 = last(rows);
-    if (x0 >= 0 && x1 > x0) out = { x: [x0 / c.width, (x1 + 1) / c.width], y: [y0 / c.height, (y1 + 1) / c.height] };
+    const { data } = ctx.getImageData(0, 0, W, H);
+    out = measureInk(data, W, H);
+    c.width = c.height = 0;
   } catch {}
   if (inkCache.size > 400) inkCache.delete(inkCache.keys().next().value);
   inkCache.set(key, out);
   return out;
+}
+// The measuring itself, on RGBA pixels (kept apart so it can be tested on its own).
+export function measureInk(data, W, H) {
+  // the paper's colour: what most of the page's outer edge is (not always white)
+  const tally = new Map();
+  const note = (x, y) => { const i = (y * W + x) * 4; const k = ((data[i] >> 3) << 10) | ((data[i + 1] >> 3) << 5) | (data[i + 2] >> 3); tally.set(k, (tally.get(k) || 0) + 1); };
+  for (let x = 0; x < W; x += 2) { note(x, 1); note(x, H - 2); }
+  for (let y = 0; y < H; y += 2) { note(1, y); note(W - 2, y); }
+  let bk = 0x7fff, bn = 0;
+  for (const [k, n] of tally) if (n > bn) { bn = n; bk = k; }
+  const br = ((bk >> 10) << 3) + 4, bg = (((bk >> 5) & 31) << 3) + 4, bb = ((bk & 31) << 3) + 4;
+  // anything printed differs from it: dark text, and also pale pictures, tints and chart backgrounds
+  const mask = new Uint8Array(W * H);
+  for (let p = 0, i = 0; p < W * H; p++, i += 4) if (Math.abs(data[i] - br) + Math.abs(data[i + 1] - bg) + Math.abs(data[i + 2] - bb) > 30) mask[p] = 1;
+  // a scanner's dark edge: a column or row at the very edge that's mostly "ink" isn't content
+  const edgeX = Math.ceil(W * 0.04), edgeY = Math.ceil(H * 0.04);
+  for (let x = 0; x < W; x++) {
+    if (x >= edgeX && x < W - edgeX) continue;
+    let n = 0;
+    for (let y = 0; y < H; y++) n += mask[y * W + x];
+    if (n > H * 0.5) for (let y = 0; y < H; y++) mask[y * W + x] = 0;
+  }
+  for (let y = 0; y < H; y++) {
+    if (y >= edgeY && y < H - edgeY) continue;
+    let n = 0;
+    for (let x = 0; x < W; x++) n += mask[y * W + x];
+    if (n > W * 0.5) mask.fill(0, y * W, (y + 1) * W);
+  }
+  // specks: ink only counts where there's more ink close by (a letter, a line, a picture), not a lone dot
+  const S = new Uint32Array((W + 1) * (H + 1)); // running totals, for counting any square quickly
+  for (let y = 0; y < H; y++) {
+    let row = 0;
+    for (let x = 0; x < W; x++) { row += mask[y * W + x]; S[(y + 1) * (W + 1) + x + 1] = S[y * (W + 1) + x + 1] + row; }
+  }
+  // ink is grouped into blobs (marks within a couple of pixels join up, so a word, a line or a picture is one
+  // blob); a blob too small to be anything but dust (or a stray dot) doesn't count
+  const near = (x, y, R) => {
+    const x0 = Math.max(0, x - R), x1 = Math.min(W, x + R + 1), y0 = Math.max(0, y - R), y1 = Math.min(H, y + R + 1);
+    return S[y1 * (W + 1) + x1] - S[y0 * (W + 1) + x1] - S[y1 * (W + 1) + x0] + S[y0 * (W + 1) + x0];
+  };
+  const MIN = 36;
+  const seen = new Uint8Array(W * H);
+  const keep = new Uint8Array(W * H);
+  const stack = new Int32Array(W * H);
+  const blob = [];
+  for (let p0 = 0; p0 < W * H; p0++) {
+    if (!mask[p0] || seen[p0]) continue;
+    let top = 0, area = 0;
+    blob.length = 0;
+    stack[top++] = p0;
+    seen[p0] = 1;
+    while (top) {
+      const p = stack[--top];
+      const x = p % W, y = (p / W) | 0;
+      if (mask[p]) { area++; blob.push(p); }
+      // reach two pixels out, through blank paper, to the next mark
+      for (let dy = -2; dy <= 2; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= H) continue;
+        for (let dx = -2; dx <= 2; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= W) continue;
+          const q = yy * W + xx;
+          if (!seen[q] && mask[q]) { seen[q] = 1; stack[top++] = q; }
+        }
+      }
+    }
+    if (area >= MIN) for (const p of blob) keep[p] = 1;
+  }
+  const xs = [], ys = [];
+  for (let p = 0; p < W * H; p++) if (keep[p] && near(p % W, (p / W) | 0, 1) >= 2) { xs.push(p % W); ys.push((p / W) | 0); }
+  if (xs.length < 12) return null;
+  // how far the page leans: the angle at which the ink falls into the sharpest rows (lines of text line up)
+  const cx = W / 2, cy = H / 2;
+  const step = Math.max(1, Math.floor(xs.length / 60000));
+  const bins = new Float64Array(H * 2 + 8);
+  const sharpness = (deg) => {
+    const t = Math.tan((deg * Math.PI) / 180);
+    bins.fill(0);
+    for (let k = 0; k < xs.length; k += step) {
+      const b = Math.round(ys[k] - (xs[k] - cx) * t + H / 2) + 2;
+      if (b >= 0 && b < bins.length) bins[b]++;
+    }
+    // softened a little first, so a level angle (where every pixel lands exactly on a row) isn't favoured over a
+    // slanted one (where they fall between rows) just because of the rounding
+    let sum = 0;
+    for (let b = 1; b < bins.length - 1; b++) { const v = bins[b - 1] + 2 * bins[b] + bins[b + 1]; sum += v * v; }
+    return sum;
+  };
+  let lean = 0;
+  if (xs.length > 1500) {
+    const flat = sharpness(0);
+    let best = 0, bestS = flat;
+    for (let d = -5; d <= 5.001; d += 0.25) { const v = sharpness(d); if (v > bestS) { bestS = v; best = d; } }
+    for (let d = best - 0.25; d <= best + 0.251; d += 0.05) { const v = sharpness(d); if (v > bestS) { bestS = v; best = d; } }
+    // only a clear, real lean: not a page that's straight already, and not a picture that fools it
+    if (Math.abs(best) >= 0.15 && Math.abs(best) <= 5 && bestS > flat * 1.15) lean = Math.round(best * 100) / 100;
+  }
+  const rot = -lean; // turning it back
+  const a = (rot * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a);
+  const sc = rot ? Math.abs(cos) + Math.abs(sin) * Math.max(W / H, H / W) : 1;
+  // the ink box, on the page as it will be shown (turned upright and zoomed a touch about its middle)
+  const cols = new Uint16Array(W), rows = new Uint16Array(H);
+  for (let k = 0; k < xs.length; k++) {
+    let X = xs[k] + 0.5, Y = ys[k] + 0.5;
+    if (rot) { const dx = X - cx, dy = Y - cy; X = cx + sc * (dx * cos - dy * sin); Y = cy + sc * (dx * sin + dy * cos); }
+    const xi = Math.floor(X), yi = Math.floor(Y);
+    if (xi >= 0 && xi < W) cols[xi]++;
+    if (yi >= 0 && yi < H) rows[yi]++;
+  }
+  const first = (arr) => arr.findIndex((v) => v >= 2);
+  const last = (arr) => { for (let i = arr.length - 1; i >= 0; i--) if (arr[i] >= 2) return i; return -1; };
+  const x0 = first(cols), x1 = last(cols), y0 = first(rows), y1 = last(rows);
+  if (!(x0 >= 0 && x1 > x0 && y0 >= 0 && y1 > y0)) return null;
+  return { x: [x0 / W, (x1 + 1) / W], y: [y0 / H, (y1 + 1) / H], rot, s: sc };
 }
 // Text box tightened by the ink: never keep a side that has nothing printed on it.
 function tighten(box, ink) {
@@ -400,7 +500,9 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   const content = await page.getTextContent();
   // "wide view": cut the side margins so the text fills the width (top and bottom margins are trimmed by the app)
   let box = trim ? textBox(content.items, base) : { x: null, y: null };
-  if (trim) box = tighten(box, await inkBox(page, base, `${pdf.fingerprints?.[0] || ''}:${n}`, draw));
+  const ink = await inkBox(page, base, `${pdf.fingerprints?.[0] || ''}:${n}`, draw); // crooked scans turn upright, trimmed or not
+  if (trim) box = tighten(box, ink);
+  const rot = ink?.rot || 0, rs = ink?.s || 1; // a crooked scan, turned upright
   const span = box.x;
   const ts = span ? 1 / (span[1] - span[0]) : 1;
   // in column view a column fills the width, so draw sharper (columns are found around each hit by the app)
@@ -424,6 +526,20 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   if (span) { frame.style.setProperty('--ts', ts.toFixed(4)); frame.style.setProperty('--tx0', span[0].toFixed(4)); frame.dataset.tx = span.join(','); }
   if (box.y) frame.dataset.ty = box.y.join(','); // where the text starts and ends down the page
   frame._lines = textLines(content.items, base); // where each piece of text sits, for finding columns
+  if (rot) {
+    // the whole page turns (picture, highlights and selectable text together), so everything stays lined up
+    sheet.style.transform = `rotate(${rot}deg) scale(${rs.toFixed(4)})`;
+    frame.dataset.rot = String(rot);
+    // where the text sits, as it's shown now
+    const a = (rot * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a), ar = base.height / base.width;
+    const L = frame._lines;
+    const to = (fx, fy) => { const dx = fx - 0.5, dy = (fy - 0.5) * ar; return [0.5 + rs * (dx * cos - dy * sin), 0.5 + (rs * (dx * sin + dy * cos)) / ar]; };
+    for (let k = 0; k + 3 < L.length; k += 4) {
+      const pts = [to(L[k], L[k + 2]), to(L[k + 1], L[k + 2]), to(L[k], L[k + 3]), to(L[k + 1], L[k + 3])];
+      L[k] = Math.min(...pts.map((p) => p[0])); L[k + 1] = Math.max(...pts.map((p) => p[0]));
+      L[k + 2] = Math.min(...pts.map((p) => p[1])); L[k + 3] = Math.max(...pts.map((p) => p[1]));
+    }
+  }
   let canvas = null;
   if (draw) try { canvas = await draw(Math.floor(pvp.width), [0, 1, 0, 1], 0.72); } catch { draw = null; }
   const nativeSoft = !!canvas;
@@ -501,8 +617,9 @@ export async function renderPdfPage(pdf, n, host, ranges, width, { trim = false,
   const sharpen = (y, x) => {
     if (y) {
       x = x || span || [0, 1];
-      const pad = 0.04;
-      const r = [Math.max(0, x[0] - 0.01), Math.min(1, x[1] + 0.01), Math.max(0, y[0] - pad), Math.min(1, y[1] + pad)];
+      const lean = Math.abs(Math.sin((rot * Math.PI) / 180)); // a turned page shows a slanted strip of the source
+      const pad = 0.04 + lean * (base.width / base.height), padX = 0.01 + lean * (base.height / base.width) * 0.5;
+      const r = [Math.max(0, x[0] - padX), Math.min(1, x[1] + padX), Math.max(0, y[0] - pad), Math.min(1, y[1] + pad)];
       want = want && !covers(r, want) ? [Math.min(want[0], r[0]), Math.max(want[1], r[1]), Math.min(want[2], r[2]), Math.max(want[3], r[3])] : r;
     }
     if (!want || covers(have, want) || busy || dead) return;
