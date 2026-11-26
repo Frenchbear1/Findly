@@ -1761,10 +1761,12 @@ html { touch-action: manipulation; }
 .tips-ghost { position: absolute; inset: 0 0 auto 0; pointer-events: none; z-index: 1; background: inherit; }
 .tip-mode { display: inline-block; padding: 2px 9px; border-radius: 7px; background: var(--accent-soft); color: var(--accent); font-weight: 650; }
 
-/* Glass › Popups: sheets are solid as designed, and can be made see-through like the menus */
+/* Glass › Sheets: solid as designed, and can be made see-through */
 dialog:not(.set-dlg), .set-sheet { background: color-mix(in srgb, var(--card) var(--a-sheet, 100%), transparent); }
 .set-sheet { background: color-mix(in srgb, var(--bg) var(--a-sheet, 100%), transparent); }
-:root:not([style*="--a-sheet: 100"]) :is(dialog:not(.set-dlg), .set-sheet) { -webkit-backdrop-filter: var(--blur-pop, var(--blur)); backdrop-filter: var(--blur-pop, var(--blur)); }
+:root:not([style*="--a-sheet: 100"]) :is(dialog:not(.set-dlg), .set-sheet) { -webkit-backdrop-filter: var(--blur-sheet, var(--blur)); backdrop-filter: var(--blur-sheet, var(--blur)); }
+/* the theme panel is a sheet too: it frosts and clears with Glass › Sheets */
+.tbar { background: color-mix(in srgb, var(--panel) var(--a-tbar, 94%), transparent); -webkit-backdrop-filter: var(--blur-sheet, blur(18px)); backdrop-filter: var(--blur-sheet, blur(18px)); }
 /* Glass: which surfaces to change, and the stand-ins that show them live */
 .tb-parts { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
 .tb-parts button { height: 32px; padding: 0 13px; border: 0; border-radius: 999px; background: var(--fill, color-mix(in srgb, var(--ink) 7%, transparent)); color: var(--ink-2); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: background 0.18s, color 0.18s, transform 0.15s; }

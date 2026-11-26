@@ -6022,15 +6022,17 @@ function applyTheme() {
 // Each surface keeps its own designed opacity at 50 and scales from there in both directions.
 // Settings › Reading theme › Glass sets these per group of surfaces (prefs.glassG[group] = { t, b }); a group
 // with nothing of its own follows the overall setting (prefs.glassT / blurL). Sheets are solid as designed.
-const GLASS = { '--a-top': 76, '--a-bar': 40, '--a-menu': 80, '--a-head': 74, '--a-dock': 88, '--a-sheet': 100, '--a-side': 100 };
+const GLASS = { '--a-top': 76, '--a-bar': 40, '--a-menu': 80, '--a-head': 74, '--a-dock': 88, '--a-sheet': 100, '--a-tbar': 94, '--a-side': 100 };
 const GLASS_GROUPS = {
   top: { vars: ['--a-top'], blur: '--blur-top' },
   heads: { vars: ['--a-head'], blur: '--blur-head' },
   bottom: { vars: ['--a-bar', '--a-dock'], blur: '--blur-bottom' },
-  popups: { vars: ['--a-menu', '--a-sheet'], blur: '--blur-pop' },
-  sides: { vars: ['--a-side'], blur: '--blur-side' }, // the library on the left and the pages panel on the right (solid as designed) // not the theme panel itself: it stays readable while you change these
+  menus: { vars: ['--a-menu'], blur: '--blur-pop' }, // the search-type picker, a page's tap menu and other little menus
+  sheets: { vars: ['--a-sheet', '--a-tbar'], blur: '--blur-sheet' }, // Settings, the theme panel and the other sheets
+  sides: { vars: ['--a-side'], blur: '--blur-side' }, // the library on the left and the pages panel on the right (solid as designed)
 };
-const glassOf = (g) => ({ t: prefs.glassG?.[g]?.t ?? prefs.glassT ?? 50, b: prefs.glassG?.[g]?.b ?? prefs.blurL ?? BLUR_DEF });
+// (what was set for the old "Popups" group carries over to Menus)
+const glassOf = (g) => { const o = prefs.glassG?.[g] ?? (g === 'menus' ? prefs.glassG?.popups : null); return { t: o?.t ?? prefs.glassT ?? 50, b: o?.b ?? prefs.blurL ?? BLUR_DEF }; };
 function applyGlass() {
   const root = document.documentElement.style;
   for (const [g, { vars, blur }] of Object.entries(GLASS_GROUPS)) {

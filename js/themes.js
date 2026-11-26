@@ -210,7 +210,7 @@ function paperCard(pp, on, t) {
 }
 
 // Glass: which surfaces the sliders below act on (any several at once)
-const GLASS_PARTS = [['top', 'Top bar'], ['heads', 'Headers'], ['bottom', 'Bottom bars'], ['popups', 'Popups'], ['sides', 'Side panels']];
+const GLASS_PARTS = [['top', 'Top bar'], ['heads', 'Headers'], ['bottom', 'Bottom bars'], ['menus', 'Menus'], ['sheets', 'Sheets'], ['sides', 'Side panels']];
 export function openThemeBar(prefs, { save, glass, glassOf } = {}) {
   let bar = document.getElementById('themeBar');
   if (bar && !bar.hidden) { closeBar(bar, save); return; }
@@ -412,7 +412,7 @@ function scrollable(row) {
 // is behind. The top bar is the real one.
 function glassDemo(bar, parts) {
   let demo = document.getElementById('glassDemo');
-  const want = parts ? ['heads', 'bottom', 'popups'].filter((g) => parts.has(g)) : [];
+  const want = parts ? ['heads', 'bottom', 'menus'].filter((g) => parts.has(g)) : [];
   if (!want.length) {
     if (demo && !demo.classList.contains('leaving')) {
       demo.classList.add('leaving');
@@ -424,7 +424,7 @@ function glassDemo(bar, parts) {
   if (fresh) { demo?.remove(); demo = document.createElement('div'); demo.id = 'glassDemo'; demo.setAttribute('aria-hidden', 'true'); document.body.append(demo); }
   const have = new Set([...demo.children].map((c) => c.dataset.g));
   const make = {
-    popups: '<div class="gd gd-menu" data-g="popups"><div>Open</div><div>Copy link to this page</div><div>Add to a board</div></div>',
+    menus: '<div class="gd gd-menu" data-g="menus"><div>Open</div><div>Copy link to this page</div><div>Add to a board</div></div>',
     heads: '<div class="gd gd-head" data-g="heads"><span class="ftype pdf">PDF</span><b>Pilot’s Handbook of Aeronautical Knowledge</b></div>',
     bottom: '<div class="gd gd-bar" data-g="bottom"><span>All</span><i></i><i></i><b>12</b><i></i><i></i></div>',
   };
@@ -438,7 +438,7 @@ function glassDemo(bar, parts) {
     t.innerHTML = make[g];
     const n = t.content.firstElementChild;
     // in order, top to bottom: a menu, a header, the bottom bar
-    const order = ['popups', 'heads', 'bottom'];
+    const order = ['menus', 'heads', 'bottom'];
     const after = [...demo.children].find((c) => order.indexOf(c.dataset.g) > order.indexOf(g));
     demo.insertBefore(n, after || null);
     n.animate([{ opacity: 0, transform: 'translateY(12px) scale(0.97)' }, { opacity: 1, transform: 'none' }], { duration: 300, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
