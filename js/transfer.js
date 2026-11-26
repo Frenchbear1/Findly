@@ -36,12 +36,29 @@ function load(src, global) {
 const loadPeer = () => load('vendor/transfer/peerjs.min.js', 'peerjs').then((m) => m.Peer || m.default?.Peer);
 
 // ---- the sheet, and the pill it shrinks into so you can keep using the app ----
+// The sheet has a little scene at its top that carries through the whole transfer: the two devices, the line
+// between them that goes from searching to linked, documents streaming across it (faster when it's fast), a ring
+// filling round the receiving device, and a check when it's all there. Below it, the words and buttons for each step
+// slide in as the last ones slip away.
+const GLYPH = {
+  phone: '<svg viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/><path d="M10.5 5h3"/></svg>',
+  laptop: '<svg viewBox="0 0 24 24"><rect x="4.5" y="5" width="15" height="10.5" rx="1.6"/><path d="M2.5 18.5h19"/></svg>',
+};
+const glyphFor = (name) => (/iPhone|Android|iPad/i.test(name || '') ? GLYPH.phone : GLYPH.laptop);
+const reduce = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 let current = null; // one transfer at a time
 function panel(kind) {
   const title = kind === 'send' ? 'Send to another device' : 'Receive from another device';
+  const me = device();
   const d = document.createElement('dialog');
   d.className = 'xfer';
-  d.innerHTML = `<div class="xf-head"><h3>${esc(title)}</h3><button class="xf-stop" data-cancel hidden>Stop</button><button class="icon-btn sm" data-x aria-label="Hide"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button></div><div class="xf-body"></div><div class="xf-foot" hidden><button class="btn primary" data-hide>Keep using the app</button></div>`;
+  const dev = (side, name, label) => `<div class="xf-dev ${side}"><div class="xf-halo"></div><svg class="xf-pr" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29"/><circle class="v" cx="32" cy="32" r="29" pathLength="100"/></svg><div class="xf-glyph">${glyphFor(name)}</div><svg class="xf-ok" viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9" pathLength="100"/></svg><small>${esc(label)}</small></div>`;
+  // the sender's always on the left, the receiver on the right: documents flow left to right
+  const left = kind === 'send' ? dev('a', me, `This ${me}`) : dev('a', '', 'Other device');
+  const right = kind === 'send' ? dev('b', '', 'Other device') : dev('b', me, `This ${me}`);
+  d.innerHTML = `<div class="xf-head"><h3>${esc(title)}</h3><button class="xf-stop" data-cancel hidden>Stop</button><button class="icon-btn sm" data-x aria-label="Hide"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button></div>
+    <div class="xf-body"><div class="xf-stage" hidden>${left}<div class="xf-link"><i class="xf-line"></i><div class="xf-flow"></div><b class="xf-pulse"></b></div>${right}</div><div class="xf-info"></div></div>
+    <div class="xf-foot" hidden><button class="btn primary" data-hide>Keep using the app</button></div>`;
   const pill = document.createElement('button');
   pill.className = 'xf-pill';
   pill.hidden = true;
@@ -49,50 +66,172 @@ function panel(kind) {
   document.body.append(d, pill);
   d.show(); // not modal: the app stays usable underneath
   const body = d.querySelector('.xf-body');
+  const stage = d.querySelector('.xf-stage');
+  const info = d.querySelector('.xf-info');
+  // which step the scene shows: null (hidden: the QR code and camera have their own), connecting, linked,
+  // sending, paused, placing, done, error
+  let phase = null;
+  const setPhase = (p) => {
+    if (p === phase) return;
+    const was = phase;
+    phase = p;
+    if (!p) { if (!stage.hidden) { stage.animate([{ opacity: 1 }, { opacity: 0, transform: 'scale(0.96)' }], { duration: 160, easing: 'ease-in' }).onfinish = () => { if (!phase) stage.hidden = true; }; } return; }
+    if (stage.hidden) { stage.hidden = false; if (!reduce()) stage.animate([{ opacity: 0, transform: 'translateY(10px) scale(0.96)' }, { opacity: 1, transform: 'none' }], { duration: 420, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1.2)' }); }
+    stage.className = `xf-stage is-${p}`;
+    // the moment they find each other: the line snaps solid with a pulse, and a tap you can feel
+    if ((p === 'linked' || p === 'sending') && (was === 'connecting' || was === null) && !reduce()) {
+      stage.classList.add('just-linked');
+      setTimeout(() => stage.classList.remove('just-linked'), 900);
+      navigator.vibrate?.(12);
+    }
+    if (p === 'done') { navigator.vibrate?.([10, 60, 18]); burst(); }
+    if (p === 'error') stage.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-7px)' }, { transform: 'translateX(6px)' }, { transform: 'translateX(-3px)' }, { transform: 'none' }], { duration: 380 });
+    flow(p === 'sending');
+  };
+  // documents streaming across: little sheets of paper, a few a second, more when it's quicker
+  let flowT = 0, rate = 0;
+  const flow = (on) => {
+    clearTimeout(flowT);
+    if (!on || reduce()) return;
+    const lane = stage.querySelector('.xf-flow');
+    const spawn = () => {
+      if (phase !== 'sending' || !d.isConnected) return;
+      if (lane.childElementCount < 14) {
+        const p = document.createElement('i');
+        p.style.setProperty('--y', `${(Math.random() * 14 - 7).toFixed(1)}px`);
+        p.style.setProperty('--r', `${(Math.random() * 30 - 15).toFixed(0)}deg`);
+        lane.append(p);
+        p.addEventListener('animationend', () => p.remove(), { once: true });
+      }
+      // ~1.2 MB/s and up: as busy as it gets; slower: calmer
+      const every = Math.max(90, Math.min(520, 520 - Math.min(1, rate / 1.2e6) * 430));
+      flowT = setTimeout(spawn, every * (0.75 + Math.random() * 0.5));
+    };
+    spawn();
+  };
+  // the finish: a ripple out from the receiving device
+  const burst = () => {
+    if (reduce()) return;
+    const host = stage.querySelector('.xf-dev.b');
+    for (let k = 0; k < 2; k++) {
+      const r = document.createElement('b');
+      r.className = 'xf-ripple';
+      r.style.animationDelay = `${k * 160}ms`;
+      host.append(r);
+      r.addEventListener('animationend', () => r.remove(), { once: true });
+    }
+    for (let k = 0; k < 10; k++) {
+      const s = document.createElement('i');
+      s.className = 'xf-spark';
+      const a = (k / 10) * Math.PI * 2 + Math.random() * 0.4;
+      s.style.setProperty('--dx', `${Math.cos(a) * (38 + Math.random() * 16)}px`);
+      s.style.setProperty('--dy', `${Math.sin(a) * (38 + Math.random() * 16)}px`);
+      host.append(s);
+      s.addEventListener('animationend', () => s.remove(), { once: true });
+    }
+  };
+  const ring = (p) => { const v = stage.querySelector('.xf-dev.b .xf-pr .v'); v.style.strokeDasharray = `${(p * 100).toFixed(2)} 100`; v.style.opacity = p > 0.003 ? '1' : '0'; }; // (a round cap at 0 would leave a dot)
+  // the words below: the old ones slip up and away as the new ones rise in
+  let swapT = 0;
+  const setInfo = (html) => {
+    clearTimeout(swapT);
+    for (const x of info.querySelectorAll(':scope > .xf-step.out')) x.remove(); // anything still leaving goes now
+    const old = info.querySelector(':scope > .xf-step');
+    const next = document.createElement('div');
+    next.className = 'xf-step';
+    next.innerHTML = html;
+    if (!old || reduce()) { info.replaceChildren(next); return next; }
+    old.classList.add('out');
+    old.style.position = 'absolute';
+    info.append(next);
+    next.animate([{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 300, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' });
+    old.animate([{ opacity: 1 }, { opacity: 0, transform: 'translateY(-8px)' }], { duration: 160, easing: 'ease-in', fill: 'forwards' }).onfinish = () => old.remove();
+    return next;
+  };
+  // the number counts up smoothly between updates, and the speed and time left are worked out as it goes
+  let shown = 0, target = 0, numRaf = 0, last = null;
+  const tick = () => {
+    numRaf = 0;
+    shown += (target - shown) * 0.18;
+    if (Math.abs(target - shown) < 0.05) shown = target;
+    const n = info.querySelector('.xf-pct b');
+    if (n) n.textContent = Math.floor(shown);
+    if (shown !== target) numRaf = requestAnimationFrame(tick);
+  };
   const t = {
     kind, d, body, pill, active: false, finished: false, live: false,
     // the pill's words when the sheet is tucked away and nothing is being sent yet
     note(text) { if (!t.active) { pill.querySelector('span').textContent = text; pill.querySelector('.v').style.strokeDasharray = '0 100'; } },
+    // the other device introduced itself: show it by name
+    other(name) {
+      const side = kind === 'send' ? 'b' : 'a';
+      const host = stage.querySelector(`.xf-dev.${side}`);
+      host.querySelector('.xf-glyph').innerHTML = glyphFor(name);
+      const n = String(name || '').replace(/^an? /i, '');
+      host.querySelector('small').textContent = n.charAt(0).toUpperCase() + n.slice(1);
+    },
     // something went wrong: say what, and offer to start again
     fail(msg, retry) {
       t.active = false;
       keepAwake(false);
       d.querySelector('.xf-foot').hidden = true;
-      body.innerHTML = `<p class="xf-err">${esc(msg)}</p>${retry ? '<div class="xf-btns"><button class="btn primary" data-retry>Try again</button></div>' : ''}`;
-      if (retry) body.querySelector('[data-retry]').onclick = () => { t.onCancel?.(); t.destroy(); retry(); };
+      if (phase) setPhase('error');
+      setInfo(`<p class="xf-err">${esc(msg)}</p>${retry ? '<div class="xf-btns"><button class="btn primary" data-retry>Try again</button></div>' : ''}`);
+      if (retry) info.querySelector('[data-retry]').onclick = () => { t.onCancel?.(); t.destroy(); retry(); };
       pill.classList.add('paused');
       pill.querySelector('span').textContent = 'Transfer stopped · tap';
     },
     onCancel: null, onDone: null,
-    set(html) { body.innerHTML = html; },
-    // running: the sheet's progress, the pill's ring and words stay in step
-    status(label, done, total, { paused = false } = {}) {
+    // a step: its words (and buttons), with the scene showing where things are
+    set(html, p = null) { setPhase(p); return setInfo(html); },
+    get info() { return info; },
+    // running: the scene, the sheet's numbers and the pill stay in step
+    status(label, done, total, { paused = false, placing = false } = {}) {
       t.active = true;
       d.querySelector('.xf-foot').hidden = false;
       const p = total ? Math.min(1, done / total) : 0;
       const pct = Math.floor(p * 100);
-      const bar = body.querySelector('.xf-run');
-      if (!bar) body.innerHTML = '<div class="xf-run"><p class="xf-big"></p><div class="xf-bar"><i></i></div><p class="xf-sub"></p></div>';
-      body.querySelector('.xf-big').textContent = label;
-      body.querySelector('.xf-bar i').style.width = `${(p * 100).toFixed(1)}%`;
-      body.querySelector('.xf-bar').classList.toggle('paused', paused);
-      body.querySelector('.xf-sub').textContent = total ? `${fmt(done)} of ${fmt(total)} · ${pct}%` : '';
+      setPhase(paused ? 'paused' : placing ? 'placing' : 'sending');
+      // how fast: a gentle average, so it doesn't jitter
+      const now = performance.now();
+      if (!paused && !placing && last && done > last.done && now > last.at) {
+        const r = ((done - last.done) / (now - last.at)) * 1000;
+        rate = rate ? rate * 0.7 + r * 0.3 : r;
+      }
+      if (!paused) last = { done, at: now };
+      if (!info.querySelector('.xf-run')) {
+        setInfo('<div class="xf-run"><p class="xf-big"></p><p class="xf-pct"><b>0</b><span>%</span></p><div class="xf-bar"><i></i></div><p class="xf-sub"></p></div>');
+        shown = 0;
+      }
+      const run = info.querySelector('.xf-run');
+      run.querySelector('.xf-big').textContent = label;
+      run.querySelector('.xf-pct').hidden = placing && !total;
+      run.querySelector('.xf-bar i').style.width = `${(p * 100).toFixed(1)}%`;
+      run.querySelector('.xf-bar').classList.toggle('paused', paused);
+      target = p * 100;
+      if (!numRaf) numRaf = requestAnimationFrame(tick);
+      const left = rate > 0 && !paused && !placing ? (total - done) / rate : 0;
+      const eta = left > 90 ? `about ${Math.round(left / 60)} min left` : left > 3 ? `about ${Math.round(left / 5) * 5 || 5} s left` : '';
+      run.querySelector('.xf-sub').textContent = total && !placing ? [`${fmt(done)} of ${fmt(total)}`, rate > 0 && !paused ? `${fmt(rate)}/s` : '', eta].filter(Boolean).join(' · ') : '';
+      ring(placing ? 1 : p);
+      stage.classList.toggle('placing', placing);
       pill.classList.toggle('paused', paused);
       pill.querySelector('.v').style.strokeDasharray = `${(p * 100).toFixed(1)} 100`;
       pill.querySelector('span').textContent = paused ? `Paused · ${pct}%` : `${kind === 'send' ? 'Sending' : 'Receiving'} ${pct}%`;
     },
     hide() { if (d.open) d.close(); pill.hidden = false; },
     show() { pill.hidden = true; if (!d.open) d.show(); },
-    finish(html, { pillText = null, onTap = null } = {}) {
+    finish(html, { pillText = null, onTap = null, ok = false } = {}) {
       t.active = false;
       t.finished = true;
       keepAwake(false);
       d.querySelector('.xf-foot').hidden = true;
-      body.innerHTML = html;
+      if (ok) { ring(1); setPhase('done'); } else if (phase) setPhase('error');
+      setInfo(html);
       if (pillText && !d.open) { pill.classList.remove('paused'); pill.classList.add('done'); pill.querySelector('span').textContent = pillText; pill.onclick = onTap || (() => t.show()); }
       else pill.hidden = true;
     },
-    destroy() { t.active = false; keepAwake(false); if (d.open) d.close(); d.remove(); pill.remove(); if (current === t) current = null; },
+    destroy() { t.active = false; clearTimeout(flowT); keepAwake(false); if (d.open) d.close(); d.remove(); pill.remove(); if (current === t) current = null; },
   };
   // hiding keeps it going (the pill shows how it's doing); Stop ends it and cleans everything up
   const tuck = () => (t.live && !t.finished ? t.hide() : (t.onCancel?.(), t.destroy()));
@@ -112,14 +251,14 @@ function busy() {
 }
 
 const choose = (t, html) => new Promise((ok) => {
-  t.set(`${html}<div class="xf-opts">
+  const step = t.set(`${html}<div class="xf-opts">
       <button class="xf-opt on" data-v="merge"><b>Add what’s new</b><span>Only documents this device doesn’t have yet, or that changed. Nothing here is removed and there are no duplicates.</span></button>
       <button class="xf-opt" data-v="replace"><b>Replace everything</b><span>Make this device an exact copy of the other one, settings included.</span></button>
-    </div><div class="xf-btns"><button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Receive</button></div>`);
+    </div><div class="xf-btns"><button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Receive</button></div>`, 'linked');
   let v = 'merge';
-  t.body.querySelectorAll('.xf-opt').forEach((b) => (b.onclick = () => { v = b.dataset.v; t.body.querySelectorAll('.xf-opt').forEach((x) => x.classList.toggle('on', x === b)); }));
-  t.body.querySelector('[data-yes]').onclick = () => ok(v);
-  t.body.querySelector('[data-no]').onclick = () => ok(null);
+  step.querySelectorAll('.xf-opt').forEach((b) => (b.onclick = () => { v = b.dataset.v; step.querySelectorAll('.xf-opt').forEach((x) => x.classList.toggle('on', x === b)); }));
+  step.querySelector('[data-yes]').onclick = () => ok(v);
+  step.querySelector('[data-no]').onclick = () => ok(null);
 });
 
 // keep the introduction service connected (it drops when the network does)
@@ -161,9 +300,10 @@ export async function receive({ reload }) {
     const qr = qrcode(0, 'M');
     qr.addData(`${WEB_URL}#send-to=${code}`);
     qr.make();
-    t.set(`<div class="xf-qr">${qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true })}</div>
-      <p class="xf-big">On the other device: Backup › <b>Send to another device</b>, then scan this</p>
-      <p class="xf-sub">or type the code</p><p class="xf-code">${code.slice(0, 3)} ${code.slice(3)}</p>
+    const chars = [...code].map((ch, k) => `${k === 3 ? '<em></em>' : ''}<span style="--k:${k}">${ch}</span>`).join('');
+    t.set(`<div class="xf-qr"><b class="xf-wave"></b><b class="xf-wave"></b><b class="xf-wave"></b><div class="xf-qr-card">${qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true })}</div></div>
+      <p class="xf-big">On the other device: Settings › <b>Send to another device</b>, then scan this</p>
+      <p class="xf-sub">or type the code</p><p class="xf-code" aria-label="${code}">${chars}</p>
       <p class="xf-note">Both devices on the same Wi-Fi is fastest.</p>`);
   });
   peer.on('connection', (c) => {
@@ -174,12 +314,13 @@ export async function receive({ reload }) {
           if (session) { c.close(); return; } // already busy with another device
           conn = c;
           session = msg.sid;
+          t.other(msg.from);
           // the usual: just what's new or changed, added to what's here; or start over with exactly what the other device has
           const pick = await choose(t, `<p class="xf-big">A ${esc(msg.from)} wants to send its library (${msg.docs} document${msg.docs === 1 ? '' : 's'}).</p>`);
           if (!pick) { c.send(JSON.stringify({ t: 'no' })); t.destroy(); stop(); return; }
           mode = pick;
-          t.set('<p class="xf-sub">Comparing libraries…</p>');
-          c.send(JSON.stringify({ t: 'go', mode, have: mode === 'merge' ? await inventory() : null }));
+          t.set('<p class="xf-big">Comparing libraries…</p><p class="xf-sub">Working out what’s new</p>', 'linked');
+          c.send(JSON.stringify({ t: 'go', mode, from: device(), have: mode === 'merge' ? await inventory() : null }));
         } else if (msg.t === 'resume' && msg.sid === session) {
           // the same transfer, after a dropped connection: carry on from what arrived
           conn = c;
@@ -200,20 +341,20 @@ export async function receive({ reload }) {
           await writing;
           await sink.flush();
           if (got < expect) { c.send(JSON.stringify({ t: 'from', offset: got })); return; } // something went missing: ask again
-          t.status('Putting everything in place…', 0, 1);
+          t.status('Putting everything in place…', 0, 1, { placing: true });
           try {
             const b = await readBackup(await sink.file());
-            await b.restore((n, of) => t.status('Putting everything in place…', n, of), { merge: mode === 'merge' });
+            await b.restore((n, of) => t.status('Putting everything in place…', n, of, { placing: true }), { merge: mode === 'merge' });
             c.send(JSON.stringify({ t: 'ok' }));
             sink.drop();
             unwatch();
             if (mode === 'merge') { // just bring the library up to date, no reload
               await Promise.resolve(reload('merge')).catch(() => {});
-              t.finish('<p class="xf-big">All here.</p><p class="xf-sub">Your library is up to date.</p>', { pillText: 'Received ✓' });
+              t.finish('<p class="xf-big">All here.</p><p class="xf-sub">Your library is up to date.</p>', { pillText: 'Received ✓', ok: true });
             } else {
               t.finish('<p class="xf-big">All here.</p><p class="xf-sub">Load it now, or keep going and load it later.</p><div class="xf-btns"><button class="btn primary" data-load>Load my library</button></div>',
-                { pillText: 'Received · tap to load', onTap: () => reload('replace') });
-              t.body.querySelector('[data-load]').onclick = () => reload('replace');
+                { pillText: 'Received · tap to load', onTap: () => reload('replace'), ok: true });
+              t.info.querySelector('[data-load]').onclick = () => reload('replace');
             }
             setTimeout(() => peer.destroy(), 1500);
           } catch (e) {
@@ -286,7 +427,7 @@ export async function send({ code: given = '' } = {}) {
       retrying = false;
       if (resume) c.send(JSON.stringify({ t: 'resume', sid }));
       else {
-        t.set('<p class="xf-big">Connected</p><p class="xf-sub">Waiting for the other device to accept…</p>');
+        t.set('<p class="xf-big">Connected</p><p class="xf-sub">Waiting for the other device to accept…</p>', 'linked');
         t.note('Waiting for the other device…');
         c.send(JSON.stringify({ t: 'hello', sid, from: device(), docs: stream.summary.docs }));
       }
@@ -296,12 +437,13 @@ export async function send({ code: given = '' } = {}) {
       const msg = JSON.parse(m);
       if (msg.t === 'no') t.finish('<p class="xf-sub">The other device said no.</p>');
       else if (msg.t === 'go') {
-        t.set('<p class="xf-sub">Working out what to send…</p>');
-        try { stream = await backupStream({ have: msg.mode === 'merge' ? msg.have || [] : null }); } catch (e) { t.set(`<p class="xf-err">Couldn’t read your library: ${esc(e?.message || e)}</p>`); return; }
+        if (msg.from) t.other(msg.from);
+        t.set('<p class="xf-big">Accepted</p><p class="xf-sub">Working out what to send…</p>', 'linked');
+        try { stream = await backupStream({ have: msg.mode === 'merge' ? msg.have || [] : null }); } catch (e) { t.set(`<p class="xf-err">Couldn’t read your library: ${esc(e?.message || e)}</p>`, 'error'); return; }
         c.send(JSON.stringify({ t: 'size', size: stream.size, sending: stream.summary.sending }));
       } else if (msg.t === 'ready') { keepAwake(true); pump(c, 0); }
       else if (msg.t === 'from') pump(c, msg.offset); // carry on from what the other device already has
-      else if (msg.t === 'ok') { unwatch(); t.finish('<p class="xf-big">Sent.</p><p class="xf-sub">Your library is on the other device now.</p>', { pillText: 'Sent ✓' }); setTimeout(() => peer.destroy(), 1500); }
+      else if (msg.t === 'ok') { unwatch(); t.finish('<p class="xf-big">Sent.</p><p class="xf-sub">Your library is on the other device now.</p>', { pillText: 'Sent ✓', ok: true }); setTimeout(() => peer.destroy(), 1500); }
       else if (msg.t === 'fail') t.finish(`<p class="xf-err">The other device couldn’t finish: ${esc(msg.why)}</p>`, { pillText: 'Transfer failed' });
       else if (msg.t === 'cancel') { t.finish('<p class="xf-err">The other device cancelled.</p>', { pillText: 'Transfer cancelled' }); token++; }
     });
@@ -348,7 +490,7 @@ export async function send({ code: given = '' } = {}) {
       await drain();
       if (my !== token) return;
       c.send(JSON.stringify({ t: 'done' }));
-      t.status('Sent everything: the other device is putting it in place…', stream.size, stream.size);
+      t.status('Sent everything: the other device is putting it in place…', stream.size, stream.size, { placing: true });
     } catch (e) {
       if (my === token) { pausedNow('Paused: reconnecting…'); reconnect(); }
     }
@@ -361,7 +503,7 @@ export async function send({ code: given = '' } = {}) {
     target = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (target.length !== 6) return;
     const again = () => send({ code: target });
-    t.set('<p class="xf-sub">Connecting…</p>');
+    t.set('<p class="xf-big">Connecting…</p><p class="xf-sub">Finding the other device</p>', 'connecting');
     t.note('Connecting…');
     let Peer;
     try { Peer = await loadPeer(); } catch (e) { t.fail(`${e.message}. Check your internet connection.`, again); return; }
@@ -379,11 +521,11 @@ export async function send({ code: given = '' } = {}) {
     peer.on('open', () => { if (first) { first = false; open(false); } });
   };
   if (given) return connect(given);
-  t.set(`<div class="xf-cam"><video playsinline muted></video><div class="xf-aim"></div></div>
+  t.set(`<div class="xf-cam"><video playsinline muted></video><div class="xf-aim"><i></i><i></i><i></i><i></i></div><b class="xf-scan"></b></div>
     <p class="xf-big">Scan the code on the other device</p>
     <form class="xf-type"><input maxlength="7" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="or type the code"><button class="btn primary">Connect</button></form>`);
-  t.body.querySelector('.xf-type').onsubmit = (e) => { e.preventDefault(); connect(e.target.querySelector('input').value); };
-  video = t.body.querySelector('video');
+  t.info.querySelector('.xf-type').onsubmit = (e) => { e.preventDefault(); connect(e.target.querySelector('input').value); };
+  video = t.info.querySelector('video');
   t.d.addEventListener('close', () => { if (!t.active) stopCam(); });
   try {
     const jsQR = await load('vendor/transfer/jsQR.js', 'jsQR');
@@ -399,12 +541,17 @@ export async function send({ code: given = '' } = {}) {
         g.drawImage(video, 0, 0, w, h);
         const hit = jsQR(g.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'dontInvert' });
         const m = hit?.data?.match(/send-to=([A-Z0-9]{6})/i) || hit?.data?.match(/^([A-Z0-9]{6})$/i);
-        if (m) { navigator.vibrate?.(20); connect(m[1]); return; }
+        if (m) { // got it: the corners snap in round it with a flash, then on to connecting
+          navigator.vibrate?.(20);
+          t.info.querySelector('.xf-cam')?.classList.add('got');
+          setTimeout(() => connect(m[1]), reduce() ? 0 : 420);
+          return;
+        }
       }
       requestAnimationFrame(tick);
     };
     tick();
   } catch {
-    t.body.querySelector('.xf-cam')?.remove(); // no camera (or no permission): typing the code still works
+    t.info.querySelector('.xf-cam')?.remove(); // no camera (or no permission): typing the code still works
   }
 }
