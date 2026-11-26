@@ -6314,7 +6314,8 @@ function bind() {
   });
   $('#clearBtn').addEventListener('pointerdown', (e) => e.preventDefault()); // keep the keyboard up and the box focused
   $('#clearBtn').addEventListener('click', () => { record('Clear search'); q.value = ''; runSearch(); q.focus(); });
-  // A quick right-to-left swipe across the search box removes the last word (swipe again for the next) and puts the
+  // A quick right-to-left swipe across the search box removes the last word (swipe again for the next), and a
+  // left-to-right one puts them back; either puts the
   // cursor at the end, ready to type.
   // Swipes that start on the search-type pill (which drags sideways itself) or the arrows are left alone.
   (() => {
@@ -6326,17 +6327,30 @@ function bind() {
     }, { passive: true });
     box.addEventListener('touchmove', (e) => { if (!s) return; const t = e.touches[0]; s.dx = t.clientX - s.x; s.dy = t.clientY - s.y; }, { passive: true });
     box.addEventListener('touchcancel', () => (s = null));
+    // what the left swipes took, newest last: a right swipe puts the words back one at a time; typing forgets them
+    const taken = [];
+    let ours = false;
+    q.addEventListener('input', () => { if (!ours) taken.length = 0; });
     box.addEventListener('touchend', (e) => {
       const w = s;
       s = null;
-      if (!w || !q.value || performance.now() - w.t > 600 || w.dx > -40 || Math.abs(w.dx) < Math.abs(w.dy) * 2) return;
+      if (!w || performance.now() - w.t > 600 || Math.abs(w.dx) < 40 || Math.abs(w.dx) < Math.abs(w.dy) * 2) return;
+      const back = w.dx > 0;
+      if (back ? !taken.length : !q.value) return;
       e.preventDefault(); // not also a tap that places the caret somewhere
-      q.value = q.value.replace(/\s*\S+\s*$/, ''); // the last word (and the space before it) goes
+      if (back) q.value += taken.pop();
+      else {
+        const m = q.value.match(/\s*\S+\s*$/); // the last word (and the space before it) goes
+        taken.push(m[0]);
+        q.value = q.value.slice(0, m.index);
+      }
+      ours = true;
       q.dispatchEvent(new Event('input', { bubbles: true })); // the search and the × follow, as when typing
+      ours = false;
       q.focus();
       const end = q.value.length;
       try { q.setSelectionRange(end, end); } catch {}
-      q.animate([{ transform: 'translateX(6px)', opacity: 0.6 }, { transform: 'none', opacity: 1 }], { duration: 180, easing: 'cubic-bezier(.25,.8,.3,1)' });
+      q.animate([{ transform: `translateX(${back ? -6 : 6}px)`, opacity: 0.6 }, { transform: 'none', opacity: 1 }], { duration: 180, easing: 'cubic-bezier(.25,.8,.3,1)' });
     });
   })();
   $('#prevBtn').addEventListener('click', () => step(-1));
