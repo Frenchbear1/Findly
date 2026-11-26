@@ -2775,7 +2775,10 @@ function syncControls() {
   document.body.classList.toggle('side-hidden', !!prefs.sideHidden);
   $('#compactBtn').title = prefs.compact ? `Show the full toolbar (${keyHint('toggleCompact')})` : `Minimize the toolbar (${keyHint('toggleCompact')})`;
   const flags = [prefs.matchCase ? 'Aa' : '', prefs.wholeWord ? '<u>ab</u>' : '', prefs.mode === 'near' ? `≤${prefs.near}` : ''].filter(Boolean);
-  const pill = `<span class="full">${MODE_SHORT[prefs.mode]}</span><span class="short">${MODE_TINY[prefs.mode]}</span>${WHERE[prefs.where]?.short ? `<em class="where">${WHERE[prefs.where].short}</em>` : ''}${flags.map((f) => `<em>${f}</em>`).join('')}<svg class="pill-arrow" viewBox="0 0 24 24"><path d="M8 10l4 4 4-4"/></svg>`;
+  // what narrows the search (where to look, match case, whole word, how near) sits small under the search type,
+  // so the pill stays narrow and the search box keeps its width
+  const sub = [WHERE[prefs.where]?.short, ...flags].filter(Boolean);
+  const pill = `<span class="mp-stack"><span class="mp-main"><span class="full">${MODE_SHORT[prefs.mode]}</span><span class="short">${MODE_TINY[prefs.mode]}</span></span>${sub.length ? `<span class="mp-sub">${sub.join(' · ')}</span>` : ''}</span><svg class="pill-arrow" viewBox="0 0 24 24"><path d="M8 10l4 4 4-4"/></svg>`;
   setHTML($('#modePill'), pill);
   setHTML($('#mMode'), pill);
   $('#zoomVal').textContent = Math.round(zoomValue() * 100) + '%';
@@ -5193,6 +5196,7 @@ function openSettings() {
         ])}
         ${group('Reading', [
           `<div class="set-row static"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M9 3.5h6M9 20.5h6"/></svg></span><span class="set-t"><b>Opening cropped pages</b><small>${prefs.expand === 'drag' ? 'Drag the bars on a cropped page to pull it open' : 'Tap the arrows on a cropped page to open it'}</small></span><span class="seg small set-seg"><button type="button" data-s="xb" aria-pressed="${prefs.expand !== 'drag'}">Buttons</button><button type="button" data-s="xd" aria-pressed="${prefs.expand === 'drag'}">Drag</button></span></div>`,
+          `<div class="set-row static set-panels"><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M8.5 4v16M15.5 4v16"/></svg></span><span class="set-t"><b>Side panels</b><small>${PANELS_TEXT[prefs.panels || 'buttons']}</small></span><span class="seg small set-seg">${[['buttons', 'Buttons'], ['swipe', 'Swipe'], ['both', 'Both']].map(([v, l]) => `<button type="button" data-s="pn-${v}" aria-pressed="${(prefs.panels || 'buttons') === v}">${l}</button>`).join('')}</span></div>`,
           `<div class="set-row static"><span class="set-ic">${I.undo}</span><span class="set-t"><b>Undo &amp; redo</b><small>${prefs.undoStyle === 'buttons' ? 'Arrows at both ends of the bottom bar' : 'Swipe the bottom bar: right to undo, left to redo'}</small></span><span class="seg small set-seg"><button type="button" data-s="ug" aria-pressed="${prefs.undoStyle !== 'buttons'}">Gestures</button><button type="button" data-s="ub" aria-pressed="${prefs.undoStyle === 'buttons'}">Buttons</button></span></div>`,
         ])}
         ${group('Documents from websites', [
@@ -5254,6 +5258,15 @@ function openSettings() {
         body._pieceSig = null;
         applyCrop(art);
       }
+      return;
+    }
+    if (k.startsWith('pn-')) {
+      prefs.panels = k.slice(3);
+      savePrefs();
+      syncPanelsMode();
+      const rowEl = b.closest('.set-row');
+      rowEl.querySelectorAll('[data-s^="pn-"]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      rowEl.querySelector('small').textContent = PANELS_TEXT[prefs.panels];
       return;
     }
     if (k === 'ug' || k === 'ub') { // just flip the switch and its line of text in place
@@ -5815,20 +5828,34 @@ function applyTheme() {
 }
 // How see-through the bars, buttons and menus are: 0 = solid, 50 = as designed, 100 = nearly clear.
 // Each surface keeps its own designed opacity at 50 and scales from there in both directions.
-const GLASS = { '--a-top': 76, '--a-bar': 40, '--a-menu': 80, '--a-head': 74, '--a-dock': 88 };
+// Settings › Reading theme › Glass sets these per group of surfaces (prefs.glassG[group] = { t, b }); a group
+// with nothing of its own follows the overall setting (prefs.glassT / blurL). Sheets are solid as designed.
+const GLASS = { '--a-top': 76, '--a-bar': 40, '--a-menu': 80, '--a-head': 74, '--a-dock': 88, '--a-sheet': 100 };
+const GLASS_GROUPS = {
+  top: { vars: ['--a-top'], blur: '--blur-top' },
+  heads: { vars: ['--a-head'], blur: '--blur-head' },
+  bottom: { vars: ['--a-bar', '--a-dock'], blur: '--blur-bottom' },
+  popups: { vars: ['--a-menu', '--a-sheet'], blur: '--blur-pop' }, // not the theme panel itself: it stays readable while you change these
+};
+const glassOf = (g) => ({ t: prefs.glassG?.[g]?.t ?? prefs.glassT ?? 50, b: prefs.glassG?.[g]?.b ?? prefs.blurL ?? BLUR_DEF });
 function applyGlass() {
-  const t = Math.max(0, Math.min(100, prefs.glassT ?? 50)) / 100;
   const root = document.documentElement.style;
-  for (const [k, base] of Object.entries(GLASS)) {
-    const a = t <= 0.5 ? 100 + (base - 100) * (t / 0.5) : base + (6 - base) * ((t - 0.5) / 0.5);
-    root.setProperty(k, `${a.toFixed(1)}%`);
+  for (const [g, { vars, blur }] of Object.entries(GLASS_GROUPS)) {
+    const { t: tt, b } = glassOf(g);
+    const t = Math.max(0, Math.min(100, tt)) / 100;
+    for (const k of vars) {
+      const base = GLASS[k];
+      const a = t <= 0.5 ? 100 + (base - 100) * (t / 0.5) : base + (6 - base) * ((t - 0.5) / 0.5);
+      root.setProperty(k, `${a.toFixed(1)}%`);
+    }
+    // blur on a curve (see themes.js): fine control at the light end, heavy frosting only at the far end
+    root.setProperty(blur, `saturate(180%) blur(${blurPx(b).toFixed(1)}px)`);
   }
-  // blur on a curve (see themes.js): fine control at the light end, heavy frosting only at the far end
   root.setProperty('--bpx', `${blurPx(prefs.blurL ?? BLUR_DEF).toFixed(1)}px`);
 }
 function openThemes() {
   closeMenu();
-  openThemeBar(prefs, { save: savePrefs, glass: applyGlass });
+  openThemeBar(prefs, { save: savePrefs, glass: applyGlass, glassOf });
 }
 
 
@@ -5898,6 +5925,8 @@ function watchPopups() {
 // ---------- events ----------
 function bind() {
   watchPopups();
+  syncPanelsMode();
+  bindEdgeSwipes();
   $('#fileInput').accept = ACCEPT;
   $('#fileInput').addEventListener('change', (e) => {
     const files = [...e.target.files];
@@ -6361,6 +6390,89 @@ function bind() {
   }).observe($('.topbar'));
 }
 const closeDrawer = () => document.body.classList.remove('drawer');
+
+// ---------- side panels by swiping from the edge (phones) ----------
+// Settings › Side panels: the library and the pages panel open with their buttons, by swiping in from the left or
+// right edge of the screen, or both. The panel follows your finger; let go past a third of the way (or with a
+// flick) and it opens, otherwise it slides back. Swiping it back the other way closes it.
+const PANELS_TEXT = {
+  buttons: 'The buttons at the top open the library and the pages panel',
+  swipe: 'Swipe in from the left edge for the library, the right edge for the pages',
+  both: 'Buttons at the top, or swipe in from the edges',
+};
+function syncPanelsMode() {
+  const m = prefs.panels || 'buttons';
+  document.body.classList.toggle('panels-swipe', m !== 'buttons');
+  document.body.classList.toggle('panels-nobtn', m === 'swipe');
+}
+function bindEdgeSwipes() {
+  const strip = (side) => { const e = el('div', `edge-strip ${side}`); e.setAttribute('aria-hidden', 'true'); document.body.append(e); return e; };
+  const targets = {
+    left: { el: () => $('.sidebar'), cls: 'drawer', can: () => true, dirOpen: 1 },
+    right: { el: () => $('#outline'), cls: 'panel', can: () => !$('#panelBtn').hidden, dirOpen: -1 },
+  };
+  let g = null;
+  const begin = (e, side, opening) => {
+    const T = targets[side];
+    if (!isPhone() || (opening && !T.can())) return;
+    const pane = T.el();
+    if (!pane) return;
+    g = { side, opening, x: e.clientX, y: e.clientY, t: performance.now(), on: false, id: e.pointerId, pane, w: pane.offsetWidth, T, src: e.currentTarget, last: e.clientX, lastT: performance.now(), v: 0 };
+  };
+  const move = (e) => {
+    if (!g || e.pointerId !== g.id) return;
+    const dx = e.clientX - g.x, dy = e.clientY - g.y;
+    if (!g.on) {
+      if (Math.abs(dy) > 14 && Math.abs(dy) > Math.abs(dx)) { g = null; return; } // that's a scroll
+      if (Math.abs(dx) < 8) return;
+      g.on = true;
+      try { g.src.setPointerCapture(e.pointerId); } catch {}
+      document.body.classList.add('edge-dragging', `edge-${g.T.cls}`);
+    }
+    const now = performance.now();
+    g.v = (e.clientX - g.last) / Math.max(1, now - g.lastT);
+    g.last = e.clientX; g.lastT = now;
+    // how far open, 0..1
+    const d = g.T.dirOpen * dx;
+    const p = Math.max(0, Math.min(1, g.opening ? d / g.w : 1 + d / g.w));
+    g.p = p;
+    const off = (1 - p) * 104 * -g.T.dirOpen;
+    g.pane.style.transform = `translateX(${off}%)`;
+    const scrim = $('.scrim');
+    if (scrim) scrim.style.opacity = String(p);
+  };
+  const end = (e, ok) => {
+    if (!g || e.pointerId !== g.id) return;
+    const was = g;
+    g = null;
+    if (!was.on) return;
+    const flick = was.v * was.T.dirOpen; // + toward open
+    const open = ok && (flick > 0.5 || (flick > -0.3 && (was.p ?? 0) > (was.opening ? 0.35 : 0.65)));
+    if (was.T.cls === 'panel') setPanel(open); else document.body.classList.toggle('drawer', open);
+    document.body.classList.remove('edge-dragging', 'edge-drawer', 'edge-panel');
+    // from where your finger left it to where it goes, with the panels' own glide
+    was.pane.style.transform = '';
+    const scrim = $('.scrim');
+    if (scrim) scrim.style.opacity = '';
+  };
+  for (const side of ['left', 'right']) {
+    const s = strip(side);
+    s.addEventListener('pointerdown', (e) => begin(e, side, true));
+  }
+  // swiping an open panel back the way it came
+  const closer = (side) => (e) => {
+    if (!document.body.classList.contains(targets[side].cls) || e.target.closest('input, textarea, select, .range, [draggable="true"]')) return;
+    begin(e, side, false);
+  };
+  $('.sidebar')?.addEventListener('pointerdown', closer('left'));
+  $('#outline')?.addEventListener('pointerdown', closer('right'));
+  $('.scrim')?.addEventListener('pointerdown', (e) => begin(e, document.body.classList.contains('panel') ? 'right' : 'left', false));
+  addEventListener('pointermove', move, { passive: true });
+  addEventListener('pointerup', (e) => end(e, true));
+  addEventListener('pointercancel', (e) => end(e, false));
+  // a drag isn't a tap on what's under it
+  addEventListener('click', (e) => { if (document.body.classList.contains('edge-dragging')) { e.stopPropagation(); e.preventDefault(); } }, true);
+}
 let resetDrag = () => {};
 
 const MODE_SHORT = { any: 'Any word', all: 'All words', phrase: 'Phrase', near: 'Near', boolean: 'Boolean' };

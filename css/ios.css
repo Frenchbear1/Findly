@@ -35,7 +35,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   /* ---- top bar: frosted glass, hairline, pill search field ---- */
   .topbar {
     background: var(--glass);
-    -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+    -webkit-backdrop-filter: var(--blur-top, var(--blur)); backdrop-filter: var(--blur-top, var(--blur));
     border-bottom: 0.5px solid var(--sep);
     padding-top: max(8px, env(safe-area-inset-top));
     transition: transform 0.36s var(--spring);
@@ -125,7 +125,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   .content { padding-left: 12px; padding-right: 12px; }
   .doc-head {
     min-height: 50px; margin: 0 -12px; padding: 10px 14px 8px;
-    background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+    background: var(--glass); -webkit-backdrop-filter: var(--blur-head, var(--blur)); backdrop-filter: var(--blur-head, var(--blur));
   }
   .doc-head h2 { font-size: 17px; font-weight: 700; letter-spacing: -0.015em; }
   .page { margin-bottom: 18px; }
@@ -141,7 +141,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
     left: 10px; right: 10px; bottom: max(10px, env(safe-area-inset-bottom));
     padding: 6px; gap: 2px; border-radius: 26px; border: 0;
     background: var(--glass-card);
-    -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+    -webkit-backdrop-filter: var(--blur-bottom, var(--blur)); backdrop-filter: var(--blur-bottom, var(--blur));
     box-shadow: 0 0 0 0.5px var(--sep), 0 6px 22px -8px rgba(0, 0, 0, 0.16);
     animation: bar-up 0.45s var(--spring);
   }
@@ -154,7 +154,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   .toast {
     border-radius: 22px; padding: 11px 14px 11px 18px; font-size: 14px; font-weight: 500;
     background: color-mix(in srgb, #1c1c1e 88%, transparent); color: #fff;
-    -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+    -webkit-backdrop-filter: var(--blur-pop, var(--blur)); backdrop-filter: var(--blur-pop, var(--blur));
     box-shadow: 0 6px 20px -8px rgba(0, 0, 0, 0.28);
     animation: toastIn 0.42s var(--spring);
   }
@@ -166,7 +166,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
 @media (max-width: 900px) {
   .pop-menu {
     min-width: 236px; padding: 0; border-radius: 15px; border: 0;
-    background: var(--glass-card); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+    background: var(--glass-card); -webkit-backdrop-filter: var(--blur-pop, var(--blur)); backdrop-filter: var(--blur-pop, var(--blur));
     box-shadow: 0 0 0 0.5px var(--sep), 0 10px 30px -10px rgba(0, 0, 0, 0.2);
     animation: menu-pop 0.34s var(--pop); transform-origin: top right;
   }
@@ -242,7 +242,7 @@ button, .btn, .icon-btn, .menu-item, .doc-card, .set-row, .lib-main { -webkit-ta
   /* the status bar / Dynamic Island strip stays frosted once the bar has slid away */
   body::after {
     content: ""; position: fixed; z-index: 21; left: 0; right: 0; top: 0; height: env(safe-area-inset-top); pointer-events: none;
-    background: color-mix(in srgb, var(--bg) var(--a-top, 72%), transparent); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+    background: color-mix(in srgb, var(--bg) var(--a-top, 72%), transparent); -webkit-backdrop-filter: var(--blur-top, var(--blur)); backdrop-filter: var(--blur-top, var(--blur));
   }
 }
 
@@ -337,7 +337,8 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
   .set-row .set-seg { margin-left: 42px; }
 }
 /* Settings › Blur drives these on every screen size */
-.topbar, .dock { -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+.topbar { -webkit-backdrop-filter: var(--blur-top, var(--blur)); backdrop-filter: var(--blur-top, var(--blur)); }
+.dock { -webkit-backdrop-filter: var(--blur-bottom, var(--blur)); backdrop-filter: var(--blur-bottom, var(--blur)); }
 .set-seg button { transition: background 0.2s, box-shadow 0.2s, color 0.2s; }
 /* phones: the document's name gets the room, not its folder */
 @media (max-width: 600px) { .doc-head .dfolder { display: none; } }
@@ -367,7 +368,7 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
 .jump input {
   border: 0; box-shadow: 0 0 0 0.5px var(--sep, var(--line)) inset;
   background: color-mix(in srgb, var(--card) var(--a-head, 78%), transparent);
-  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur-head, var(--blur)); backdrop-filter: var(--blur-head, var(--blur));
 }
 @media (max-width: 900px) {
   .summary:has(.back-btn) { min-height: 44px; padding-top: 5px; padding-bottom: 5px; margin-top: 0; }
@@ -378,7 +379,7 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
 /* drag bars and page tabs are glass like the bars: they follow Glass › Transparency and Blur */
 .edge-drag i, .col-drag i {
   background: color-mix(in srgb, color-mix(in srgb, var(--card) 62%, var(--ink)) var(--a-head, 78%), transparent);
-  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur-head, var(--blur)); backdrop-filter: var(--blur-head, var(--blur));
   box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--ink) 18%, transparent), 0 1px 4px rgba(0, 0, 0, 0.1);
   opacity: 1;
 }
@@ -410,7 +411,7 @@ body.searching #mCountText, body.searching .counter { opacity: 0.45; transition:
   .topbar, body.compact .topbar { background: none !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; border-bottom: 0 !important; }
   .topbar::before {
     content: ""; position: absolute; z-index: -1; left: 0; right: 0; bottom: 0; top: env(safe-area-inset-top); pointer-events: none;
-    background: color-mix(in srgb, var(--bg) var(--a-top, 72%), transparent); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+    background: color-mix(in srgb, var(--bg) var(--a-top, 72%), transparent); -webkit-backdrop-filter: var(--blur-top, var(--blur)); backdrop-filter: var(--blur-top, var(--blur));
   }
   .doc-head { background: color-mix(in srgb, var(--bg) var(--a-top, 72%), transparent) !important; box-shadow: none; border: 0; }
 }
