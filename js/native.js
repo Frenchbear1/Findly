@@ -150,6 +150,15 @@ export async function drawPage(path, n, width, r = [0, 1, 0, 1], quality = 0.82)
   try { await img.decode(); } catch { PdfDraw.forget({ paths: [res.path] }).catch(() => {}); throw new Error('page image'); }
   return img;
 }
+/** Live Text for page n (0-based) of a library PDF, read by the app itself (the page never comes into the web page). */
+export async function ocrPage(path, n) {
+  if (!PdfDraw?.ocr) throw new Error('no ocr');
+  const file = (await root()) + enc(path);
+  return (await PdfDraw.ocr({ file, page: n })).text || '';
+}
+/** The app's own file picker: files (or a whole folder) are copied into the library folder one at a time and
+ *  announced as they land ('imported' events), instead of being read into the page. */
+export const pickNative = platform === 'ios' && Files?.pick ? (opts) => Files.pick(opts) : null;
 /** Page images no longer shown (their files are deleted). */
 export const forgetPages = (paths) => { if (paths.length) PdfDraw?.forget({ paths }).catch(() => {}); };
 

@@ -1,6 +1,7 @@
 import Foundation
 import Capacitor
 import UIKit
+import UniformTypeIdentifiers
 
 /// The library as real files: everything lives in the app's Documents folder, which the Files app shows as
 /// "On My iPhone › Findly". Files dropped there (from Files, a Mac, or anything else that edits them) are
@@ -22,6 +23,7 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "read", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stat", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "keepAwake", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "pick", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "cloud", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setCloud", returnType: CAPPluginReturnPromise),
     ]
@@ -383,3 +385,106 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 }
+
+// MARK: Adding documents (and whole folders) without loading them into the page
+// Files and folders are picked with the system picker and copied into the library folder here, one file at a
+// time, each one downloaded from iCloud first if it has to be. Nothing passes through the web page: it is told
+// as each file lands (with how many are left) and reads it from the library folder in pieces, so a folder of any
+// size comes in steadily while the app stays usable.
+extension ISFilesPlugin: UIDocumentPickerDelegate {
+    private static var pickCall: CAPPluginCall?
+    private static var pickInto = ""
+    private static let importQueue = DispatchQueue(label: "instantsearch.import", qos: .utility)
+    private static let kinds: Set<String> = ["pdf", "docx", "txt", "text", "md", "markdown", "html", "htm", "mht", "mhtml", "rtf"]
+
+    /// { folder: true to pick a whole folder, into: a folder of the library ("" for the top) } → { count }
+    @objc func pick(_ call: CAPPluginCall) {
+        let folder = call.getBool("folder") ?? false
+        DispatchQueue.main.async {
+            var types: [UTType] = [.pdf, .plainText, .html, .rtf]
+            for e in ["docx", "md", "markdown", "mht", "mhtml"] { if let t = UTType(filenameExtension: e) { types.append(t) } }
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: folder ? [.folder] : types, asCopy: false)
+            picker.allowsMultipleSelection = !folder
+            picker.delegate = self
+            ISFilesPlugin.pickCall = call
+            ISFilesPlugin.pickInto = call.getString("into") ?? ""
+            self.bridge?.viewController?.present(picker, animated: true)
+        }
+    }
+
+    public func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        ISFilesPlugin.pickCall?.resolve(["count": 0])
+        ISFilesPlugin.pickCall = nil
+    }
+
+    public func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        ISFilesPlugin.pickCall?.resolve(["count": urls.count])
+        ISFilesPlugin.pickCall = nil
+        importPicked(urls, into: ISFilesPlugin.pickInto)
+    }
+
+    private func importPicked(_ urls: [URL], into: String) {
+        ISFilesPlugin.importQueue.async {
+            var scoped: [URL] = []
+            var jobs: [(src: URL, dir: String)] = []
+            for u in urls {
+                if u.startAccessingSecurityScopedResource() { scoped.append(u) }
+                if (try? u.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                    // a folder: every document in it (and its subfolders), keeping its folders
+                    var listed: [URL] = []
+                    var err: NSError?
+                    NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: u, options: [.immediatelyAvailableMetadataOnly], error: &err) { dir in
+                        if let walk = self.fm.enumerator(at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsPackageDescendants]) {
+                            for case let f as URL in walk { listed.append(f) }
+                        }
+                    }
+                    let base = self.canon(u)
+                    for f in listed {
+                        var name = f.lastPathComponent
+                        var src = f
+                        if name.hasPrefix(".") {
+                            guard name.hasSuffix(".icloud") else { continue } // hidden files
+                            name = String(name.dropFirst().dropLast(7)) // in iCloud, not on this device yet
+                            src = f.deletingLastPathComponent().appendingPathComponent(name)
+                        }
+                        guard ISFilesPlugin.kinds.contains((name as NSString).pathExtension.lowercased()) else { continue }
+                        let parent = self.canon(src.deletingLastPathComponent())
+                        let sub = parent.hasPrefix(base) ? String(parent.dropFirst(base.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/")) : ""
+                        let dir = [into, u.lastPathComponent, sub].filter { !$0.isEmpty }.joined(separator: "/")
+                        jobs.append((src: src, dir: dir))
+                    }
+                } else {
+                    jobs.append((src: u, dir: into))
+                }
+            }
+            let total = jobs.count
+            self.announce(["done": 0, "total": total])
+            for (i, job) in jobs.enumerated() {
+                autoreleasepool {
+                    let dir = job.dir.isEmpty ? self.root : self.root.appendingPathComponent(job.dir, isDirectory: true)
+                    try? self.fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                    let name = job.src.lastPathComponent
+                    var dest = dir.appendingPathComponent(name)
+                    var copied = false
+                    var err: NSError?
+                    // (reading through the coordinator downloads it from iCloud first if it has to)
+                    NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: job.src, options: [.withoutChanges], error: &err) { src in
+                        if self.fm.fileExists(atPath: dest.path) {
+                            let a = (try? src.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, b = (try? dest.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+                            if a != nil && a == b { return } // already in the library
+                            dest = self.free(name, in: dir)
+                        }
+                        copied = (try? self.fm.copyItem(at: src, to: dest)) != nil
+                    }
+                    self.announce(["done": i + 1, "total": total, "name": name, "path": copied ? self.rel(dest) : ""])
+                }
+            }
+            for u in scoped { u.stopAccessingSecurityScopedResource() }
+        }
+    }
+
+    private func announce(_ data: [String: Any]) {
+        DispatchQueue.main.async { self.notifyListeners("imported", data: data) }
+    }
+}
+

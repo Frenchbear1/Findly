@@ -7,6 +7,9 @@ import { isNative, readBytes, saveBytes, writeBytes, removeFile, nativeIndex } f
 // the database only remembers which file is whose. In a browser the bytes go in the database as before.
 const diskPath = new Map(); // id -> path, for documents found in the folder (already on disk)
 export const setDiskPath = (id, path) => diskPath.set(id, path);
+export const getDiskPath = (id) => diskPath.get(id);
+/** Library-folder files already being added (not saved yet): a folder scan mustn't add them a second time. */
+export const pendingDiskPaths = () => new Set(diskPath.values());
 
 const DB_NAME = 'instant-search';
 const DB_VERSION = 2;

@@ -1,11 +1,11 @@
 import { compile, MODES, inWhere, WHERE } from './search.js';
-import { store, stuckStorage, setDiskPath } from './store.js';
-import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, nativePdf, drawPage, forgetPages, pdfRange, nativeIndex, Index, readResultFile, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary, diskFile } from './native.js';
+import { store, stuckStorage, setDiskPath, getDiskPath, pendingDiskPaths } from './store.js';
+import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, nativePdf, drawPage, forgetPages, pdfRange, nativeIndex, Index, readResultFile, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary, diskFile, ocrPage, pickNative } from './native.js';
 import { NativeTexts } from './texts.js';
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
 import { detectLabels, cleanPdfLabels, fillChapterStarts } from './pagelabels.js';
-import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION, MARKS_V, marksForPdf, openPdfIds } from './pdf.js';
+import { getPdf, closePdf, renderPdfPage, EXTRACTOR_VERSION, MARKS_V, marksForPdf, openPdfIds, extractPdf } from './pdf.js';
 import { renderHtmlPage, forgetHtml, renderedText } from './htmlview.js';
 import { remoteFetch, remoteInfo, remoteChanged, download, documentLinks, looksLikeDocument, fileNameFor, editionKey, linkKey, linkSimilarity, SAME_DOC_SCORE, helper, NeedsHelper } from './remote.js';
 import { comboFromEvent, comboLabel, worksWhileTyping, isMac } from './keys.js';
@@ -3748,7 +3748,7 @@ function folderMenu(anchor, fid) {
 function addMenu(anchor) {
   const items = [
     { label: 'Add files…', icon: I.plus, run: () => pickFiles(null) },
-    { label: 'Add a folder from your computer…', icon: I.folderPlus, run: () => $('#dirInput').click() },
+    { label: pickNative ? 'Add a folder…' : 'Add a folder from your computer…', icon: I.folderPlus, run: () => pickFolder() },
     { label: 'Add files into a new folder…', icon: I.folderPlus, run: () => pickFiles('new') },
     { label: 'Add from a web link…', icon: I.link, run: () => openLinkDialog(null) },
   ];
@@ -3767,7 +3767,24 @@ const byName = (a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkit
 let pickTarget = null;
 function pickFiles(target) {
   pickTarget = target;
+  // iPhone/iPad: the app's own picker copies the files into the library folder one at a time (nothing is read
+  // into the page all at once); they come in as they land
+  if (pickNative && target !== 'new') { pickNative({ folder: false, into: target ? folderDir(target) : '' }).catch(() => $('#fileInput').click()); return; }
   $('#fileInput').click();
+}
+function pickFolder() {
+  if (pickNative) { pickNative({ folder: true, into: '' }).catch(() => $('#dirInput').click()); return; }
+  $('#dirInput').click();
+}
+// documents landing from the app's own picker: progress at the top of the library, and each one read as it lands
+let importSyncT = 0;
+function onImported(e) {
+  const { done = 0, total = 0, name = '' } = e || {};
+  if (!total) return;
+  if (done < total) libStatus.show(`Adding ${name ? `“${name}” · ` : ''}${done} of ${total}`, done / total);
+  else libStatus.done(`Added ${plural(total, 'document')} to the library folder · reading them now`);
+  clearTimeout(importSyncT);
+  importSyncT = setTimeout(() => syncFolder(), done >= total ? 50 : 1500);
 }
 
 // Dropped items can include whole folders; read them recursively.
@@ -3830,6 +3847,7 @@ function addFiles(fileList, folderId = null, { quietSkip = false } = {}) {
     const kind = kindOf(file.name);
     if (!kind) continue;
     const dup = S.docs.find((d) => d.name === file.name && d.size === file.size);
+    if (dup && file._diskPath && dup.status) continue; // already on its way in
     if (dup && file._diskPath) { // already in the library: from now on it's this file in the folder
       setDiskPath(dup.id, file._diskPath);
       store.addDoc(stripMeta(dup), S.texts.get(dup.id) || [], null).catch(() => {});
@@ -3855,14 +3873,61 @@ function addFiles(fileList, folderId = null, { quietSkip = false } = {}) {
 }
 const forceNew = new WeakSet(); // files the person chose to add separately
 
+// The iPhone/iPad: a PDF is read straight from its file in the library folder, a few pieces at a time (a picked
+// file is first copied there piece by piece), and scanned pages are read by the app itself. The whole file never
+// comes into the page, so a document of any size can't run it out of memory.
+async function readPdfInPlace(file, meta, onProgress) {
+  let path = getDiskPath(meta.id) || file._diskPath;
+  if (!path) {
+    meta.phase = 'copy';
+    const { path: p } = await Files.freeName({ name: meta.name, folder: '' });
+    const STEP = 3 * 1024 * 1024;
+    for (let a = 0; a < file.size || a === 0; a += STEP) {
+      await Files.write({ path: p, data: await blobB64(file.slice(a, a + STEP)), append: a > 0 });
+      onProgress(Math.min(file.size, a + STEP) / Math.max(1, file.size), 1);
+      if (!file.size) break;
+    }
+    delete meta.phase;
+    path = p;
+    setDiskPath(meta.id, path);
+  }
+  const pages = await extractPdf(() => pdfRange(path).then((range) => ({ range })), onProgress);
+  return { pages, bytes: null, path };
+}
+const blobB64 = (b) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
+// Live Text page by page, read by the app from the file (the iPhone/iPad)
+async function liveTextInPlace(path, pages, meta) {
+  const scanned = pages.map((p, i) => (p.trim().length < 25 ? i : -1)).filter((i) => i >= 0);
+  if (!scanned.length) return pages;
+  const out = pages.slice();
+  out.labels = pages.labels;
+  meta.phase = 'scan';
+  try {
+    for (let k = 0; k < scanned.length; k++) {
+      if (!S.docs.includes(meta)) break;
+      const t = await ocrPage(path, scanned[k]).catch(() => '');
+      if (t.trim()) out[scanned[k]] = t;
+      meta.progress = (k + 1) / scanned.length;
+      showProgress(meta);
+    }
+  } finally { delete meta.phase; }
+  return out;
+}
+
 async function ingest(file, meta) {
   let last = 0;
   try {
-    let { pages, bytes, baseUrl } = await readFile(file, (n, total) => {
+    const onProgress = (n, total) => {
       meta.progress = n / total;
       const now = performance.now();
-      if (now - last > 120) { last = now; showProgress(meta); }
-    });
+      if (now - last > 120) {
+        last = now;
+        showProgress(meta);
+        if (readingLib) { const left = S.docs.filter((d) => d.status).length; libStatus.show(`Reading “${meta.name}”${left > 1 ? ` · ${left - 1} more after it` : ''}`, n / total); }
+      }
+    };
+    const inPlace = nativePdf && meta.kind === 'pdf';
+    let { pages, bytes, baseUrl, path } = inPlace ? await readPdfInPlace(file, meta, onProgress) : await readFile(file, onProgress);
     // a page that builds itself with scripts: search the text it actually shows
     if (meta.kind === 'html' && typeof bytes === 'string' && /<script[\s>]/i.test(bytes)) {
       const shown = (await renderedText(bytes, meta.source?.url || baseUrl).catch(() => '')).trim();
@@ -3871,7 +3936,8 @@ async function ingest(file, meta) {
     }
     const pdfLabels = pages.labels;
     const before = pages, pdfMarks = pages.marks;
-    if (hasLiveText && meta.kind === 'pdf' && bytes) pages = await liveText(bytes, pages, meta);
+    if (hasLiveText && meta.kind === 'pdf' && path) pages = await liveTextInPlace(path, pages, meta);
+    else if (hasLiveText && meta.kind === 'pdf' && bytes) pages = await liveText(bytes, pages, meta);
     // headings and captions, where the page's text is still the one they were found in
     if (pdfMarks) { meta.marks = pages.map((t, n) => (t === before[n] ? pdfMarks[n] : null)); meta.marksV = MARKS_V; }
     const chars = pages.reduce((a, p) => a + p.trim().length, 0);
@@ -4140,10 +4206,11 @@ async function syncFolder() {
     const sides = new Set(files.filter((f) => f.path.startsWith(SIDE_DIR)).map((f) => f.path));
     const known = (p) => st?.docs?.[p];
     const newcomers = [];
+    const pending = pendingDiskPaths(); // already on their way in (still being read)
     for (const p of [...files.map((f) => f.path), ...waiting]) {
       const name = p.split('/').pop();
       if (!kindOf(name) || name === 'Put documents here.txt' || /^(Backups|\.findly)\//.test(p)) continue;
-      if (byPath.has(p) || newcomers.some((n) => n.path === p)) continue;
+      if (byPath.has(p) || pending.has(p) || newcomers.some((n) => n.path === p)) continue;
       const side = sides.has(sideKey(name)) ? sideKey(name) : null;
       if (!onDisk.has(p) && !side) continue; // still coming down from iCloud: it's read once it's here
       if (!side && sidesComing.has(sideKey(name))) continue; // its text is on the way: quicker than reading it
@@ -4185,7 +4252,9 @@ async function syncFolder() {
         S.docs.push(meta);
         S.texts.set(meta.id, sc.pages);
         await store.addDoc(stripMeta(meta), sc.pages, null).catch(() => {});
+        await S.texts.flushed?.(); // its text is in the database before the next one is read (memory stays flat)
         came++;
+        await new Promise((r) => setTimeout(r, 0)); // room for your taps between documents
         if (came % 10 === 0) renderLibrary();
       } catch { if (onDisk.has(n.path)) fresh.push(n); }
     }
@@ -4409,6 +4478,7 @@ function nativeSetup() {
   cloudStatus().then((st) => { cloudOn = !!st.on; return syncCloud(); }).then(() => { if (cloudOn) setTimeout(shareAllText, 8000); }).catch(() => {});
   Files.addListener('changed', () => syncCloud());
   Files.addListener('incoming', () => syncFolder().then(indexSpotlight));
+  Files.addListener('imported', onImported);
   // documents dropped into the folder in Files while Findly was in the background: pick them up on coming back
   let lastLook = Date.now();
   const lookAgain = () => {
@@ -6951,7 +7021,7 @@ function bind() {
     const act = b.dataset.act;
     const art = b.closest('.page');
     const sec = b.closest('.doc-sec');
-    if (act === 'pick') $('#fileInput').click();
+    if (act === 'pick') pickFiles(null);
     else if (act === 'read') openReader(b.dataset.doc || sec?.dataset.doc);
     else if (act === 'open' && art) openReader(art.dataset.doc, Number(art.dataset.n));
     else if (act === 'web' && art) { override.set(pkey(art.dataset.doc, WEB), 'original'); openReader(art.dataset.doc, Number(art.dataset.n)); }

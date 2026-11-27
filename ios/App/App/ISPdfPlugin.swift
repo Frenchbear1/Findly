@@ -2,6 +2,7 @@ import Foundation
 import Capacitor
 import PDFKit
 import UIKit
+import Vision
 
 /// Draws PDF pages with Apple's own PDF engine, in the app rather than in the web page: far lighter on
 /// memory than drawing them in the page with pdf.js (which on long, picture-heavy manuals ran the page out of
@@ -15,6 +16,7 @@ public class ISPdfPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "render", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "forget", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "ocr", returnType: CAPPluginReturnPromise),
     ]
 
     private let queue = DispatchQueue(label: "instantsearch.pdf", qos: .userInitiated) // one at a time: a PDFDocument isn't safe to draw from two threads
@@ -128,4 +130,31 @@ public class ISPdfPlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve()
         }
     }
+
+    /// Live Text for one page of a library PDF: { file, page (0-based) } → { text }. The page is drawn and read
+    /// here, so a scanned manual of any length never passes through the web page.
+    @objc func ocr(_ call: CAPPluginCall) {
+        guard let file = call.getString("file") else { return call.reject("no file") }
+        let url = file.hasPrefix("file:") ? (URL(string: file) ?? URL(fileURLWithPath: file)) : URL(fileURLWithPath: file)
+        let n = call.getInt("page") ?? 0
+        queue.async {
+            autoreleasepool {
+                guard let doc = self.document(url), let page = doc.page(at: n) else { return call.reject("can't open the page") }
+                let b = page.bounds(for: .cropBox)
+                let k = min(2.5, 2200 / max(b.width, b.height, 1))
+                guard let cg = page.thumbnail(of: CGSize(width: b.width * k, height: b.height * k), for: .cropBox).cgImage else { return call.reject("can't draw the page") }
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.usesLanguageCorrection = true
+                do {
+                    try VNImageRequestHandler(cgImage: cg, options: [:]).perform([request])
+                    let obs = (request.results ?? []).sorted { a, b in
+                        abs(a.boundingBox.midY - b.boundingBox.midY) > 0.01 ? a.boundingBox.midY > b.boundingBox.midY : a.boundingBox.minX < b.boundingBox.minX
+                    }
+                    call.resolve(["text": obs.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")])
+                } catch { call.reject(error.localizedDescription) }
+            }
+        }
+    }
 }
+

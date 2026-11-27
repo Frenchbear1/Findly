@@ -124,26 +124,37 @@ export function marksFrom(pageLines, texts) {
   });
 }
 
-export async function extractPdf(bytes, onProgress) {
-  const doc = await pdfjsLib.getDocument({ data: bytes.slice(0), isEvalSupported: false }).promise;
+// `src` is the file's bytes, or (the iPhone) a function giving a fresh { range } reader of the library file. Read
+// that way, a document of any size is read in pieces, and opened afresh every few hundred pages so what pdf.js
+// has loaded never grows to the whole file.
+export async function extractPdf(src, onProgress) {
   const pages = [];
   const lines = [];
-  try {
-    for (let n = 1; n <= doc.numPages; n++) {
-      const page = await doc.getPage(n);
-      const content = await page.getTextContent();
-      const t = textFromItems(content.items);
-      pages.push(t.text);
-      lines.push(lineSizes(t.text, t.map, content.items));
-      page.cleanup();
-      onProgress?.(n, doc.numPages);
+  const SPAN = typeof src === 'function' ? 250 : Infinity;
+  let total = Infinity, n = 1;
+  while (n <= total) {
+    const from = typeof src === 'function' ? await src() : null;
+    const doc = await pdfjsLib.getDocument(from ? { range: from.range, disableAutoFetch: true, disableStream: true, rangeChunkSize: 262144, isEvalSupported: false, disableFontFace: true } : { data: src.slice(0), isEvalSupported: false }).promise;
+    try {
+      total = doc.numPages;
+      const end = Math.min(total, n + SPAN - 1);
+      for (; n <= end; n++) {
+        const page = await doc.getPage(n);
+        const content = await page.getTextContent();
+        const t = textFromItems(content.items);
+        pages.push(t.text);
+        lines.push(lineSizes(t.text, t.map, content.items));
+        page.cleanup();
+        onProgress?.(n, total);
+        if (n % 20 === 0) await new Promise((r) => setTimeout(r, 0)); // room for your taps between pages
+      }
+      // the page numbers the PDF's maker gave it ("i", "ii", "1-1"…), if any; the caller decides whether to use them
+      if (n > total) try { pages.labels = await doc.getPageLabels(); } catch {}
+    } finally {
+      doc.destroy();
     }
-    pages.marks = marksFrom(lines, pages);
-    // the page numbers the PDF's maker gave it ("i", "ii", "1-1"…), if any; the caller decides whether to use them
-    try { pages.labels = await doc.getPageLabels(); } catch {}
-  } finally {
-    doc.destroy();
   }
+  pages.marks = marksFrom(lines, pages);
   return pages;
 }
 
