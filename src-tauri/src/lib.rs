@@ -126,7 +126,9 @@ fn list(app: AppHandle) -> Result<Listing, String> {
         let Ok(rd) = fs::read_dir(dir) else { return };
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') || name.starts_with('~') || name == "desktop.ini" || name == "Thumbs.db" { continue; }
+            // .findly (the library's organisation and each document's text, shared through iCloud) is read too
+            let ours = name == ".findly" && dir == root;
+            if (name.starts_with('.') && !ours) || name.starts_with('~') || name == "desktop.ini" || name == "Thumbs.db" { continue; }
             let p = e.path();
             let Ok(md) = e.metadata() else { continue };
             if md.is_dir() { walk(&p, root, out); continue; }

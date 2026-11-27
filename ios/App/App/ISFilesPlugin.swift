@@ -145,6 +145,9 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
                 for case let url as URL in walk {
                     let name = url.lastPathComponent
                     if name == "Inbox" { walk.skipDescendants(); continue }
+                    // Findly's own folder (the library's organisation and each document's text, written by your other
+                    // devices): walked like the rest so its files come down from iCloud too
+                    if name == ".findly" && url.deletingLastPathComponent().standardizedFileURL.path == self.root.standardizedFileURL.path { continue }
                     if name.hasPrefix(".") {
                         // an iCloud file not on this device yet (".Name.pdf.icloud"): fetch it
                         if name.hasSuffix(".icloud") {
@@ -187,20 +190,36 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let cloud = self.cloudDocs else { throw NSError(domain: "ISFiles", code: 2, userInfo: [NSLocalizedDescriptionKey: "iCloud Drive isn't available. Sign in to iCloud and turn on iCloud Drive in Settings."]) }
             if on == self.cloudOn { return ["on": on] }
             let from = on ? self.local : cloud, to = on ? cloud : self.local
-            let items = (try? self.fm.contentsOfDirectory(at: from, includingPropertiesForKeys: [.fileSizeKey], options: [])) ?? []
-            for src in items {
-                let name = src.lastPathComponent
-                if name == "Inbox" || name == ".transfer" || name.hasSuffix(".icloud") { continue }
-                var dest = to.appendingPathComponent(name)
-                if self.fm.fileExists(atPath: dest.path) {
-                    // the same document from another device: keep one
-                    let a = (try? src.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, b = (try? dest.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
-                    if a == b || name.hasPrefix(".") { if on { try? self.fm.removeItem(at: src) }; continue }
-                    dest = self.free(name, in: to)
+            // folder by folder: a folder that's on both sides is merged file by file (it used to be dropped whole
+            // when the other device already had a folder of that name)
+            func merge(_ src: URL, into dir: URL) throws {
+                let items = (try? self.fm.contentsOfDirectory(at: src, includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey], options: [])) ?? []
+                for item in items {
+                    let name = item.lastPathComponent
+                    if name == "Inbox" || name == ".transfer" || name == ".findly" || name.hasPrefix(".") { continue }
+                    let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                    var dest = dir.appendingPathComponent(name)
+                    if isDir {
+                        try self.fm.createDirectory(at: dest, withIntermediateDirectories: true)
+                        try merge(item, into: dest)
+                        if on, ((try? self.fm.contentsOfDirectory(atPath: item.path)) ?? []).filter({ $0 != ".DS_Store" }).isEmpty { try? self.fm.removeItem(at: item) }
+                        continue
+                    }
+                    // already in iCloud from another device but not downloaded here yet (".Name.pdf.icloud"): the same
+                    // document, so this device's copy isn't moved in on top of it
+                    if on && self.fm.fileExists(atPath: dir.appendingPathComponent(".\(name).icloud").path) { try? self.fm.removeItem(at: item); continue }
+                    if self.fm.fileExists(atPath: dest.path) {
+                        // the same document from another device: keep one
+                        let a = (try? item.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, b = (try? dest.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+                        if a != nil && a == b { if on { try? self.fm.removeItem(at: item) }; continue }
+                        dest = self.free(name, in: dir)
+                    }
+                    // one document that can't move doesn't stop the rest (it stays where it was)
+                    if on { try? self.fm.setUbiquitous(true, itemAt: item, destinationURL: dest) }
+                    else { try? self.fm.copyItem(at: item, to: dest) }
                 }
-                if on { try self.fm.setUbiquitous(true, itemAt: src, destinationURL: dest) }
-                else { try? self.fm.copyItem(at: src, to: dest) }
             }
+            try merge(from, into: to)
             UserDefaults.standard.set(on, forKey: self.cloudKey)
             DispatchQueue.main.async { on ? self.watchCloud() : self.stopCloud() }
             return ["on": on]
