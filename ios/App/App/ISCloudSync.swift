@@ -307,6 +307,15 @@ final class ISCloudSync: NSObject {
         var rejected: [String: String] = readJSON(rejectedURL, [:])
         fileLock.unlock()
         guard started else { return false }
+        // the app went down while taking this document in last time: it's set aside (its half-written text
+        // removed) and the page reads it itself instead, so it can never take the app down on every start
+        let cur: [String: String] = readJSON(currentURL, [:])
+        if let path = cur["path"] {
+            if let id = cur["id"] { deletePages(id) }
+            rejected[path] = cur["mark"] ?? ""
+            fileLock.lock(); writeJSON(rejectedURL, rejected); fileLock.unlock()
+            try? fm.removeItem(at: currentURL)
+        }
         let (all, stillGathering) = entries()
         var more = stillGathering
 
@@ -346,8 +355,11 @@ final class ISCloudSync: NSObject {
         if total > 0 { progress(["done": 0, "total": total]) }
         for job in todo {
             if cancelled { return true }
+            let id = UUID().uuidString.lowercased()
+            writeJSON(currentURL, ["path": job.doc.path, "id": id, "mark": Self.mark(job.doc, job.side)])
+            defer { try? fm.removeItem(at: currentURL) }
             autoreleasepool {
-                switch ingest(job.side.url, doc: job.doc, placed: placed[job.doc.path]) {
+                switch ingest(job.side.url, id: id, doc: job.doc, placed: placed[job.doc.path]) {
                 case .ok(let item):
                     addToInbox(item)
                     done += 1
@@ -380,18 +392,92 @@ final class ISCloudSync: NSObject {
 
     /// Reads one document's text file and puts its pages in the search database. → what the page needs to list it.
     private enum Ingest { case ok([String: Any]), unusable, later }
-    private func ingest(_ side: URL, doc: Entry, placed: [String: Any]?) -> Ingest {
-        guard let data = try? Data(contentsOf: side, options: .mappedIfSafe) else { return .later } // gone again: next time
-        guard let sc = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let pages = sc["pages"] as? [String], !pages.isEmpty else { return .unusable }
+
+    /// Takes one document in from the text file another device left for it, the way a backup is read: a piece of
+    /// the file at a time, its pages saved a couple of hundred at a time. The whole text is never in memory, however
+    /// long the document (a whole FAR or AIM is fine).
+    /// The file is the page's JSON.stringify({ v, name, size, meta, pages: [...] }): everything before "pages" is
+    /// small and read as JSON; the pages are then read one string at a time.
+    private func ingest(_ side: URL, id: String, doc: Entry, placed: [String: Any]?) -> Ingest {
+        guard let h = try? FileHandle(forReadingFrom: side) else { return .later } // gone again: next time
+        defer { try? h.close() }
+        let marker = Data("\"pages\":[".utf8)
+        var head = Data(), rest = Data()
+        var found = false
+        while !found {
+            guard let chunk = try? h.read(upToCount: 1 << 20), !chunk.isEmpty else { break }
+            head.append(chunk)
+            if let r = head.range(of: marker) {
+                rest = head.subdata(in: r.upperBound..<head.endIndex)
+                head = head.subdata(in: head.startIndex..<r.lowerBound)
+                found = true
+            } else if head.count > 8 << 20 { return .unusable }
+        }
+        guard found else { return .unusable }
+        head.append(Data("\"pages\":[]}".utf8))
+        guard let sc = (try? JSONSerialization.jsonObject(with: head)) as? [String: Any] else { return .unusable }
         let name = (doc.path as NSString).lastPathComponent
         let scSize = (sc["size"] as? NSNumber)?.intValue ?? 0
         if doc.size > 0 && scSize > 0 && doc.size != scSize { return .unusable } // text of a different version
         if let n = sc["name"] as? String, n != name { return .unusable }
-        let id = UUID().uuidString.lowercased()
-        guard putPages(id, pages) else { return .later }
-        let lens = pages.map { $0.utf16.count }
-        let opening = pages.prefix(4).first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map { String($0.prefix(1200)) } ?? ""
+
+        var lens: [Int] = []
+        var opening = ""
+        var batch: [String] = []
+        var saved = 0
+        var failed = false, bad = false
+        var tok = Data()
+        var inStr = false, esc = false, ended = false
+        func flush() {
+            guard !batch.isEmpty, !failed else { return }
+            if putPages(id, batch, start: saved) { saved += batch.count } else { failed = true }
+            batch.removeAll(keepingCapacity: true)
+        }
+        func emit() {
+            guard let t = (try? JSONSerialization.jsonObject(with: tok, options: .fragmentsAllowed)) as? String else { failed = true; bad = true; return }
+            lens.append(t.utf16.count)
+            if opening.isEmpty && lens.count <= 4 && !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { opening = String(t.prefix(1200)) }
+            batch.append(t)
+            if batch.count >= 200 { flush() }
+        }
+        func feed(_ d: Data) {
+            d.withUnsafeBytes { (p: UnsafeRawBufferPointer) in
+                var i = 0, from = inStr ? 0 : -1
+                while i < p.count && !ended && !failed {
+                    let b = p[i]
+                    if inStr {
+                        if esc { esc = false }
+                        else if b == 0x5C { esc = true } // backslash
+                        else if b == 0x22 { // the closing quote: one page
+                            tok.append(contentsOf: UnsafeRawBufferPointer(rebasing: p[from...i]))
+                            inStr = false
+                            emit()
+                            tok.removeAll(keepingCapacity: true)
+                            from = -1
+                        }
+                    } else if b == 0x22 { inStr = true; from = i }
+                    else if b == 0x5D { ended = true } // ] — the last page
+                    i += 1
+                }
+                if inStr && from >= 0 && from < p.count { tok.append(contentsOf: UnsafeRawBufferPointer(rebasing: p[from..<p.count])) }
+            }
+        }
+        feed(rest)
+        rest = Data()
+        while !ended && !failed {
+            if cancelled { deletePages(id); return .later }
+            var more = false
+            autoreleasepool {
+                if let chunk = try? h.read(upToCount: 1 << 20), !chunk.isEmpty { feed(chunk); more = true }
+            }
+            if !more { break }
+        }
+        flush()
+        if failed || !ended || lens.isEmpty {
+            deletePages(id)
+            // (the database being busy is tried again next time; text that can't be read never will be)
+            return failed && !bad ? .later : .unusable
+        }
         var item: [String: Any] = [
             "id": id, "path": doc.path, "name": name, "size": doc.size > 0 ? doc.size : scSize,
             "meta": Self.clean(sc["meta"]) ?? [String: Any](), "lens": lens, "opening": opening,
@@ -432,7 +518,22 @@ final class ISCloudSync: NSObject {
         return true
     }
 
-    private func putPages(_ id: String, _ pages: [String]) -> Bool {
+    private func deletePages(_ id: String) {
+        guard openDB() else { return }
+        sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil)
+        var st: OpaquePointer?
+        if fts, sqlite3_prepare_v2(db, "INSERT INTO fts(fts, rowid, text) SELECT 'delete', id, text FROM pages WHERE doc = ?", -1, &st, nil) == SQLITE_OK {
+            sqlite3_bind_text(st, 1, id, -1, TRANSIENT); sqlite3_step(st)
+        }
+        sqlite3_finalize(st); st = nil
+        if sqlite3_prepare_v2(db, "DELETE FROM pages WHERE doc = ?", -1, &st, nil) == SQLITE_OK {
+            sqlite3_bind_text(st, 1, id, -1, TRANSIENT); sqlite3_step(st)
+        }
+        sqlite3_finalize(st)
+        sqlite3_exec(db, "COMMIT", nil, nil, nil)
+    }
+
+    private func putPages(_ id: String, _ pages: [String], start: Int = 0) -> Bool {
         guard openDB() else { return false }
         guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else { return false }
         var ins: OpaquePointer?, fins: OpaquePointer?
@@ -441,7 +542,7 @@ final class ISCloudSync: NSObject {
         var ok = ins != nil
         for (i, t) in pages.enumerated() where ok {
             sqlite3_bind_text(ins, 1, id, -1, TRANSIENT)
-            sqlite3_bind_int(ins, 2, Int32(i))
+            sqlite3_bind_int(ins, 2, Int32(start + i))
             sqlite3_bind_text(ins, 3, t, -1, TRANSIENT)
             ok = sqlite3_step(ins) == SQLITE_DONE
             sqlite3_reset(ins)
@@ -519,6 +620,7 @@ final class ISCloudSync: NSObject {
     private var switchRunning = false // (under lock)
     private var local: URL { fm.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     private var movedURL: URL { support.appendingPathComponent("findly-cloud-moved.json") }
+    private var currentURL: URL { support.appendingPathComponent("findly-cloud-current.json") }
 
     /// iCloud sync starts on: the first time iCloud Drive is there and the switch has never been touched, the
     /// library goes into iCloud Drive › Findly (and background sync is on by default too).

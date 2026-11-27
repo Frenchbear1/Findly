@@ -3916,6 +3916,10 @@ async function liveTextInPlace(path, pages, meta) {
 
 async function ingest(file, meta) {
   let last = 0;
+  const diskPathOf = getDiskPath(meta.id) || file._diskPath;
+  // a document from the library folder that took the app down while being read isn't tried again by itself
+  // (otherwise it would go down again on every start): it's set aside and shown with a way to retry
+  if (diskPathOf) { try { localStorage.setItem('findly:reading', diskPathOf); } catch {} }
   try {
     const onProgress = (n, total) => {
       meta.progress = n / total;
@@ -3923,7 +3927,7 @@ async function ingest(file, meta) {
       if (now - last > 120) {
         last = now;
         showProgress(meta);
-        if (readingLib) { const left = S.docs.filter((d) => d.status).length; libStatus.show(`Reading “${meta.name}”${left > 1 ? ` · ${left - 1} more after it` : ''}`, n / total); }
+        if (readingLib && !bring.total) { const left = S.docs.filter((d) => d.status).length; libStatus.show(`Reading “${meta.name}”${left > 1 ? ` · ${left - 1} more after it` : ''}`, n / total); }
       }
     };
     const inPlace = nativePdf && meta.kind === 'pdf';
@@ -3962,12 +3966,15 @@ async function ingest(file, meta) {
     }
     if (meta.noText) toast(`“${meta.name}” has little or no text — it may be scanned. Use Original view to read it.`);
     if (cloudOn) writeSidecar(meta, pages);
-    if (readingLib && !S.docs.some((d) => d.status)) { readingLib = false; libStatus.done('All your documents are in'); }
+    bringArrived(diskPathOf);
+    if (readingLib && !S.docs.some((d) => d.status)) { readingLib = false; if (!bring.total) libStatus.done('All your documents are in'); }
   } catch (err) {
     S.docs = S.docs.filter((d) => d !== meta);
     toast(`Couldn’t read “${meta.name}”: ${err.message || err}`);
+  } finally {
+    if (diskPathOf) { try { localStorage.removeItem('findly:reading'); } catch {} }
   }
-  runSearch({ keepScroll: true });
+  if (bring.total) refreshSoon(); else runSearch({ keepScroll: true });
   updateStorage();
 }
 
@@ -4203,16 +4210,16 @@ async function syncFolder() {
       setTimeout(async () => importBackup(await diskFile(f.path)), 300);
       break;
     }
-    // iCloud: how your other devices have the library organised, and the text they've already read from each
-    // document (so it comes in at once, without reading every page again or waiting for the file to download)
-    // (the library's organisation still on its way from iCloud: wait for it, so documents come in in the right
-    // order and folders from the start; the check runs again in a few seconds)
-    // documents another device has already read: the app takes them in itself (their text, not the PDF)
+    // iCloud: documents another device has already read are taken in by the app itself (their text, a few hundred
+    // pages at a time, never the PDF); the rest are read here, one at a time, after those
     const handled = new Set(cloudOn ? all.handled || [] : []);
-    // (documents not in the library yet and still downloading; ones already listed fetch their PDF in the background)
-    const toGo = [...waiting].filter((p) => kindOf(p) && !p.startsWith('.findly/') && !byPath.has(p) && !handled.has(p)).length;
-    const fetching = () => { if (cloudOn && (toGo || all.gathering)) libStatus.show(toGo ? `Getting your library from iCloud · ${plural(toGo, 'document')} to go` : 'Looking in iCloud…', null); };
-    if (cloudOn && waiting.has(STATE)) { fetching(); return; } // (the app fetches it and says when it's here)
+    const isDocPath = (p) => kindOf(p) && !/^(Backups|\.findly|Inbox)\//.test(p) && !p.split('/').some((x) => x.startsWith('.')) && p.split('/').pop() !== 'Put documents here.txt';
+    // every document in iCloud that isn't in the library yet: the one count the progress line shows
+    const missingNow = () => [...files.map((f) => f.path), ...waiting].filter((p) => isDocPath(p) && !byPath.has(p) && !setAside.has(p));
+    // (nothing to work with yet: neither its text nor the document itself is on this device)
+    const stuck = (p) => !onDisk.has(p) && !onDisk.has(sideKey(p.split('/').pop()));
+    if (cloudOn) bringSet(missingNow(), missingNow().filter(stuck).length);
+    if (cloudOn && waiting.has(STATE)) return; // the library's order and folders first (the app fetches it, then says)
     const st = cloudOn ? await readState(onDisk) : null;
     const known = (p) => st?.docs?.[p];
     const newcomers = [];
@@ -4221,14 +4228,16 @@ async function syncFolder() {
       const name = p.split('/').pop();
       if (!kindOf(name) || name === 'Put documents here.txt' || /^(Backups|\.findly)\//.test(p)) continue;
       if (byPath.has(p) || pending.has(p) || handled.has(p) || newcomers.some((n) => n.path === p)) continue;
+      if (setAside.has(p)) { showSetAside(); continue; }
       if (!onDisk.has(p)) continue; // still coming down from iCloud: it's read once it's here
       newcomers.push({ path: p, name, size: onDisk.get(p)?.size });
     }
     for (const f of files) {
+      if (bring.missing.size) break; // (not while a library is coming in: one thing at a time)
       const id = byPath.get(f.path);
       const doc = id && docById(id);
       // replaced or edited in the folder: read it again in place
-      if (doc && !doc.status && doc.size && f.size !== doc.size && kindOf(f.path)) {
+      if (doc && !doc.status && doc.size && f.size && f.size !== doc.size && kindOf(f.path)) {
         try {
           const { pages, bytes } = await readFile(lazyFile(f.path, f.size));
           setDiskPath(doc.id, f.path);
@@ -4262,9 +4271,12 @@ async function syncFolder() {
       if (e.opening) S.texts.openings?.set(meta.id, e.opening);
       await store.addDoc(stripMeta(meta), null, null).catch(() => {});
       came++;
-      if (came % 25 === 0) { renderLibrary(); await new Promise((r) => setTimeout(r, 0)); } // room for your taps
+      if (came % 20 === 0) await new Promise((r) => setTimeout(r, 0)); // room for your taps
     }
-    for (const n of newcomers) fresh.push(n);
+    // documents with no text from another device are read here, but only once the app has taken in everything
+    // it can (never both at once)
+    const appLeft = cloudOn && [...handled].some((p) => !byPath.has(p));
+    if (!appLeft) for (const n of newcomers) fresh.push(n);
     // the rest are read here (one at a time, as each one's turn comes: never all in memory at once)
     const lazy = fresh.map((n) => Object.assign(lazyFile(n.path, n.size), { _diskPath: n.path, _folder: folderFor(n), _order: known(n.path)?.order }));
     const byFolder = new Map();
@@ -4272,27 +4284,84 @@ async function syncFolder() {
     for (const [fid, list] of byFolder) addFiles(list, fid, { quietSkip: true });
     if (cloudOn && (came || lazy.length)) setKnown([...byPath.keys(), ...pendingDiskPaths(), ...lazy.map((f) => f._diskPath)]);
     if (st) S.docs.sort((a, b) => (a.order || 0) - (b.order || 0));
-    if (came) { cloudCame += came; renderLibrary(); runSearch({ keepScroll: true }); indexSpotlight(); }
-    if (cloudCame && !cloudBringing) { libStatus.done(`Brought in ${plural(cloudCame, 'document')} from iCloud`); cloudCame = 0; }
-    if (lazy.length) { readingLib = true; libStatus.show(`Reading ${plural(lazy.length, 'new document')}…`, null); }
-    if (!came && !lazy.length) { fetching(); renderLibrary(); runSearch({ keepScroll: true }); }
-    if (!toGo && !all.gathering && !cloudBringing && /^(Getting|Looking)/.test($('#libStatus .ls-text')?.textContent || '')) libStatus.done('Your iCloud library is up to date');
+    if (cloudOn) bringSet(missingNow(), missingNow().filter(stuck).length);
+    if (lazy.length && !bring.total) { readingLib = true; libStatus.show(`Reading ${plural(lazy.length, 'new document')}…`, null); }
+    if (lazy.length && bring.total) readingLib = true;
+    if (came || !lazy.length) refreshSoon();
   })().finally(() => {
     syncing = null;
     if (syncAgain) { syncAgain = false; setTimeout(() => syncFolder(), 0); }
   });
   return syncing;
 }
-// How far the app has got taking in documents from iCloud: one line at the top of the library, and what's ready is
-// listed every second or so while it works (so documents arrive steadily, not all at the end)
-let cloudBringing = false, cloudCame = 0, syncedT = 0;
+// Bringing in an iCloud library: one count for the whole thing (every document in iCloud that isn't in the library
+// yet), one line at the top of the library that only says it's done when it is, and the list refreshed every few
+// seconds rather than with every document.
+const bring = { total: 0, done: 0, missing: new Set(), waiting: 0 };
+// documents set aside because the app went down while reading them (see ingest): not tried again until you say
+const setAside = (() => {
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem('findly:setAside') || '[]'); } catch {}
+  // the app went down while reading this one last time
+  try {
+    const was = localStorage.getItem('findly:reading');
+    if (was) { localStorage.removeItem('findly:reading'); if (!list.includes(was)) list.push(was); localStorage.setItem('findly:setAside', JSON.stringify(list)); }
+  } catch {}
+  const save = () => { try { localStorage.setItem('findly:setAside', JSON.stringify(list)); } catch {} };
+  return {
+    has: (p) => list.includes(p),
+    get list() { return list; },
+    clear() { list = []; save(); },
+  };
+})();
+let setAsideShown = false;
+function showSetAside() {
+  if (setAsideShown || !setAside.list.length) return;
+  setAsideShown = true;
+  const names = setAside.list.map((p) => p.split('/').pop());
+  toast(`${names.length === 1 ? `“${names[0]}” couldn’t` : `${plural(names.length, 'document')} couldn’t`} come in: Findly closed while reading ${names.length === 1 ? 'it' : 'them'}, so ${names.length === 1 ? 'it was' : 'they were'} set aside`, {
+    action: 'Retry', ms: 15000,
+    onAction: () => { setAside.clear(); setAsideShown = false; syncFolder(); },
+  });
+}
+function bringSet(paths, waiting) {
+  const now = new Set(paths);
+  for (const p of bring.missing) if (!now.has(p)) bring.done++; // came in (or was removed)
+  bring.missing = now;
+  bring.waiting = waiting;
+  bring.total = Math.max(bring.total, bring.done + now.size);
+  bringShow();
+}
+function bringArrived(path) {
+  if (path && bring.missing.delete(path)) { bring.done++; bringShow(); }
+}
+function bringShow() {
+  if (!cloudOn || cloudSwitching || !bring.total) return;
+  if (!bring.missing.size) {
+    if (bring.done) libStatus.done(`All ${plural(bring.total, 'document')} are in from iCloud`);
+    bring.total = bring.done = 0;
+    refreshSoon();
+    indexSpotlight();
+    return;
+  }
+  const left = bring.missing.size;
+  const wait = bring.waiting === left ? ' · waiting for iCloud to send them' : bring.waiting ? ` · ${bring.waiting} still coming from iCloud` : '';
+  libStatus.show(`Bringing in documents from iCloud · ${bring.done} of ${bring.total}${wait}`, bring.done / bring.total);
+}
+// the list and results, at most every few seconds while a library comes in
+let refreshT = 0, refreshAt = 0;
+function refreshSoon() {
+  if (refreshT) return;
+  const wait = Math.max(0, refreshAt + 2500 - Date.now());
+  refreshT = setTimeout(() => { refreshT = 0; refreshAt = Date.now(); renderLibrary(); runSearch({ keepScroll: true }); }, wait);
+}
+// the app is taking documents in: what's ready is listed every second or two while it works
+let syncedT = 0;
 function onSynced(e) {
-  const { done = 0, total = 0, finished } = e || {};
-  if (!total) return;
-  cloudBringing = finished === undefined;
-  if (cloudBringing) libStatus.show(`Bringing in documents from iCloud · ${done} of ${total}`, done / total);
+  if (!e) return;
+  if (syncedT && e.finished === undefined) return; // (already due)
   clearTimeout(syncedT);
-  syncedT = setTimeout(() => syncFolder(), cloudBringing ? 1200 : 50);
+  syncedT = setTimeout(() => { syncedT = 0; syncFolder(); }, e.finished === undefined ? 1500 : 50);
 }
 // A document in the Findly folder, read only when its turn comes (a whole iCloud library read up front used to
 // run the app out of memory)
