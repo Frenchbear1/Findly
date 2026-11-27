@@ -172,8 +172,57 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
                     ])
                 }
             }
+            // iCloud: the folder on disk only shows what's already been brought down to this device (a fresh iPad
+            // shows nothing at all), so the full list comes from iCloud itself. Anything not here yet is fetched,
+            // Findly's own small files first (the library's order and each document's text).
+            if self.cloudOn {
+                let snap = self.cloudSnapshot()
+                if snap.gathering { pending += 1 }
+                var seen = Set(out.compactMap { $0["path"] as? String })
+                seen.formUnion(waiting)
+                let top = self.canon(self.root)
+                for item in snap.items.sorted(by: { ($0.url.path.contains("/.findly/") ? 0 : 1) < ($1.url.path.contains("/.findly/") ? 0 : 1) }) {
+                    if item.folder { continue }
+                    guard self.canon(item.url).hasPrefix(top + "/") else { continue }
+                    let path = self.rel(item.url)
+                    if seen.contains(path) { continue }
+                    let parts = path.split(separator: "/").map(String.init)
+                    if parts.first == "Inbox" { continue }
+                    if parts.enumerated().contains(where: { $0.element.hasPrefix(".") && !($0.offset == 0 && $0.element == ".findly") }) { continue }
+                    seen.insert(path)
+                    if item.here {
+                        out.append(["path": path, "size": item.size, "mtime": item.mtime])
+                    } else {
+                        try? self.fm.startDownloadingUbiquitousItem(at: item.url)
+                        pending += 1
+                        waiting.append(path)
+                    }
+                }
+            }
             return ["files": out, "pending": pending, "waiting": waiting, "cloud": self.cloudOn]
         }
+    }
+
+    /// Everything in iCloud Drive › Findly as iCloud knows it (whether or not it's on this device yet).
+    private func cloudSnapshot() -> (items: [(url: URL, size: Int, here: Bool, folder: Bool, mtime: Double)], gathering: Bool) {
+        var items: [(url: URL, size: Int, here: Bool, folder: Bool, mtime: Double)] = []
+        var gathering = true
+        let work = {
+            guard let q = self.query else { return }
+            q.disableUpdates()
+            defer { q.enableUpdates() }
+            gathering = q.isGathering
+            for i in 0..<q.resultCount {
+                guard let item = q.result(at: i) as? NSMetadataItem, let url = item.value(forAttribute: NSMetadataItemURLKey) as? URL else { continue }
+                let size = (item.value(forAttribute: NSMetadataItemFSSizeKey) as? NSNumber)?.intValue ?? 0
+                let status = item.value(forAttribute: NSMetadataUbiquitousItemDownloadingStatusKey) as? String
+                let type = item.value(forAttribute: NSMetadataItemContentTypeKey) as? String
+                let date = (item.value(forAttribute: NSMetadataItemFSContentChangeDateKey) as? Date) ?? Date()
+                items.append((url: url, size: size, here: status == NSMetadataUbiquitousItemDownloadingStatusCurrent, folder: type == "public.folder", mtime: date.timeIntervalSince1970 * 1000))
+            }
+        }
+        if Thread.isMainThread { work() } else { DispatchQueue.main.sync(execute: work) }
+        return (items, gathering)
     }
 
     // MARK: iCloud

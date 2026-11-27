@@ -4132,7 +4132,9 @@ async function syncFolder() {
     // document (so it comes in at once, without reading every page again or waiting for the file to download)
     // (the library's organisation still on its way from iCloud: wait for it, so documents come in in the right
     // order and folders from the start; the check runs again in a few seconds)
-    if (cloudOn && waiting.has(STATE)) { if (!all.pending) setTimeout(() => syncFolder(), 3000); return; }
+    const toGo = [...waiting].filter((p) => kindOf(p) && !p.startsWith('.findly/')).length;
+    const fetching = () => { if (cloudOn && (toGo || all.pending)) libStatus.show(toGo ? `Getting your library from iCloud · ${plural(toGo, 'document')} to go` : 'Looking in iCloud…', null); };
+    if (cloudOn && waiting.has(STATE)) { fetching(); if (!all.pending) setTimeout(() => syncFolder(), 3000); return; }
     const st = cloudOn ? await readState(onDisk) : null;
     const sidesComing = new Set([...waiting].filter((p) => p.startsWith(SIDE_DIR)));
     const sides = new Set(files.filter((f) => f.path.startsWith(SIDE_DIR)).map((f) => f.path));
@@ -4196,7 +4198,8 @@ async function syncFolder() {
     if (st) S.docs.sort((a, b) => (a.order || 0) - (b.order || 0));
     if (came) { libStatus.done(`Brought in ${plural(came, 'document')} from iCloud`); renderLibrary(); runSearch({ keepScroll: true }); }
     if (lazy.length) { readingLib = true; libStatus.show(`Reading ${plural(lazy.length, 'new document')}…`, null); }
-    if (!came && !lazy.length) { renderLibrary(); runSearch({ keepScroll: true }); }
+    if (!came && !lazy.length) { fetching(); renderLibrary(); runSearch({ keepScroll: true }); }
+    if (!toGo && !all.pending && /^(Getting|Looking)/.test($('#libStatus .ls-text')?.textContent || '')) libStatus.done('Your iCloud library is up to date');
   })().finally(() => { syncing = null; });
   return syncing;
 }
