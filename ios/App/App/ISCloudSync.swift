@@ -21,6 +21,7 @@ final class ISCloudSync: NSObject {
     static let processingTask = "com.davidlabarre.instantsearch.sync.long"
     static let cloudKey = "instantsearch.icloud"
     static let backgroundKey = "findly.backgroundSync"
+    static let switchKey = "findly.cloudSwitch" // "on" / "off" while the library is being moved to match the switch
     static let kinds: Set<String> = ["pdf", "docx", "txt", "text", "md", "markdown", "html", "htm", "mht", "mhtml", "rtf"]
     static let sideDir = ".findly/index/"
     static let stateFile = ".findly/library.json"
@@ -42,6 +43,7 @@ final class ISCloudSync: NSObject {
     /// The page is told: something in the folder changed / how far the sync has got.
     var onChange: (() -> Void)?
     var onProgress: (([String: Any]) -> Void)?
+    var onSwitch: ((String, [String: Any]) -> Void)? // ("cloudSwitch", progress) / ("cloudSwitched", result)
 
     // MARK: finding iCloud Drive › Findly
 
@@ -70,7 +72,7 @@ final class ISCloudSync: NSObject {
 
     /// Starts listening to iCloud (main thread).
     func watch() {
-        guard query == nil, cloudOn else { return }
+        guard query == nil, docsURL != nil else { return }
         let q = NSMetadataQuery()
         q.searchScopes = [NSMetadataQueryUbiquitousDocumentsScope]
         q.predicate = NSPredicate(format: "%K LIKE '*'", NSMetadataItemFSNameKey)
@@ -295,7 +297,7 @@ final class ISCloudSync: NSObject {
     /// One pass: every document with a text file that this device doesn't have yet is taken in, one at a time.
     /// Returns whether there's more on its way (text files or the library file still downloading). Work queue only.
     @discardableResult private func runOnce() -> Bool {
-        guard cloudOn else { return false }
+        guard cloudOn, switching == nil else { return false }
         // not until the page has said what it already has (the first start of this version): otherwise a device
         // that already has every document would take them all in again
         fileLock.lock()
@@ -463,10 +465,13 @@ final class ISCloudSync: NSObject {
         for id in [Self.refreshTask, Self.processingTask] {
             BGTaskScheduler.shared.register(forTaskWithIdentifier: id, using: nil) { [weak self] task in self?.handle(task) }
         }
-        // a launch (in the background or not) with iCloud on: start listening and catch up
+        // a launch (in the background or not): iCloud on by default, a move between iCloud and this device carries on
+        // where it stopped, and with iCloud on, start listening and catch up
         work.async {
-            guard UserDefaults.standard.bool(forKey: Self.cloudKey) else { return }
             self.findContainer()
+            self.applyDefault()
+            self.resumeSwitch()
+            guard UserDefaults.standard.bool(forKey: Self.cloudKey) else { return }
             DispatchQueue.main.async { if self.cloudOn { self.watch(); self.kick() } }
         }
     }
@@ -504,5 +509,189 @@ final class ISCloudSync: NSObject {
             }
             task.setTaskCompleted(success: !self.cancelled)
         }
+    }
+
+    // MARK: turning iCloud on and off without losing anything
+
+    /// "on" / "off" while the library is being moved to match the switch (nil otherwise).
+    var switching: String? { UserDefaults.standard.string(forKey: Self.switchKey) }
+    private let switchQ = DispatchQueue(label: "findly.cloudswitch", qos: .userInitiated)
+    private var switchRunning = false // (under lock)
+    private var local: URL { fm.urls(for: .documentDirectory, in: .userDomainMask)[0] }
+    private var movedURL: URL { support.appendingPathComponent("findly-cloud-moved.json") }
+
+    /// iCloud sync starts on: the first time iCloud Drive is there and the switch has never been touched, the
+    /// library goes into iCloud Drive › Findly (and background sync is on by default too).
+    func applyDefault() {
+        findContainer()
+        lock.lock()
+        let fresh = UserDefaults.standard.object(forKey: Self.cloudKey) == nil && switching == nil && _docs != nil
+        if fresh { UserDefaults.standard.set("on", forKey: Self.switchKey) } // (decided at once: the page sees it)
+        lock.unlock()
+        if fresh { resumeSwitch() }
+    }
+
+    /// Turns iCloud on or off. The library is moved first and the switch flips once everything is across:
+    /// on, documents on this device move into iCloud Drive › Findly (moved, not copied: iCloud uploads them);
+    /// off, everything in iCloud Drive › Findly is copied onto this device (On My iPhone › Findly), downloading
+    /// what isn't here yet, and the iCloud copy stays for your other devices. Turning it back mid-way just reverses.
+    func startSwitch(on: Bool) {
+        UserDefaults.standard.set(on ? "on" : "off", forKey: Self.switchKey)
+        resumeSwitch()
+    }
+
+    func resumeSwitch() {
+        guard switching != nil else { return }
+        lock.lock()
+        if switchRunning { lock.unlock(); return }
+        switchRunning = true
+        lock.unlock()
+        switchQ.async {
+            // (a switch flipped back mid-way is picked up by the next round)
+            while let dir = self.switching {
+                self.runSwitch(dir)
+            }
+            self.lock.lock(); self.switchRunning = false; self.lock.unlock()
+        }
+    }
+
+    /// The documents in a folder (not Findly's own files, the note, or Inbox): rel path -> (url, size, here).
+    private func documents(in root: URL) -> [String: (url: URL, size: Int, here: Bool)] {
+        var out: [String: (url: URL, size: Int, here: Bool)] = [:]
+        let base = canon(root) + "/"
+        let relOf = { (u: URL) -> String? in let p = self.canon(u); return p.hasPrefix(base) ? String(p.dropFirst(base.count)) : nil }
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey, .isDirectoryKey]
+        guard let walk = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsPackageDescendants]) else { return out }
+        for case let url as URL in walk {
+            let name = url.lastPathComponent
+            if name == "Inbox" { walk.skipDescendants(); continue }
+            if name.hasPrefix(".") {
+                if name.hasSuffix(".icloud") {
+                    let real = url.deletingLastPathComponent().appendingPathComponent(String(name.dropFirst().dropLast(7)))
+                    if let r = relOf(real), out[r] == nil { out[r] = (real, placeholderSize(url), false) }
+                } else if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true { walk.skipDescendants() }
+                continue
+            }
+            guard let v = try? url.resourceValues(forKeys: Set(keys)), v.isRegularFile == true, let r = relOf(url) else { continue }
+            if r == "Put documents here.txt" { continue }
+            out[r] = (url, v.fileSize ?? 0, v.isUbiquitousItem != true || v.ubiquitousItemDownloadingStatus == .current)
+        }
+        // iCloud also knows about files this device hasn't seen yet
+        if canon(root) == docsURL.map({ canon($0) }) {
+            lock.lock(); let known = snap; lock.unlock()
+            for (r, e) in known where out[r] == nil && !r.hasPrefix(".") && !r.contains("/.") && !r.hasPrefix("Inbox/") {
+                out[r] = (e.url, e.size, e.here)
+            }
+        }
+        return out
+    }
+
+    private func freeURL(_ url: URL) -> URL {
+        let dir = url.deletingLastPathComponent(), ext = url.pathExtension, base = url.deletingPathExtension().lastPathComponent
+        var u = url, n = 2
+        while fm.fileExists(atPath: u.path) {
+            u = dir.appendingPathComponent(ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
+            n += 1
+        }
+        return u
+    }
+
+    private func switchProgress(_ ev: String, _ d: [String: Any]) {
+        guard let cb = onSwitch else { return }
+        DispatchQueue.main.async { cb(ev, d) }
+    }
+
+    /// One round of moving the library for the switch. Switch queue only.
+    private func runSwitch(_ dir: String) {
+        let on = dir == "on"
+        guard let cloud = docsURL else {
+            // iCloud Drive went away: nothing to move to or from; the switch stays as it was
+            UserDefaults.standard.removeObject(forKey: Self.switchKey)
+            switchProgress("cloudSwitched", ["on": cloudOn, "error": "iCloud Drive isn't available right now"])
+            return
+        }
+        DispatchQueue.main.sync { self.watch() } // (to see what's in iCloud but not on this device yet)
+        let from = on ? local : cloud, to = on ? cloud : local
+        var moved: [String: String] = [:]
+        var failed = 0
+        var attempts = 0
+        while true {
+            if switching != dir { return } // switched back: the next round goes the other way
+            let src = documents(in: from)
+            let dst = documents(in: to)
+            // off: what's already copied here and unchanged needn't be copied again
+            let todo = src.filter { r, e in !(dst[r].map { $0.size == e.size } ?? false) }.sorted { $0.key < $1.key }
+            let total = src.count
+            var done = total - todo.count
+            var waitingFor = 0, copied = 0
+            failed = 0
+            switchProgress("cloudSwitch", ["on": on, "done": done, "total": total])
+            for (r, e) in todo {
+                if switching != dir { return }
+                if !on && !e.here { // in iCloud only: downloaded first (iOS carries on with it in the background)
+                    try? fm.startDownloadingUbiquitousItem(at: e.url)
+                    waitingFor += 1
+                    continue
+                }
+                autoreleasepool {
+                    var dest = to.appendingPathComponent(r)
+                    try? fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    if !on && fm.fileExists(atPath: dest.path) {
+                        // an older copy left on this device: the library's current one (from iCloud) replaces it
+                        try? fm.removeItem(at: dest)
+                    } else if fm.fileExists(atPath: dest.path) { // a different document of the same name is already there
+                        dest = freeURL(dest)
+                        let folder = (r as NSString).deletingLastPathComponent
+                        moved[r] = folder.isEmpty ? dest.lastPathComponent : folder + "/" + dest.lastPathComponent
+                    }
+                    var ok = false
+                    if on {
+                        // into iCloud: a move on this device (iCloud uploads it from there)
+                        ok = (try? fm.setUbiquitous(true, itemAt: e.url, destinationURL: dest)) != nil
+                    } else {
+                        // onto this device: a copy, so your other devices keep theirs (on the same disk, a copy
+                        // takes no extra space until one of them changes)
+                        var err: NSError?
+                        NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: e.url, options: [.withoutChanges], error: &err) { u in
+                            ok = (try? self.fm.copyItem(at: u, to: dest)) != nil
+                        }
+                    }
+                    if ok { done += 1; copied += 1 } else { failed += 1 }
+                    switchProgress("cloudSwitch", ["on": on, "done": done, "total": total, "name": (r as NSString).lastPathComponent])
+                }
+            }
+            if !moved.isEmpty {
+                fileLock.lock()
+                let had: [String: String] = readJSON(movedURL, [:])
+                writeJSON(movedURL, had.merging(moved) { _, new in new })
+                fileLock.unlock()
+                moved = [:]
+            }
+            // done once a round finds nothing left to do (one more look catches anything added meanwhile)
+            if waitingFor == 0 && (todo.isEmpty || copied == 0) { break }
+            if waitingFor == 0 { continue }
+            // waiting on downloads from iCloud: look again in a moment (offline, this waits until it's back;
+            // nothing changes until everything is here)
+            switchProgress("cloudSwitch", ["on": on, "done": done, "total": total, "waiting": waitingFor])
+            attempts += 1
+            Thread.sleep(forTimeInterval: attempts < 30 ? 2 : 6)
+        }
+        if switching != dir { return }
+        UserDefaults.standard.set(on, forKey: Self.cloudKey)
+        UserDefaults.standard.removeObject(forKey: Self.switchKey)
+        DispatchQueue.main.async {
+            if on { self.watch() } else { self.unwatch() }
+            self.schedule()
+        }
+        switchProgress("cloudSwitched", ["on": on, "failed": failed])
+    }
+
+    /// Documents that got a new name in the move (a different document of the same name was already there):
+    /// { old path: new path }, handed over once.
+    func takeMoved() -> [String: String] {
+        fileLock.lock(); defer { fileLock.unlock() }
+        let m: [String: String] = readJSON(movedURL, [:])
+        if !m.isEmpty { try? fm.removeItem(at: movedURL) }
+        return m
     }
 }

@@ -129,7 +129,11 @@ export async function diskFile(path) {
 
 /** iCloud sync (iCloud Drive › Findly): { available, on } */
 export const cloudStatus = () => (Files.cloud ? Files.cloud().catch(() => ({ available: false, on: false })) : Promise.resolve({ available: false, on: false }));
-export const setCloud = async (on) => { const r = await Files.setCloud({ on }); rootP = null; return r; }; // the library moved: ask where it is now
+export const setCloud = (on) => Files.setCloud({ on }); // (the library moves first: see libraryMoved)
+/** The library finished moving between iCloud and this device: ask where it is now. */
+export const libraryMoved = () => { rootP = null; };
+/** Documents renamed while the library moved (another of the same name was already there): { old path: new path } */
+export const takeMoved = async () => (Files?.takeMoved ? (await Files.takeMoved()).moved || {} : {});
 export const listAll = async () => Files.list();
 // iCloud sync is done by the app itself (ISCloudSync): it takes in documents your other devices already read, straight
 // into the search database, and hands over a short list of what's ready.

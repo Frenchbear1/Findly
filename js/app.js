@@ -1,6 +1,6 @@
 import { compile, MODES, inWhere, WHERE } from './search.js';
 import { store, stuckStorage, setDiskPath, getDiskPath, pendingDiskPaths } from './store.js';
-import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, nativePdf, drawPage, forgetPages, pdfRange, nativeIndex, Index, readResultFile, cloudStatus, setCloud, listAll, syncNow, takeSynced, setKnown, setBackgroundSync, pickLibraryFolder, libraryFolder, revealLibrary, diskFile, ocrPage, pickNative } from './native.js';
+import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, nativePdf, drawPage, forgetPages, pdfRange, nativeIndex, Index, readResultFile, cloudStatus, setCloud, listAll, syncNow, takeSynced, setKnown, setBackgroundSync, libraryMoved, takeMoved, pickLibraryFolder, libraryFolder, revealLibrary, diskFile, ocrPage, pickNative } from './native.js';
 import { NativeTexts } from './texts.js';
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
@@ -4151,7 +4151,13 @@ async function syncFolder() {
   if (!isNative) return;
   if (syncing) { syncAgain = true; return syncing; } // once more when this one's done (so nothing asked for is missed)
   syncing = (async () => {
-    const [all, paths] = await Promise.all([listAll(), store.paths()]);
+    // the library is moving between iCloud and this device: nothing is looked at until it's all across
+    if (cloudSwitching) return;
+    // documents renamed in the move (another of the same name was already there) keep their place and text
+    const moved = await takeMoved().catch(() => ({}));
+    if (Object.keys(moved).length) for (const [id, p] of await store.paths()) if (moved[p]) { await store.setPath(id, moved[p]); setDiskPath(id, moved[p]); }
+    const [all, paths] = await Promise.all([listAll().catch((e) => (/switching/.test(e?.message || e) ? null : Promise.reject(e))), store.paths()]);
+    if (!all) return;
     const files = all.files || [];
     const byPath = new Map([...paths].map(([id, p]) => [p, id]));
     const onDisk = new Map(files.map((f) => [f.path, f]));
@@ -4323,6 +4329,7 @@ function openFromSystem(r) {
 const STATE = '.findly/library.json';
 const ME = (() => { try { let id = localStorage.getItem('instant-search:device'); if (!id) { id = uid(); localStorage.setItem('instant-search:device', id); } return id; } catch { return 'device'; } })();
 let cloudOn = false, bgSync = true, stateT = 0, applying = false;
+let cloudSwitching = null; // 'on' / 'off' while the library moves into or out of iCloud
 // Each document's text, as read on whichever device added it, shared next to the documents in iCloud: another
 // device brings the document in straight from it (no reading 27,000 pages again, no waiting for the download).
 const SIDE_DIR = '.findly/index/';
@@ -4425,39 +4432,55 @@ async function syncCloud() {
   await applyState();
   indexSpotlight();
 }
-// iCloud on: the library simply is iCloud Drive › Findly, the folder all your Apple devices share (nothing is moved
-// or copied; documents this device already has keep their text and just point at the iCloud copy). Off: it's
-// On My iPhone › Findly again. The switch flips at once; the documents come in behind it, with progress at the top
-// of the library.
+// iCloud on: the library is iCloud Drive › Findly, the folder all your Apple devices share. Turning it on moves the
+// documents on this device into it; turning it off copies everything in it onto this device (On My iPhone › Findly),
+// downloading what isn't here yet, while your other devices keep theirs. The app does the moving (ISCloudSync) and
+// the switch takes effect once everything is across, so nothing drops out of the library on the way. Documents keep
+// their text throughout (nothing is read again). Tapping it again mid-way turns back.
+const switchLine = (on, done = 0, total = 0, waiting = 0) =>
+  on
+    ? `Moving your library into iCloud${total ? ` · ${done} of ${total}` : '…'}`
+    : waiting
+      ? `Downloading ${plural(waiting, 'document')} from iCloud to keep on this device${total ? ` · ${done} of ${total} here` : ''}`
+      : `Copying your library onto this device${total ? ` · ${done} of ${total}` : '…'}`;
 let cloudBusy = false;
 async function toggleCloud() {
   if (cloudBusy) return;
-  const st = await cloudStatus();
-  if (!st.available) { toast('iCloud Drive isn’t available. Sign in to iCloud and turn on iCloud Drive in Settings, then try again.', { ms: 7000 }); return; }
-  const on = !st.on;
-  try {
-    await setCloud(on);
-  } catch (e) {
-    toast(`Couldn’t change iCloud sync: ${e?.message || e}`, { ms: 7000 });
-    return;
-  }
-  cloudOn = on;
-  try { localStorage.removeItem('instant-search:stateAt'); } catch {} // take the folder's own organisation
-  toast(on ? 'iCloud sync is on: your library is iCloud Drive › Findly' : 'iCloud sync is off: your library is On My iPhone › Findly');
   cloudBusy = true;
-  setTimeout(async () => {
-    try {
-      libStatus.show(on ? 'Opening your iCloud library…' : 'Opening the library on this device…', null);
-      await syncFolder();
-      if (/^Opening/.test($('#libStatus .ls-text')?.textContent || '')) libStatus.done(on ? 'Your iCloud library is open' : 'Your library is open');
-      if (on) {
-        await applyState({ force: true });
-        await writeState();
-        shareAllText();
-      }
-      indexSpotlight();
-    } finally { cloudBusy = false; }
-  }, 0);
+  try {
+    const st = await cloudStatus();
+    if (!st.available) { toast('iCloud Drive isn’t available. Sign in to iCloud and turn on iCloud Drive in Settings, then try again.', { ms: 7000 }); return; }
+    const on = st.switching ? st.switching !== 'on' : !st.on;
+    let r;
+    try { r = await setCloud(on); } catch (e) { toast(`Couldn’t change iCloud sync: ${e?.message || e}`, { ms: 7000 }); return; }
+    if (r?.switching) {
+      cloudSwitching = r.switching;
+      libStatus.show(switchLine(on), null);
+      toast(on ? 'Moving your library into iCloud Drive › Findly. Keep using Findly meanwhile.' : 'Copying your library onto this device. Your other devices keep theirs in iCloud.', { ms: 5000 });
+    }
+  } finally { cloudBusy = false; }
+}
+function onCloudSwitch(e) {
+  if (!e) return;
+  cloudSwitching = e.on ? 'on' : 'off';
+  libStatus.show(switchLine(!!e.on, e.done, e.total, e.waiting), e.total ? e.done / e.total : null);
+}
+async function onCloudSwitched(e) {
+  cloudSwitching = null;
+  libraryMoved();
+  const st = await cloudStatus().catch(() => ({ on: !!e?.on }));
+  cloudOn = !!st.on;
+  try { localStorage.removeItem('instant-search:stateAt'); } catch {} // take the folder's own organisation
+  if (e?.error) libStatus.done(`Couldn’t switch iCloud sync: ${e.error}`);
+  else if (cloudOn) libStatus.done(e?.failed ? `Your library is in iCloud · ${plural(e.failed, 'document')} couldn’t move and stayed on this device` : 'Your library is in iCloud Drive › Findly');
+  else libStatus.done(e?.failed ? `Your library is on this device · ${plural(e.failed, 'document')} couldn’t be copied` : 'Your library is on this device (On My iPhone › Findly)');
+  await syncFolder();
+  if (cloudOn) {
+    await applyState({ force: true });
+    await writeState();
+    shareAllText();
+  }
+  indexSpotlight();
 }
 
 // Windows: the library is a folder you choose; documents are read straight from it
@@ -4492,7 +4515,16 @@ function nativeSetup() {
   if (platform === 'windows') document.documentElement.classList.add('desktop-app');
   if (platform === 'windows') addEventListener('focus', () => applyState()); // changes from your other devices
   // (with iCloud on, documents whose text isn't shared yet get it shared, quietly, once things have settled)
-  cloudStatus().then((st) => { cloudOn = !!st.on; bgSync = st.background !== false; return syncCloud(); }).then(() => { if (cloudOn) setTimeout(shareAllText, 8000); }).catch(() => {});
+  // (listening before asking, so a move that finishes in between isn't missed)
+  Files.addListener('cloudSwitch', onCloudSwitch);
+  Files.addListener('cloudSwitched', onCloudSwitched);
+  cloudStatus().then((st) => {
+    cloudOn = !!st.on;
+    bgSync = st.background !== false;
+    cloudSwitching = st.switching || null;
+    if (cloudSwitching) libStatus.show(switchLine(cloudSwitching === 'on'), null);
+    return syncCloud();
+  }).then(() => { if (cloudOn) setTimeout(shareAllText, 8000); }).catch(() => {});
   Files.addListener('changed', () => syncCloud());
   Files.addListener('incoming', () => syncFolder().then(indexSpotlight));
   Files.addListener('imported', onImported);
@@ -5844,8 +5876,8 @@ function openSettings() {
           `<div class="set-row static set-every"${prefs.autoCheck ? '' : ' hidden'}><span class="set-ic"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg></span><span class="set-t"><b>How often</b></span><span class="stepper set-step"><button type="button" data-s="cn-" aria-label="Less often">${I.minus}</button><output>${checkEvery().n}</output><button type="button" data-s="cn+" aria-label="More">${I.plus}</button></span><span class="seg small set-seg set-units">${['day', 'week', 'month'].map((u) => `<button type="button" data-s="cu-${u}" aria-pressed="${checkEvery().unit === u}">${u[0].toUpperCase() + u.slice(1)}${checkEvery().n === 1 ? '' : 's'}</button>`).join('')}</span></div>`,
         ])}
         ${group('Sync & backup', [
-          platform === 'ios' && row('cloud', cloud, 'iCloud sync', cloudOn ? 'On · your Apple devices share one library' : 'Keep iPhone, iPad and Mac in step', sw(cloudOn)),
-          platform === 'ios' && cloudOn && row('bgsync', refresh, 'Sync in the background', bgSync ? 'New documents from your other devices come in while Findly is closed' : 'Off · new documents come in while Findly is open', sw(bgSync)),
+          platform === 'ios' && row('cloud', cloud, 'iCloud sync', cloudSwitching ? (cloudSwitching === 'on' ? 'Turning on · moving your library into iCloud' : 'Turning off · copying your library onto this device') : cloudOn ? 'On · your Apple devices share one library' : 'Off · your library is on this device only', sw(cloudSwitching ? cloudSwitching === 'on' : cloudOn)),
+          platform === 'ios' && (cloudSwitching ? cloudSwitching === 'on' : cloudOn) && row('bgsync', refresh, 'Sync in the background', bgSync ? 'New documents from your other devices come in while Findly is closed' : 'Off · new documents come in while Findly is open', sw(bgSync)),
           platform === 'windows' && row('folder', I.folder, 'Library folder', cloudOn ? 'In iCloud Drive · syncing' : 'Choose where your documents live'),
           platform === 'windows' && row('reveal', I.out, 'Show library folder', 'Open it in File Explorer'),
           row('send', I.out, 'Send to another device', 'Straight across Wi-Fi, no file'),
@@ -5967,7 +5999,7 @@ function backupMenu(anchor) {
   openMenu(anchor, [
     { header: 'Backup' },
     ...(platform === 'windows' ? [{ label: 'Library folder…', sub: cloudOn ? 'In iCloud Drive: syncing with your Apple devices' : 'Choose a folder (pick iCloud Drive › Findly to sync with your Apple devices)', icon: I.folder, run: changeLibraryFolder }, { label: 'Show library folder', sub: 'Open it in File Explorer', icon: I.out, run: () => revealLibrary() }, { sep: true }] : []),
-    ...(platform === 'ios' ? [{ label: 'iCloud sync', sub: cloudOn ? 'On: your Apple devices share one library (iCloud Drive › Findly)' : 'Keep the same library on your iPhone, iPad and Mac', icon: I.save, checked: cloudOn, run: toggleCloud }, { sep: true }] : []),
+    ...(platform === 'ios' ? [{ label: 'iCloud sync', sub: cloudOn ? 'On: your Apple devices share one library (iCloud Drive › Findly)' : 'Keep the same library on your iPhone, iPad and Mac', icon: I.save, checked: cloudSwitching ? cloudSwitching === 'on' : cloudOn, run: toggleCloud }, { sep: true }] : []),
     { label: 'Send to another device', sub: 'Straight across Wi-Fi, no file: scan the code on the other device', icon: I.out, run: () => sendTo() },
     { label: 'Receive from another device', sub: 'Shows a code to scan; adds what’s new, no duplicates', icon: I.upload, run: () => receiveFrom({ reload: (mode) => (mode === 'replace' ? location.reload() : refreshLibrary()) }) },
     { sep: true },

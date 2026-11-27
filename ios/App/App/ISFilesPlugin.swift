@@ -30,6 +30,7 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "syncNow", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "takeSynced", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setKnown", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "takeMoved", returnType: CAPPluginReturnPromise),
     ]
 
     private let queue = DispatchQueue(label: "instantsearch.files", qos: .utility)
@@ -52,9 +53,12 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         // the page hears about changes from iCloud and how far taking documents in has got
         sync.onChange = { [weak self] in self?.notifyListeners("changed", data: [:]) }
         sync.onProgress = { [weak self] d in self?.notifyListeners("synced", data: d) }
-        // find the iCloud container (this can take a moment, so not on the main thread)
+        sync.onSwitch = { [weak self] ev, d in self?.notifyListeners(ev, data: d) }
+        // find the iCloud container (this can take a moment, so not on the main thread); iCloud is on by default
         queue.async {
             self.sync.findContainer()
+            self.sync.applyDefault()
+            self.sync.resumeSwitch()
             DispatchQueue.main.async { if self.cloudOn { self.sync.watch() } } // (the page starts the first sync)
         }
         NotificationCenter.default.addObserver(self, selector: #selector(opened(_:)), name: .capacitorOpenURL, object: nil)
@@ -141,6 +145,11 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
             if UserDefaults.standard.bool(forKey: ISCloudSync.cloudKey) && self.sync.docsURL == nil {
                 throw NSError(domain: "ISFiles", code: 3, userInfo: [NSLocalizedDescriptionKey: "iCloud Drive isn't available right now"])
             }
+            // the library is moving between iCloud and this device: files are on their way from one to the other,
+            // so neither folder is the whole library yet (the page waits for "cloudSwitched")
+            if self.sync.switching != nil {
+                throw NSError(domain: "ISFiles", code: 4, userInfo: [NSLocalizedDescriptionKey: "switching"])
+            }
             // iCloud: everything in iCloud Drive › Findly, whether it's on this device yet or not. Nothing is
             // downloaded from here (ISCloudSync asks for what's needed, once)
             if self.cloudOn {
@@ -202,21 +211,27 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func cloud(_ call: CAPPluginCall) {
         DispatchQueue.global(qos: .userInitiated).async {
             self.sync.findContainer()
-            call.resolve(["available": self.sync.docsURL != nil, "on": self.cloudOn, "background": self.sync.backgroundOn])
+            self.sync.applyDefault()
+            var r: [String: Any] = ["available": self.sync.docsURL != nil, "on": self.cloudOn, "background": self.sync.backgroundOn]
+            if let s = self.sync.switching { r["switching"] = s }
+            call.resolve(r)
         }
     }
 
-    /// Turns iCloud sync on or off. Nothing is moved or copied: on, the library simply is the iCloud Drive › Findly
-    /// folder (shared by all your Apple devices); off, it's On My iPhone › Findly again.
+    /// Turns iCloud sync on or off. The library is moved to match first (see ISCloudSync.startSwitch): on, this
+    /// device's documents move into iCloud Drive › Findly; off, everything in it is copied onto this device. The
+    /// switch flips when that's done ("cloudSwitch" progress, then "cloudSwitched").
     @objc func setCloud(_ call: CAPPluginCall) {
         let on = call.getBool("on") ?? false
         if on && sync.docsURL == nil { return call.reject("iCloud Drive isn't available. Sign in to iCloud and turn on iCloud Drive in Settings.") }
-        UserDefaults.standard.set(on, forKey: ISCloudSync.cloudKey)
-        DispatchQueue.main.async {
-            if on { self.sync.watch() } else { self.sync.unwatch() } // (the page starts the sync once it's ready)
-            self.sync.schedule()
-        }
-        call.resolve(["on": on])
+        if sync.switching == nil && cloudOn == on { return call.resolve(["on": on]) }
+        sync.startSwitch(on: on)
+        call.resolve(["on": cloudOn, "switching": on ? "on" : "off"])
+    }
+
+    /// Documents renamed by a switch (another document of the same name was already there): { moved: { old: new } }
+    @objc func takeMoved(_ call: CAPPluginCall) {
+        call.resolve(["moved": sync.takeMoved()])
     }
 
     /// "Sync in the background": iOS wakes Findly now and then to take in what your other devices added.
