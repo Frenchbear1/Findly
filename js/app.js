@@ -4081,6 +4081,24 @@ async function syncFolder() {
     const onDisk = new Map(files.map((f) => [f.path, f]));
     const waiting = new Set(all.waiting || []); // still coming down from iCloud: not deleted
     if (all.pending) setTimeout(() => syncFolder(), 4000); // check again once they've arrived
+    // a document this device already has that's now somewhere else in the folder (or the library switched between
+    // this device and iCloud): it points at the file there and keeps its text (nothing is read again)
+    const claimed = new Set(paths.values());
+    const free = [...files.map((f) => ({ path: f.path, size: f.size })), ...[...waiting].map((p) => ({ path: p }))].filter((f) => !claimed.has(f.path));
+    for (const [id, path] of paths) {
+      if (onDisk.has(path) || waiting.has(path)) continue;
+      const doc = docById(id);
+      if (!doc || doc.status) continue;
+      const name = path.split('/').pop();
+      const i = free.findIndex((f) => f.path.split('/').pop() === name && (!f.size || !doc.size || f.size === doc.size));
+      if (i < 0) continue;
+      const to = free.splice(i, 1)[0].path;
+      paths.set(id, to);
+      byPath.delete(path);
+      byPath.set(to, id);
+      setDiskPath(id, to);
+      await store.setPath?.(id, to);
+    }
     // gone from the folder: gone from the library
     for (const [id, path] of paths) {
       if (onDisk.has(path) || waiting.has(path)) continue;
@@ -4309,42 +4327,39 @@ async function syncCloud() {
   await applyState();
   indexSpotlight();
 }
+// iCloud on: the library simply is iCloud Drive › Findly, the folder all your Apple devices share (nothing is moved
+// or copied; documents this device already has keep their text and just point at the iCloud copy). Off: it's
+// On My iPhone › Findly again. The switch flips at once; the documents come in behind it, with progress at the top
+// of the library.
+let cloudBusy = false;
 async function toggleCloud() {
+  if (cloudBusy) return;
   const st = await cloudStatus();
   if (!st.available) { toast('iCloud Drive isn’t available. Sign in to iCloud and turn on iCloud Drive in Settings, then try again.', { ms: 7000 }); return; }
   const on = !st.on;
-  const sure = await review({
-    title: on ? 'Turn on iCloud sync?' : 'Turn off iCloud sync?',
-    intro: on
-      ? 'Your documents move into <b>iCloud Drive › Findly</b>, so Findly on your other Apple devices has the same library: documents, folders and how they’re organised. Documents already there from your other devices are added here too, with no duplicates.'
-      : 'Your documents are copied back onto this device. iCloud keeps its copy for your other devices; changes here won’t reach them any more.',
-    rows: [],
-    apply: on ? 'Turn on' : 'Turn off',
-    alwaysApply: true,
-  });
-  if (!sure) return;
-  const busy = toast(on ? 'Moving your library into iCloud…' : 'Copying your library onto this device…', { ms: Infinity });
   try {
-    // what each document is called on disk now, so they keep their place after the move
-    const before = await store.paths();
     await setCloud(on);
-    cloudOn = on;
-    const after = new Set((await listFiles()).map((f) => f.path));
-    for (const [id, p] of before) if (after.has(p)) setDiskPath(id, p);
-    busy._hide();
-    toast(on ? 'iCloud sync is on' : 'iCloud sync is off');
-    if (on) {
-      // your other devices' library first (its order and folders), then this one's joins it
-      await syncFolder();
-      await applyState({ force: true });
-      await writeState();
-      shareAllText();
-    }
-    syncCloud();
   } catch (e) {
-    busy._hide();
     toast(`Couldn’t change iCloud sync: ${e?.message || e}`, { ms: 7000 });
+    return;
   }
+  cloudOn = on;
+  try { localStorage.removeItem('instant-search:stateAt'); } catch {} // take the folder's own organisation
+  toast(on ? 'iCloud sync is on: your library is iCloud Drive › Findly' : 'iCloud sync is off: your library is On My iPhone › Findly');
+  cloudBusy = true;
+  setTimeout(async () => {
+    try {
+      libStatus.show(on ? 'Opening your iCloud library…' : 'Opening the library on this device…', null);
+      await syncFolder();
+      if (/^Opening/.test($('#libStatus .ls-text')?.textContent || '')) libStatus.done(on ? 'Your iCloud library is open' : 'Your library is open');
+      if (on) {
+        await applyState({ force: true });
+        await writeState();
+        shareAllText();
+      }
+      indexSpotlight();
+    } finally { cloudBusy = false; }
+  }, 0);
 }
 
 // Windows: the library is a folder you choose; documents are read straight from it
