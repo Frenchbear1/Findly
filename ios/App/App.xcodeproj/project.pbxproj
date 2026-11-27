@@ -21,6 +21,7 @@
 		1A5F11000000000000000002 /* ISTextPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A5F10000000000000000002 /* ISTextPlugin.swift */; };
 		1A5F11000000000000000009 /* ISPdfPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A5F10000000000000000009 /* ISPdfPlugin.swift */; };
 		1A5F1100000000000000000A /* ISIndexPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A5F1000000000000000000A /* ISIndexPlugin.swift */; };
+		1A5F1100000000000000000B /* ISCloudSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A5F1000000000000000000B /* ISCloudSync.swift */; };
 		1A5F11000000000000000003 /* ISLinkPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A5F10000000000000000003 /* ISLinkPlugin.swift */; };
 /* End PBXBuildFile section */
 
@@ -41,6 +42,7 @@
 		1A5F10000000000000000002 /* ISTextPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISTextPlugin.swift; sourceTree = "<group>"; };
 		1A5F10000000000000000009 /* ISPdfPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISPdfPlugin.swift; sourceTree = "<group>"; };
 		1A5F1000000000000000000A /* ISIndexPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISIndexPlugin.swift; sourceTree = "<group>"; };
+		1A5F1000000000000000000B /* ISCloudSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISCloudSync.swift; sourceTree = "<group>"; };
 		1A5F10000000000000000003 /* ISLinkPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISLinkPlugin.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -82,6 +84,7 @@
 				1A5F10000000000000000002 /* ISTextPlugin.swift */,
 				1A5F10000000000000000009 /* ISPdfPlugin.swift */,
 				1A5F1000000000000000000A /* ISIndexPlugin.swift */,
+				1A5F1000000000000000000B /* ISCloudSync.swift */,
 				1A5F10000000000000000003 /* ISLinkPlugin.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
@@ -183,6 +186,7 @@
 				1A5F11000000000000000002 /* ISTextPlugin.swift in Sources */,
 				1A5F11000000000000000009 /* ISPdfPlugin.swift in Sources */,
 				1A5F1100000000000000000A /* ISIndexPlugin.swift in Sources */,
+				1A5F1100000000000000000B /* ISCloudSync.swift in Sources */,
 				1A5F11000000000000000003 /* ISLinkPlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

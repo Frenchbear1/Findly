@@ -1,6 +1,6 @@
 import { compile, MODES, inWhere, WHERE } from './search.js';
 import { store, stuckStorage, setDiskPath, getDiskPath, pendingDiskPaths } from './store.js';
-import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, nativePdf, drawPage, forgetPages, pdfRange, nativeIndex, Index, readResultFile, cloudStatus, setCloud, listAll, pickLibraryFolder, libraryFolder, revealLibrary, diskFile, ocrPage, pickNative } from './native.js';
+import { isNative, platform, hasLiveText, Files, Link, listFiles, readFileObj, recognize, writeBytes, readBytes, nativePdf, drawPage, forgetPages, pdfRange, nativeIndex, Index, readResultFile, cloudStatus, setCloud, listAll, syncNow, takeSynced, setKnown, setBackgroundSync, pickLibraryFolder, libraryFolder, revealLibrary, diskFile, ocrPage, pickNative } from './native.js';
 import { NativeTexts } from './texts.js';
 const b64 = (u8) => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
 import { readFile, kindOf, ACCEPT, paginate } from './ingest.js';
@@ -4146,20 +4146,21 @@ async function organiseDisk() {
   })().finally(() => { syncing = null; });
   return syncing;
 }
+let syncAgain = false;
 async function syncFolder() {
   if (!isNative) return;
-  if (syncing) return syncing;
+  if (syncing) { syncAgain = true; return syncing; } // once more when this one's done (so nothing asked for is missed)
   syncing = (async () => {
     const [all, paths] = await Promise.all([listAll(), store.paths()]);
     const files = all.files || [];
     const byPath = new Map([...paths].map(([id, p]) => [p, id]));
     const onDisk = new Map(files.map((f) => [f.path, f]));
     const waiting = new Set(all.waiting || []); // still coming down from iCloud: not deleted
-    if (all.pending) setTimeout(() => syncFolder(), 4000); // check again once they've arrived
+    // (no checking again on a timer: the app says when iCloud has brought something new)
     // a document this device already has that's now somewhere else in the folder (or the library switched between
     // this device and iCloud): it points at the file there and keeps its text (nothing is read again)
     const claimed = new Set(paths.values());
-    const free = [...files.map((f) => ({ path: f.path, size: f.size })), ...[...waiting].map((p) => ({ path: p }))].filter((f) => !claimed.has(f.path));
+    const free = [...files.map((f) => ({ path: f.path, size: f.size })), ...[...waiting].map((p) => ({ path: p, size: all.waitingSizes?.[p] }))].filter((f) => !claimed.has(f.path));
     for (const [id, path] of paths) {
       if (onDisk.has(path) || waiting.has(path)) continue;
       const doc = docById(id);
@@ -4184,6 +4185,8 @@ async function syncFolder() {
       closePdf(id);
       store.deleteDoc(id, { keepFile: true }).catch(() => {});
     }
+    // what this device already has: the app takes in from iCloud only what isn't here (and starts on that now)
+    if (cloudOn) { setKnown([...byPath.keys(), ...pendingDiskPaths()]); syncNow(); }
     const fresh = [];
     // a backup opened in Findly (or dropped in its folder): offer to bring it in, read from disk a piece at a time
     for (const f of files) {
@@ -4198,23 +4201,22 @@ async function syncFolder() {
     // document (so it comes in at once, without reading every page again or waiting for the file to download)
     // (the library's organisation still on its way from iCloud: wait for it, so documents come in in the right
     // order and folders from the start; the check runs again in a few seconds)
-    const toGo = [...waiting].filter((p) => kindOf(p) && !p.startsWith('.findly/')).length;
-    const fetching = () => { if (cloudOn && (toGo || all.pending)) libStatus.show(toGo ? `Getting your library from iCloud · ${plural(toGo, 'document')} to go` : 'Looking in iCloud…', null); };
-    if (cloudOn && waiting.has(STATE)) { fetching(); if (!all.pending) setTimeout(() => syncFolder(), 3000); return; }
+    // documents another device has already read: the app takes them in itself (their text, not the PDF)
+    const handled = new Set(cloudOn ? all.handled || [] : []);
+    // (documents not in the library yet and still downloading; ones already listed fetch their PDF in the background)
+    const toGo = [...waiting].filter((p) => kindOf(p) && !p.startsWith('.findly/') && !byPath.has(p) && !handled.has(p)).length;
+    const fetching = () => { if (cloudOn && (toGo || all.gathering)) libStatus.show(toGo ? `Getting your library from iCloud · ${plural(toGo, 'document')} to go` : 'Looking in iCloud…', null); };
+    if (cloudOn && waiting.has(STATE)) { fetching(); return; } // (the app fetches it and says when it's here)
     const st = cloudOn ? await readState(onDisk) : null;
-    const sidesComing = new Set([...waiting].filter((p) => p.startsWith(SIDE_DIR)));
-    const sides = new Set(files.filter((f) => f.path.startsWith(SIDE_DIR)).map((f) => f.path));
     const known = (p) => st?.docs?.[p];
     const newcomers = [];
     const pending = pendingDiskPaths(); // already on their way in (still being read)
     for (const p of [...files.map((f) => f.path), ...waiting]) {
       const name = p.split('/').pop();
       if (!kindOf(name) || name === 'Put documents here.txt' || /^(Backups|\.findly)\//.test(p)) continue;
-      if (byPath.has(p) || pending.has(p) || newcomers.some((n) => n.path === p)) continue;
-      const side = sides.has(sideKey(name)) ? sideKey(name) : null;
-      if (!onDisk.has(p) && !side) continue; // still coming down from iCloud: it's read once it's here
-      if (!side && sidesComing.has(sideKey(name))) continue; // its text is on the way: quicker than reading it
-      newcomers.push({ path: p, name, size: onDisk.get(p)?.size, side });
+      if (byPath.has(p) || pending.has(p) || handled.has(p) || newcomers.some((n) => n.path === p)) continue;
+      if (!onDisk.has(p)) continue; // still coming down from iCloud: it's read once it's here
+      newcomers.push({ path: p, name, size: onDisk.get(p)?.size });
     }
     for (const f of files) {
       const id = byPath.get(f.path);
@@ -4239,38 +4241,52 @@ async function syncFolder() {
       return dir ? folderNamed(dir).id : null;
     };
     if (st?.folders?.length) mergeFolders(st.folders);
-    const quick = newcomers.filter((n) => n.side);
+    // what the app has taken in from iCloud: its text is already in the search database, so each one is just
+    // listed (nothing is read, nothing big passes through here)
     let came = 0;
-    for (const n of quick) {
-      libStatus.show(`Bringing in documents from iCloud · ${came + 1} of ${quick.length}`, came / quick.length);
-      try {
-        const sc = JSON.parse(new TextDecoder().decode(await readBytes(n.side)));
-        if (!sc?.pages?.length || (n.size && sc.size && sc.size !== n.size)) { if (onDisk.has(n.path)) fresh.push(n); continue; }
-        const k = known(n.path) || {};
-        const meta = { ...sc.meta, id: uid(), name: n.name, kind: kindOf(n.name), size: sc.size || n.size || 0, addedAt: Date.now(), order: k.order ?? ++order, enabled: k.enabled !== false, folderId: folderFor(n) };
-        setDiskPath(meta.id, n.path);
-        S.docs.push(meta);
-        S.texts.set(meta.id, sc.pages);
-        await store.addDoc(stripMeta(meta), sc.pages, null).catch(() => {});
-        await S.texts.flushed?.(); // its text is in the database before the next one is read (memory stays flat)
-        came++;
-        await new Promise((r) => setTimeout(r, 0)); // room for your taps between documents
-        if (came % 10 === 0) renderLibrary();
-      } catch { if (onDisk.has(n.path)) fresh.push(n); }
+    const synced = cloudOn && nativeIndex ? await takeSynced().catch(() => []) : [];
+    for (const e of synced) {
+      if (!e?.id || byPath.has(e.path) || pending.has(e.path) || !kindOf(e.name || '')) { S.texts.forget?.(e?.id); continue; } // already here
+      const k = known(e.path) || {};
+      const meta = { ...(e.meta || {}), id: e.id, name: e.name, kind: kindOf(e.name), size: e.size || 0, addedAt: Date.now(), order: e.order ?? k.order ?? ++order, enabled: (e.enabled ?? k.enabled) !== false, folderId: folderFor({ path: e.path }) };
+      setDiskPath(meta.id, e.path);
+      byPath.set(e.path, meta.id);
+      S.docs.push(meta);
+      S.texts.attach(meta.id, e.lens || []);
+      if (e.opening) S.texts.openings?.set(meta.id, e.opening);
+      await store.addDoc(stripMeta(meta), null, null).catch(() => {});
+      came++;
+      if (came % 25 === 0) { renderLibrary(); await new Promise((r) => setTimeout(r, 0)); } // room for your taps
     }
-    for (const n of newcomers) if (!n.side && onDisk.has(n.path)) fresh.push(n);
+    for (const n of newcomers) fresh.push(n);
     // the rest are read here (one at a time, as each one's turn comes: never all in memory at once)
     const lazy = fresh.map((n) => Object.assign(lazyFile(n.path, n.size), { _diskPath: n.path, _folder: folderFor(n), _order: known(n.path)?.order }));
     const byFolder = new Map();
     for (const file of lazy) { if (!byFolder.has(file._folder)) byFolder.set(file._folder, []); byFolder.get(file._folder).push(file); }
     for (const [fid, list] of byFolder) addFiles(list, fid, { quietSkip: true });
+    if (cloudOn && (came || lazy.length)) setKnown([...byPath.keys(), ...pendingDiskPaths(), ...lazy.map((f) => f._diskPath)]);
     if (st) S.docs.sort((a, b) => (a.order || 0) - (b.order || 0));
-    if (came) { libStatus.done(`Brought in ${plural(came, 'document')} from iCloud`); renderLibrary(); runSearch({ keepScroll: true }); }
+    if (came) { cloudCame += came; renderLibrary(); runSearch({ keepScroll: true }); indexSpotlight(); }
+    if (cloudCame && !cloudBringing) { libStatus.done(`Brought in ${plural(cloudCame, 'document')} from iCloud`); cloudCame = 0; }
     if (lazy.length) { readingLib = true; libStatus.show(`Reading ${plural(lazy.length, 'new document')}…`, null); }
     if (!came && !lazy.length) { fetching(); renderLibrary(); runSearch({ keepScroll: true }); }
-    if (!toGo && !all.pending && /^(Getting|Looking)/.test($('#libStatus .ls-text')?.textContent || '')) libStatus.done('Your iCloud library is up to date');
-  })().finally(() => { syncing = null; });
+    if (!toGo && !all.gathering && !cloudBringing && /^(Getting|Looking)/.test($('#libStatus .ls-text')?.textContent || '')) libStatus.done('Your iCloud library is up to date');
+  })().finally(() => {
+    syncing = null;
+    if (syncAgain) { syncAgain = false; setTimeout(() => syncFolder(), 0); }
+  });
   return syncing;
+}
+// How far the app has got taking in documents from iCloud: one line at the top of the library, and what's ready is
+// listed every second or so while it works (so documents arrive steadily, not all at the end)
+let cloudBringing = false, cloudCame = 0, syncedT = 0;
+function onSynced(e) {
+  const { done = 0, total = 0, finished } = e || {};
+  if (!total) return;
+  cloudBringing = finished === undefined;
+  if (cloudBringing) libStatus.show(`Bringing in documents from iCloud · ${done} of ${total}`, done / total);
+  clearTimeout(syncedT);
+  syncedT = setTimeout(() => syncFolder(), cloudBringing ? 1200 : 50);
 }
 // A document in the Findly folder, read only when its turn comes (a whole iCloud library read up front used to
 // run the app out of memory)
@@ -4306,7 +4322,7 @@ function openFromSystem(r) {
 // document's folder, order and on/off state go in a small library file next to them; the newest one wins.
 const STATE = '.findly/library.json';
 const ME = (() => { try { let id = localStorage.getItem('instant-search:device'); if (!id) { id = uid(); localStorage.setItem('instant-search:device', id); } return id; } catch { return 'device'; } })();
-let cloudOn = false, stateT = 0, applying = false;
+let cloudOn = false, bgSync = true, stateT = 0, applying = false;
 // Each document's text, as read on whichever device added it, shared next to the documents in iCloud: another
 // device brings the document in straight from it (no reading 27,000 pages again, no waiting for the download).
 const SIDE_DIR = '.findly/index/';
@@ -4323,7 +4339,8 @@ async function writeSidecar(doc, pages) {
 }
 // on turning iCloud on: every document already here gets its text shared, a few at a time in the background
 async function shareAllText() {
-  const have = new Set((await listAll().catch(() => ({ files: [] }))).files?.map((f) => f.path) || []);
+  const listing = await listAll().catch(() => ({ files: [] }));
+  const have = new Set([...(listing.files || []).map((f) => f.path), ...(listing.waiting || [])]); // (in iCloud, here or not)
   const todo = S.docs.filter((d) => !d.status && !have.has(sideKey(d.name)));
   for (let i = 0; i < todo.length; i++) {
     if (!cloudOn) return;
@@ -4475,10 +4492,11 @@ function nativeSetup() {
   if (platform === 'windows') document.documentElement.classList.add('desktop-app');
   if (platform === 'windows') addEventListener('focus', () => applyState()); // changes from your other devices
   // (with iCloud on, documents whose text isn't shared yet get it shared, quietly, once things have settled)
-  cloudStatus().then((st) => { cloudOn = !!st.on; return syncCloud(); }).then(() => { if (cloudOn) setTimeout(shareAllText, 8000); }).catch(() => {});
+  cloudStatus().then((st) => { cloudOn = !!st.on; bgSync = st.background !== false; return syncCloud(); }).then(() => { if (cloudOn) setTimeout(shareAllText, 8000); }).catch(() => {});
   Files.addListener('changed', () => syncCloud());
   Files.addListener('incoming', () => syncFolder().then(indexSpotlight));
   Files.addListener('imported', onImported);
+  Files.addListener('synced', onSynced);
   // documents dropped into the folder in Files while Findly was in the background: pick them up on coming back
   let lastLook = Date.now();
   const lookAgain = () => {
@@ -5827,6 +5845,7 @@ function openSettings() {
         ])}
         ${group('Sync & backup', [
           platform === 'ios' && row('cloud', cloud, 'iCloud sync', cloudOn ? 'On · your Apple devices share one library' : 'Keep iPhone, iPad and Mac in step', sw(cloudOn)),
+          platform === 'ios' && cloudOn && row('bgsync', refresh, 'Sync in the background', bgSync ? 'New documents from your other devices come in while Findly is closed' : 'Off · new documents come in while Findly is open', sw(bgSync)),
           platform === 'windows' && row('folder', I.folder, 'Library folder', cloudOn ? 'In iCloud Drive · syncing' : 'Choose where your documents live'),
           platform === 'windows' && row('reveal', I.out, 'Show library folder', 'Open it in File Explorer'),
           row('send', I.out, 'Send to another device', 'Straight across Wi-Fi, no file'),
@@ -5921,6 +5940,12 @@ function openSettings() {
     if (k === 'cn-' || k === 'cn+') { prefs.checkN = Math.max(1, Math.min(99, checkEvery().n + (k === 'cn+' ? 1 : -1))); savePrefs(); syncEvery(); return; }
     if (k.startsWith('cu-')) { prefs.checkUnit = k.slice(3); savePrefs(); syncEvery(); return; }
     if (k === 'cloud') { await toggleCloud(); render(); return; }
+    if (k === 'bgsync') {
+      bgSync = !bgSync;
+      try { await setBackgroundSync(bgSync); } catch (e) { bgSync = !bgSync; toast(`Couldn’t change background sync: ${e?.message || e}`); }
+      render();
+      return;
+    }
     if (k === 'theme') return then(openThemes);
     if (k === 'helper') return then(openHelper);
     if (k === 'check') return then(() => checkSources());

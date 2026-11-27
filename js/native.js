@@ -131,6 +131,16 @@ export async function diskFile(path) {
 export const cloudStatus = () => (Files.cloud ? Files.cloud().catch(() => ({ available: false, on: false })) : Promise.resolve({ available: false, on: false }));
 export const setCloud = async (on) => { const r = await Files.setCloud({ on }); rootP = null; return r; }; // the library moved: ask where it is now
 export const listAll = async () => Files.list();
+// iCloud sync is done by the app itself (ISCloudSync): it takes in documents your other devices already read, straight
+// into the search database, and hands over a short list of what's ready.
+/** Take in what's new in iCloud now. */
+export const syncNow = () => (Files?.syncNow ? Files.syncNow().catch(() => {}) : Promise.resolve());
+/** Documents the app has taken in from iCloud since last asked: [{ id, path, name, size, meta, lens, opening, order?, folderId?, enabled? }] */
+export const takeSynced = async () => (Files?.takeSynced ? (await Files.takeSynced()).docs || [] : []);
+/** Every document file the library has (or is reading): the app never takes these in a second time. */
+export const setKnown = (paths) => (Files?.setKnown ? Files.setKnown({ paths }).catch(() => {}) : Promise.resolve());
+/** "Sync in the background" (iOS wakes Findly now and then to take in new documents). */
+export const setBackgroundSync = (on) => Files.setBackground({ on });
 
 // ---------- pages drawn by Apple's PDF engine (the iPhone) ----------
 const PdfDraw = plugin('ISPdf');

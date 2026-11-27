@@ -60,11 +60,13 @@ public class ISIndexPlugin: CAPPlugin, CAPBridgedPlugin {
         if opened { return }
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(dbURL.path, &wdb, flags, nil) == SQLITE_OK else { throw err(wdb) }
+        sqlite3_busy_timeout(wdb, 15000) // iCloud sync (ISCloudSync) writes to the same database: take turns
         exec(wdb, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
         exec(wdb, "CREATE TABLE IF NOT EXISTS pages(id INTEGER PRIMARY KEY, doc TEXT NOT NULL, n INTEGER NOT NULL, text TEXT NOT NULL);")
         exec(wdb, "CREATE UNIQUE INDEX IF NOT EXISTS pages_doc ON pages(doc, n);")
         fts = sqlite3_exec(wdb, "CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(text, content='pages', content_rowid='id', tokenize='trigram');", nil, nil, nil) == SQLITE_OK
         guard sqlite3_open_v2(dbURL.path, &rdb, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else { throw err(rdb) }
+        sqlite3_busy_timeout(rdb, 5000)
         exec(rdb, "PRAGMA cache_size=-8000;") // about 8 MB of page cache for searching, not more
         opened = true
     }
@@ -109,7 +111,7 @@ public class ISIndexPlugin: CAPPlugin, CAPBridgedPlugin {
         writeQ.async {
             do { try self.ensureOpen() } catch { return call.reject(error.localizedDescription) }
             let db = self.wdb
-            self.exec(db, "BEGIN")
+            self.exec(db, "BEGIN IMMEDIATE")
             var start = 0
             if append {
                 if let st = self.prepare(db, "SELECT COALESCE(MAX(n) + 1, 0) FROM pages WHERE doc = ?") {
@@ -163,7 +165,7 @@ public class ISIndexPlugin: CAPPlugin, CAPBridgedPlugin {
         let ids = call.getArray("ids", String.self) ?? []
         writeQ.async {
             do { try self.ensureOpen() } catch { return call.reject(error.localizedDescription) }
-            self.exec(self.wdb, "BEGIN")
+            self.exec(self.wdb, "BEGIN IMMEDIATE")
             for id in ids { self.removeRows(id) }
             self.exec(self.wdb, "COMMIT")
             call.resolve()
@@ -173,7 +175,7 @@ public class ISIndexPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func clear(_ call: CAPPluginCall) {
         writeQ.async {
             do { try self.ensureOpen() } catch { return call.reject(error.localizedDescription) }
-            self.exec(self.wdb, "BEGIN")
+            self.exec(self.wdb, "BEGIN IMMEDIATE")
             if self.fts { self.exec(self.wdb, "INSERT INTO fts(fts) VALUES('delete-all')") }
             self.exec(self.wdb, "DELETE FROM pages")
             self.exec(self.wdb, "COMMIT")

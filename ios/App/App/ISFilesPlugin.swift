@@ -26,6 +26,10 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "pick", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "cloud", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setCloud", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setBackground", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "syncNow", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "takeSynced", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setKnown", returnType: CAPPluginReturnPromise),
     ]
 
     private let queue = DispatchQueue(label: "instantsearch.files", qos: .utility)
@@ -35,12 +39,9 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
     /// The library: iCloud Drive › Findly when iCloud sync is on (so every Apple device has the same documents),
     /// otherwise On My iPhone › Findly.
     private var local: URL { fm.urls(for: .documentDirectory, in: .userDomainMask)[0] }
-    private var cloudDocs: URL?
-    private let cloudKey = "instantsearch.icloud"
-    private var cloudOn: Bool { UserDefaults.standard.bool(forKey: cloudKey) && cloudDocs != nil }
-    private var root: URL { cloudOn ? cloudDocs! : local }
-    private var query: NSMetadataQuery?
-    private var changeTimer: Timer?
+    private let sync = ISCloudSync.shared // iCloud: the folder, what's in it, and taking documents in (ISCloudSync)
+    private var cloudOn: Bool { sync.cloudOn }
+    private var root: URL { cloudOn ? (sync.docsURL ?? local) : local }
 
     override public func load() {
         // make the folder show up in Files right away, with a note in it
@@ -48,14 +49,13 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         if !fm.fileExists(atPath: readme.path) {
             try? "Documents in this folder are your Findly library. Add, replace or delete PDFs, Word files, text, Markdown or HTML here and Findly picks up the changes when you open it.\n".write(to: readme, atomically: true, encoding: .utf8)
         }
+        // the page hears about changes from iCloud and how far taking documents in has got
+        sync.onChange = { [weak self] in self?.notifyListeners("changed", data: [:]) }
+        sync.onProgress = { [weak self] d in self?.notifyListeners("synced", data: d) }
         // find the iCloud container (this can take a moment, so not on the main thread)
         queue.async {
-            if let c = self.fm.url(forUbiquityContainerIdentifier: nil) {
-                let docs = c.appendingPathComponent("Documents", isDirectory: true)
-                try? self.fm.createDirectory(at: docs, withIntermediateDirectories: true)
-                self.cloudDocs = docs
-                DispatchQueue.main.async { if self.cloudOn { self.watchCloud() } }
-            }
+            self.sync.findContainer()
+            DispatchQueue.main.async { if self.cloudOn { self.sync.watch() } } // (the page starts the first sync)
         }
         NotificationCenter.default.addObserver(self, selector: #selector(opened(_:)), name: .capacitorOpenURL, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(foreground), name: UIApplication.willEnterForegroundNotification, object: nil)
@@ -104,6 +104,7 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func at(_ path: String) -> URL? {
+        sync.findContainer()
         let url = root.appendingPathComponent(path).standardizedFileURL
         return url.path.hasPrefix(root.standardizedFileURL.path + "/") ? url : nil
     }
@@ -129,15 +130,31 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func info(_ call: CAPPluginCall) {
-        run(call) { ["root": self.root.absoluteString] }
+        run(call) { self.sync.findContainer(); return ["root": self.root.absoluteString] }
     }
 
     @objc func list(_ call: CAPPluginCall) {
         run(call) {
+            self.sync.findContainer()
             // iCloud sync is on but iCloud isn't reachable (signed out, iCloud Drive off): don't report an empty
             // library, or the page would think every document was deleted
-            if UserDefaults.standard.bool(forKey: self.cloudKey) && self.cloudDocs == nil {
+            if UserDefaults.standard.bool(forKey: ISCloudSync.cloudKey) && self.sync.docsURL == nil {
                 throw NSError(domain: "ISFiles", code: 3, userInfo: [NSLocalizedDescriptionKey: "iCloud Drive isn't available right now"])
+            }
+            // iCloud: everything in iCloud Drive › Findly, whether it's on this device yet or not. Nothing is
+            // downloaded from here (ISCloudSync asks for what's needed, once)
+            if self.cloudOn {
+                let (all, gathering) = self.sync.entries()
+                var files: [[String: Any]] = [], waiting: [String] = [], sizes: [String: Int] = [:]
+                for (path, e) in all {
+                    let parts = path.split(separator: "/").map(String.init)
+                    if parts.first == "Inbox" { continue }
+                    if parts.enumerated().contains(where: { $0.element.hasPrefix(".") && !($0.offset == 0 && $0.element == ".findly") }) { continue }
+                    if e.here { files.append(["path": path, "size": e.size, "mtime": e.mtime]) }
+                    else { waiting.append(path); sizes[path] = e.size }
+                }
+                return ["files": files, "pending": waiting.count + (gathering ? 1 : 0), "waiting": waiting, "waitingSizes": sizes,
+                        "handled": self.sync.handled(all), "gathering": gathering, "cloud": true]
             }
             var out: [[String: Any]] = []
             var pending = 0
@@ -174,94 +191,58 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
                     ])
                 }
             }
-            // iCloud: the folder on disk only shows what's already been brought down to this device (a fresh iPad
-            // shows nothing at all), so the full list comes from iCloud itself. Anything not here yet is fetched,
-            // Findly's own small files first (the library's order and each document's text).
-            if self.cloudOn {
-                let snap = self.cloudSnapshot()
-                if snap.gathering { pending += 1 }
-                var seen = Set(out.compactMap { $0["path"] as? String })
-                seen.formUnion(waiting)
-                let top = self.canon(self.root)
-                for item in snap.items.sorted(by: { ($0.url.path.contains("/.findly/") ? 0 : 1) < ($1.url.path.contains("/.findly/") ? 0 : 1) }) {
-                    if item.folder { continue }
-                    guard self.canon(item.url).hasPrefix(top + "/") else { continue }
-                    let path = self.rel(item.url)
-                    if seen.contains(path) { continue }
-                    let parts = path.split(separator: "/").map(String.init)
-                    if parts.first == "Inbox" { continue }
-                    if parts.enumerated().contains(where: { $0.element.hasPrefix(".") && !($0.offset == 0 && $0.element == ".findly") }) { continue }
-                    seen.insert(path)
-                    if item.here {
-                        out.append(["path": path, "size": item.size, "mtime": item.mtime])
-                    } else {
-                        try? self.fm.startDownloadingUbiquitousItem(at: item.url)
-                        pending += 1
-                        waiting.append(path)
-                    }
-                }
-            }
-            return ["files": out, "pending": pending, "waiting": waiting, "cloud": self.cloudOn]
+            return ["files": out, "pending": pending, "waiting": waiting, "cloud": false]
         }
-    }
-
-    /// Everything in iCloud Drive › Findly as iCloud knows it (whether or not it's on this device yet).
-    private func cloudSnapshot() -> (items: [(url: URL, size: Int, here: Bool, folder: Bool, mtime: Double)], gathering: Bool) {
-        var items: [(url: URL, size: Int, here: Bool, folder: Bool, mtime: Double)] = []
-        var gathering = true
-        let work = {
-            guard let q = self.query else { return }
-            q.disableUpdates()
-            defer { q.enableUpdates() }
-            gathering = q.isGathering
-            for i in 0..<q.resultCount {
-                guard let item = q.result(at: i) as? NSMetadataItem, let url = item.value(forAttribute: NSMetadataItemURLKey) as? URL else { continue }
-                let size = (item.value(forAttribute: NSMetadataItemFSSizeKey) as? NSNumber)?.intValue ?? 0
-                let status = item.value(forAttribute: NSMetadataUbiquitousItemDownloadingStatusKey) as? String
-                let type = item.value(forAttribute: NSMetadataItemContentTypeKey) as? String
-                let date = (item.value(forAttribute: NSMetadataItemFSContentChangeDateKey) as? Date) ?? Date()
-                items.append((url: url, size: size, here: status == NSMetadataUbiquitousItemDownloadingStatusCurrent, folder: type == "public.folder", mtime: date.timeIntervalSince1970 * 1000))
-            }
-        }
-        if Thread.isMainThread { work() } else { DispatchQueue.main.sync(execute: work) }
-        return (items, gathering)
     }
 
     // MARK: iCloud
 
-    // (answered straight away, not behind file work on the queue, so the switch in Settings responds at once)
+    // (not behind the queue's file work; the first time it waits for iCloud to be found, or the page would start up
+    // thinking iCloud sync was off)
     @objc func cloud(_ call: CAPPluginCall) {
-        call.resolve(["available": self.cloudDocs != nil, "on": self.cloudOn])
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.sync.findContainer()
+            call.resolve(["available": self.sync.docsURL != nil, "on": self.cloudOn, "background": self.sync.backgroundOn])
+        }
     }
 
     /// Turns iCloud sync on or off. Nothing is moved or copied: on, the library simply is the iCloud Drive › Findly
     /// folder (shared by all your Apple devices); off, it's On My iPhone › Findly again.
     @objc func setCloud(_ call: CAPPluginCall) {
         let on = call.getBool("on") ?? false
-        if on && self.cloudDocs == nil { return call.reject("iCloud Drive isn't available. Sign in to iCloud and turn on iCloud Drive in Settings.") }
-        UserDefaults.standard.set(on, forKey: self.cloudKey)
-        DispatchQueue.main.async { on ? self.watchCloud() : self.stopCloud() }
+        if on && sync.docsURL == nil { return call.reject("iCloud Drive isn't available. Sign in to iCloud and turn on iCloud Drive in Settings.") }
+        UserDefaults.standard.set(on, forKey: ISCloudSync.cloudKey)
+        DispatchQueue.main.async {
+            if on { self.sync.watch() } else { self.sync.unwatch() } // (the page starts the sync once it's ready)
+            self.sync.schedule()
+        }
         call.resolve(["on": on])
     }
 
-    /// Changes made on your other devices arrive through iCloud: tell the page so it picks them up.
-    private func watchCloud() {
-        guard query == nil else { return }
-        let q = NSMetadataQuery()
-        q.searchScopes = [NSMetadataQueryUbiquitousDocumentsScope]
-        q.predicate = NSPredicate(format: "%K LIKE '*'", NSMetadataItemFSNameKey)
-        NotificationCenter.default.addObserver(self, selector: #selector(cloudChanged), name: .NSMetadataQueryDidUpdate, object: q)
-        NotificationCenter.default.addObserver(self, selector: #selector(cloudChanged), name: .NSMetadataQueryDidFinishGathering, object: q)
-        q.start()
-        query = q
+    /// "Sync in the background": iOS wakes Findly now and then to take in what your other devices added.
+    @objc func setBackground(_ call: CAPPluginCall) {
+        let on = call.getBool("on") ?? true
+        UserDefaults.standard.set(on, forKey: ISCloudSync.backgroundKey)
+        DispatchQueue.main.async { self.sync.schedule() }
+        call.resolve(["background": on])
     }
-    private func stopCloud() {
-        query?.stop()
-        query = nil
+
+    /// Takes in what's new in iCloud now (it runs by itself too, whenever iCloud reports a change).
+    @objc func syncNow(_ call: CAPPluginCall) {
+        if cloudOn { sync.kick() }
+        call.resolve()
     }
-    @objc private func cloudChanged() {
-        changeTimer?.invalidate()
-        changeTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in self?.notifyListeners("changed", data: [:]) }
+
+    /// Documents taken in from iCloud (their text is already in the search database) for the page to list:
+    /// → { docs: [{ id, path, name, size, meta, lens, opening, order?, folderId?, enabled? }] }
+    @objc func takeSynced(_ call: CAPPluginCall) {
+        sync.takeInbox { call.resolve(["docs": $0]) }
+    }
+
+    /// { paths } — every document file the page has (or is reading): never taken in a second time.
+    @objc func setKnown(_ call: CAPPluginCall) {
+        sync.setKnown(call.getArray("paths", String.self) ?? [])
+        call.resolve()
     }
 
     /// Writes base64 data to a path in the library, in pieces (append) so big files never cross the bridge at once.
@@ -370,6 +351,7 @@ public class ISFilesPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
     @objc private func toBackground() {
+        sync.schedule() // iOS wakes Findly later to keep the library in step with your other devices
         guard awake, bgTask == .invalid else { return }
         bgTask = UIApplication.shared.beginBackgroundTask(withName: "Transfer") { [weak self] in self?.endBackground() }
     }
@@ -461,6 +443,12 @@ extension ISFilesPlugin: UIDocumentPickerDelegate {
             self.announce(["done": 0, "total": total])
             for (i, job) in jobs.enumerated() {
                 autoreleasepool {
+                    // already in the library folder (picked from iCloud Drive › Findly itself): nothing to copy,
+                    // it's simply read where it is
+                    if self.canon(job.src).hasPrefix(self.canon(self.root) + "/") {
+                        self.announce(["done": i + 1, "total": total, "name": job.src.lastPathComponent, "path": self.rel(job.src)])
+                        return
+                    }
                     let dir = job.dir.isEmpty ? self.root : self.root.appendingPathComponent(job.dir, isDirectory: true)
                     try? self.fm.createDirectory(at: dir, withIntermediateDirectories: true)
                     let name = job.src.lastPathComponent

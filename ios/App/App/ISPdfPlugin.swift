@@ -41,6 +41,12 @@ public class ISPdfPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func document(_ url: URL) -> PDFDocument? {
         let key = url.path
+        // in iCloud and not on this device yet: fetch it now (reading through the coordinator waits for the download)
+        if let v = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
+           v.isUbiquitousItem == true, v.ubiquitousItemDownloadingStatus != .current {
+            var err: NSError?
+            NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: url, options: [], error: &err) { _ in }
+        }
         lock.lock(); defer { lock.unlock() }
         if let d = docs[key] {
             order.removeAll { $0 == key }; order.append(key)
