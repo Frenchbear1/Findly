@@ -1057,13 +1057,23 @@ function panParts(art) {
 function togglePan(art) {
   const { body, content } = panParts(art);
   if (art._pan) {
+    // Done: glide back to the cropped view first, then the page is as it was, scrolled back into view
+    const P = art._pan;
+    if (!P.finished) {
+      if (P.leaving) return;
+      P.leaving = true;
+      art.querySelector('.pan-done')?.remove();
+      panGlide(art, P.R0, () => { P.finished = true; P.R = { ...P.R0 }; togglePan(art); });
+      return;
+    }
     art._pan = null;
     body.classList.remove('panning');
-    body.querySelector(':scope > .pan-done')?.remove();
     panLock(null);
     frameSpan(content, content.dataset.tx ? content.dataset.tx.split(',').map(Number) : null);
     body._pieceSig = null;
     applyCrop(art);
+    const r = art.getBoundingClientRect();
+    if (r.top < topOffset() || r.top > innerHeight * 0.6) scrollBy({ top: r.top - topOffset() - 12, behavior: 'smooth' });
     return;
   }
   if (!content) { toast('This page is still being drawn'); return; }
@@ -1084,8 +1094,12 @@ function togglePan(art) {
   const AR = content.offsetHeight / (Wf * ts); // the page's height over its width
   art._pan = { R0, R: { ...R0 }, AR, F0: R0.h * (Wf / R0.w) * AR };
   body.classList.add('panning');
-  body.append(el('button', 'pan-done', 'Done'));
-  body.lastElementChild.dataset.act = 'pan-done';
+  // Done sits in the page's header row, at the right (in line with the page number and its hits), not over the page
+  const head = art.querySelector(':scope > .page-head');
+  const done = el('button', 'pan-done', 'Done');
+  done.type = 'button';
+  done.dataset.act = 'pan-done';
+  if (head) head.append(done); else body.append(done);
   bindPan(art, body);
   panLock(art);
   layoutPan(art);
@@ -1099,8 +1113,9 @@ let panLocked = null;
 const panStop = (e) => { if (e.cancelable) e.preventDefault(); };
 // outside the page: a drag does nothing (it's held still), a plain tap finishes
 let panTap = null;
+const panOwn = (t) => t.closest?.('.page-body.panning, .pan-done');
 const panOutside = (e) => {
-  if (!panLocked || e.target.closest?.('.page-body.panning')) return;
+  if (!panLocked || panOwn(e.target)) return;
   e.preventDefault();
   e.stopPropagation();
   panTap = { x: e.clientX, y: e.clientY, t: performance.now() };
@@ -1108,12 +1123,12 @@ const panOutside = (e) => {
 const panOutsideUp = (e) => {
   const art = panLocked, t = panTap;
   panTap = null;
-  if (!art || !t || e.target.closest?.('.page-body.panning')) return;
+  if (!art || !t || panOwn(e.target)) return;
   e.preventDefault();
   e.stopPropagation();
   if (Math.hypot(e.clientX - t.x, e.clientY - t.y) < 10 && performance.now() - t.t < 500) togglePan(art);
 };
-const panEatClick = (e) => { if (panLocked && !e.target.closest?.('.page-body.panning')) { e.preventDefault(); e.stopPropagation(); } };
+const panEatClick = (e) => { if (panLocked && !panOwn(e.target)) { e.preventDefault(); e.stopPropagation(); } };
 function panLock(art) {
   const on = !!art, was = !!panLocked;
   panLocked = art;
@@ -1181,21 +1196,17 @@ function panMove(art, dx, dy) {
   P.R.y = Math.min(Math.max(0, P.R.y - dy / H), 1 - h);
   layoutPan(art);
 }
-// near where it started: glide back to exactly the cropped shape
-function panSettle(art) {
+// a smooth move of the window to R (used by Done, to go back to the cropped view)
+function panGlide(art, R, then) {
   const P = art._pan;
-  if (!P) return;
-  const { R, R0 } = P;
-  const Wf = panParts(art).clip.clientWidth;
-  const F = R.h * (Wf / R.w) * P.AR;
-  if (Math.abs(R.w - R0.w) / R0.w > 0.07 || Math.abs(F - P.F0) / P.F0 > 0.07) return;
-  const from = { ...R }, t0 = performance.now();
+  if (!P) return then?.();
+  const from = { ...P.R }, t0 = performance.now();
   const step = (now) => {
     if (art._pan !== P) return;
-    const k = Math.min(1, (now - t0) / 220), e = 1 - (1 - k) ** 3;
-    P.R = { x: from.x + (R0.x - from.x) * e, y: from.y + (R0.y - from.y) * e, w: from.w + (R0.w - from.w) * e, h: from.h + (R0.h - from.h) * e };
+    const k = Math.min(1, (now - t0) / 280), e = 1 - (1 - k) ** 3;
+    P.R = { x: from.x + (R.x - from.x) * e, y: from.y + (R.y - from.y) * e, w: from.w + (R.w - from.w) * e, h: from.h + (R.h - from.h) * e };
     layoutPan(art);
-    if (k < 1) requestAnimationFrame(step);
+    if (k < 1) requestAnimationFrame(step); else then?.();
   };
   requestAnimationFrame(step);
 }
@@ -1234,10 +1245,8 @@ function bindPan(art, body) {
   const up = (e) => {
     if (!pts.delete(e.pointerId)) return;
     last = state();
-    if (!pts.size) {
-      if (art._panMoved) art._swiped = performance.now(); // not also a tap on the page
-      panSettle(art);
-    }
+    // it stays exactly where you leave it until Done (it used to glide back to the crop after every drag)
+    if (!pts.size && art._panMoved) art._swiped = performance.now(); // not also a tap on the page
   };
   body.addEventListener('pointerup', up);
   body.addEventListener('pointercancel', up);

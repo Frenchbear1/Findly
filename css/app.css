@@ -1834,7 +1834,8 @@ dialog:not(.set-dlg), dialog.xfer, dialog.helper-dlg, .set-sheet { background: c
 /* pan & zoom a page by hand */
 .page-body.panning, .page-body.panning * { touch-action: none !important; }
 .page-body.panning { box-shadow: 0 0 0 2px var(--accent), var(--shadow); cursor: grab; }
-.pan-done { position: absolute; z-index: 6; top: 10px; right: 10px; height: 32px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--accent); color: #fff; font: inherit; font-size: 14px; font-weight: 650; box-shadow: 0 4px 14px -4px rgba(0, 0, 0, 0.35); cursor: pointer; }
+/* in the page's header row, at the right */
+.pan-done { margin-left: auto; flex: none; height: 28px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--accent); color: #fff; font: inherit; font-size: 14px; font-weight: 650; box-shadow: 0 4px 14px -4px rgba(0, 0, 0, 0.35); cursor: pointer; }
 .page-body.panning { position: relative; }
 html.pan-lock, html.pan-lock body { overscroll-behavior: none; }
 
@@ -1962,3 +1963,6 @@ html.pan-lock, html.pan-lock body { overscroll-behavior: none; }
 @supports not selector(::-webkit-scrollbar) { @media (pointer: fine) { * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--ink) 25%, transparent) transparent; } } }
 .ai-paste #aiAnswer { padding-right: 34px; box-sizing: border-box; }
 .ai-paste .paste-clear { top: 13px; right: 8px; }
+/* while a page is pinched and dragged, the next/previous page tabs step aside (Done sits where the top one was) */
+html.pan-lock .gap-tab { opacity: 0; pointer-events: none; transition: opacity 0.15s; }
+.page-head .pan-done { position: relative; z-index: 3; }
