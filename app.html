@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Findly</title>
+  <meta name="description" content="Search across all your documents at once and read the pages that match." />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#f5f4f1" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Search" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/x-icon" href="favicon.ico" />
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32x32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="css/app.css" />
+  <link rel="stylesheet" href="css/ios.css" />
+  <script>
+    // put the reading theme on before anything paints (no flash of the default colours)
+    try {
+      var r = document.documentElement, c = JSON.parse(localStorage.getItem('instant-search:theme') || 'null');
+      if (c && c.css && c.dark !== null) {
+        r.setAttribute('style', c.css);
+        r.dataset.theme = c.dark ? 'dark' : 'light';
+        if (c.tint) { r.classList.add('doc-tint'); if (c.dark) r.classList.add('doc-dark'); }
+        if (c.paper) r.classList.add('paper');
+      } else {
+        var t = (JSON.parse(localStorage.getItem('instant-search:prefs')) || {}).theme;
+        if (t === 'light' || t === 'dark') r.dataset.theme = t;
+        r.classList.add('doc-tint');
+        if (t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)) r.classList.add('doc-dark');
+      }
+    } catch (e) {}
+  </script>
+  <script src="vendor/pdf.min.js" defer></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body data-view="results">
+  <div class="app">
+    <aside class="sidebar" aria-label="Library">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.6-4.6"/></svg></span>
+        <span>Findly</span>
+        <button class="brand-boards" id="libBoardsBtn" aria-label="Boards" title="Your boards"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="9" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="1.6"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="1.6"/><rect x="3" y="15" width="7.5" height="6" rx="1.6"/></svg>Boards</button>
+        <button class="brand-gear" id="settingsBtn" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path d="M19.4 13.5a7.7 7.7 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.6 7.6 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.7 7.7 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 2.6-1.5l2.4 1 2-3.4z"/></svg></button>
+      </div>
+      <div class="split">
+        <button class="btn primary add" id="addBtn">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add documents
+        </button>
+        <button class="btn primary add-more" id="addMoreBtn" aria-label="More ways to add" title="Add into a folder, or add a whole folder">
+          <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+      <input type="file" id="fileInput" multiple hidden />
+      <input type="file" id="dirInput" webkitdirectory multiple hidden />
+      <div class="lib-head">
+        <span>Library <em id="libCount"></em></span>
+        <span class="lib-head-acts">
+          <button class="link" id="toggleAll" hidden>All</button>
+          <button class="mini" id="checkAllBtn" title="Check linked sources for updates" aria-label="Check linked sources for updates" hidden><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.8-4M4 4v4h4M4 13a8 8 0 0 0 14.8 4M20 20v-4h-4"/></svg></button>
+          <button class="mini" id="newFolderBtn" title="New folder" aria-label="New folder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5h5"/></svg></button>
+        </span>
+      </div>
+      <div class="lib-status" id="libStatus" hidden aria-live="polite"><span class="ls-text"></span><span class="ls-pct"></span><i class="ls-bar"><b></b></i></div>
+      <div class="lib-zone">
+        <ul class="lib" id="lib"></ul>
+        <div class="lib-out">Drop here to take it out of its folder</div>
+        <p class="lib-empty" id="libEmpty">No documents yet. Drop files or whole folders anywhere on the page.</p>
+      </div>
+      <button class="updates-btn" id="updatesBtn" hidden><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>Updates found</span></button>
+      <span id="storage" hidden>Stored only on this device</span>
+      <input type="file" id="backupInput" hidden />
+      <div class="side-resize" id="sideResize" role="separator" aria-orientation="vertical" aria-label="Resize the library" tabindex="0" title="Drag to resize · double-click to reset"></div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="search-row">
+          <button class="icon-btn menu" id="menuBtn" aria-label="Show or hide the library" title="Show or hide the library (L)">
+            <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+          </button>
+          <div class="search-box">
+            <button class="mode-pill" id="modePill" type="button" title="Search type — tap for options, or press and drag sideways to switch"></button>
+            <svg class="s-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.6-4.6"/></svg>
+            <input id="q" type="search" autocomplete="off" spellcheck="false" enterkeyhint="search" aria-label="Search" />
+            <button class="icon-btn sm" id="clearBtn" aria-label="Clear search" hidden><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+            <span class="counter" id="counter" aria-live="polite" hidden></span>
+            <span class="nav">
+              <button class="icon-btn sm" id="prevBtn" aria-label="Previous hit (Shift+Enter)" title="Previous hit (Shift+Enter)"><svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg></button>
+              <button class="icon-btn sm" id="nextBtn" aria-label="Next hit (Enter)" title="Next hit (Enter)"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+            </span>
+          </div>
+          <button class="icon-btn" id="panelBtn" aria-label="Pages with hits" title="Pages with hits and sorting" hidden>
+            <svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15M17 9h1M17 12h1M17 15h1"/></svg>
+                      <b class="pb-count" id="panelCount" aria-hidden="true"></b>
+          </button>
+          <button class="icon-btn" id="compactBtn" aria-label="Minimize the toolbar" title="Minimize the toolbar (H)">
+            <svg class="c-less" viewBox="0 0 24 24"><path d="M7 15l5-5 5 5"/></svg>
+            <svg class="c-more" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg>
+          </button>
+          <button class="icon-btn" id="boardsBtn" aria-label="Boards" title="Your boards (Shift+B)"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="9" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="1.6"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="1.6"/><rect x="3" y="15" width="7.5" height="6" rx="1.6"/></svg></button>
+          <button class="icon-btn" id="themeBtn" aria-label="Reading theme" title="Reading theme">
+            <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0 0 18c1.1 0 1.6-.9 1.2-1.8l-.4-.9c-.5-1.1.3-2.3 1.5-2.3H17a4 4 0 0 0 4-4c0-5-4-9-9-9z"/><circle cx="7.5" cy="11" r="1.2"/><circle cx="10.5" cy="7" r="1.2"/><circle cx="15.5" cy="7.5" r="1.2"/></svg>
+          </button>
+          <button class="icon-btn" id="keysBtn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">
+            <svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M8 14h8"/></svg>
+          </button>
+          <button class="icon-btn" id="helpBtn" aria-label="Search help" title="Search help">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4M12 17h.01"/></svg>
+          </button>
+        </div>
+        <div class="toolbar">
+          <div class="seg" id="modes" role="group" aria-label="Search type"></div>
+          <label class="near" id="nearBox" hidden>within <input id="nearN" type="number" min="1" max="200" inputmode="numeric" /> words</label>
+          <div class="toggles">
+            <button class="tog" id="caseBtn" aria-pressed="false" title="Match case">Aa</button>
+            <button class="tog" id="wordBtn" aria-pressed="false" title="Whole words only"><u>ab</u></button>
+          </div>
+        </div>
+        <div class="summary" id="summary" hidden></div>
+      </header>
+
+      <div class="content">
+        <div class="col">
+          <div class="view" id="results"></div>
+          <div class="view" id="reader"></div>
+        </div>
+        <nav class="outline" id="outline" aria-label="Pages with hits" hidden>
+          <div class="ol-top">
+            <label class="ol-sort" id="olSort"><span>Sort</span><select id="sortSel2" aria-label="Sort results">
+              <option value="library">Library order</option>
+              <option value="hits">Documents with most hits</option>
+              <option value="pages">Pages with most hits</option>
+            </select></label>
+          </div>
+          <div id="outlineList"></div>
+        </nav>
+      </div>
+      <div class="dock" id="dock" hidden>
+        <button class="d-undo" id="dUndo" type="button" data-kind="undo" aria-label="Undo"></button>
+        <div class="seg small" id="viewSeg" role="group" aria-label="Page view" hidden style="display:none">
+          <button data-view="text" title="Clean, reflowed text (O)">Text</button>
+          <button data-view="original" title="The original PDF page (O)">Original</button>
+        </div>
+        <div class="zoom" role="group" aria-label="Zoom">
+          <button class="icon-btn sm" id="zoomOut" title="Zoom out (−)" aria-label="Zoom out"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button>
+          <button class="zoom-val" id="zoomVal" title="Back to 100% (0)">100%</button>
+          <button class="icon-btn sm" id="zoomIn" title="Zoom in (+)" aria-label="Zoom in"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button>
+        </div>
+        <div class="fits" role="group" aria-label="Fit">
+          <button class="fit" id="fitWidth" title="Fit width (W)" aria-label="Fit width"><svg viewBox="0 0 24 24"><path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4"/></svg></button>
+          <button class="fit" id="fitCol" title="Column view — just the column with your hits (V)" aria-label="Column view"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M6.5 8.5h3M6.5 12h3M14.5 8.5h3M14.5 12h3"/></svg></button>
+          <button class="fit" id="fitPage" title="Fit page (F)" aria-label="Fit page"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="1.5"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></button>
+        </div>
+        <div class="crop-ctl" role="group" aria-label="Crop result pages to the hits">
+          <button class="fit" id="cropBtn" title="Show just the hits on each page (C)" aria-label="Crop pages to the hits"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"/></svg></button>
+          <button class="fit" id="trimBtn" title="Trim page margins — wide view (M)" aria-label="Trim page margins"><svg viewBox="0 0 24 24"><path d="M4 4v16M20 4v16M8 12h8M10.5 9.5 8 12l2.5 2.5M13.5 9.5 16 12l-2.5 2.5"/></svg></button>
+          <span class="crop-step" id="cropSpan" title="Lines shown above and below the hits"><button id="cropMinus" aria-label="Fewer lines around the hits"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button><output id="cropOut">±3</output><button id="cropPlus" aria-label="More lines around the hits"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button></span>
+          <button class="fit" id="navBtn" title="Next and previous page: tabs between pages, or swipe a result sideways" aria-label="Swipe for next and previous page"><svg viewBox="0 0 24 24"><rect x="7" y="4" width="10" height="16" rx="1.6"/><path d="M4 9l-2 3 2 3M20 9l2 3-2 3"/></svg></button>
+        </div>
+      </div>
+      <nav class="mbar" id="mbar" aria-label="Reading controls" hidden>
+        <button class="mb m-ur" id="mUndoBtn" aria-label="Undo"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+        <span class="m-lead">
+          <button class="mode-pill m-mode" id="mMode" type="button" title="Search type — tap, or hold and slide"></button>
+          <button class="m-undo" id="mUndo" type="button" data-kind="undo" aria-label="Undo"></button>
+        </span>
+        <div class="swipe-hint" id="swipeHint" aria-hidden="true"></div>
+        <button class="mb" id="mPrevPage" aria-label="Previous page with hits"><svg viewBox="0 0 24 24"><path d="M17 18l-5-5-5 5M17 11l-5-5-5 5"/></svg></button>
+        <button class="mb" id="mPrev" aria-label="Previous hit"><svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg></button>
+        <button class="m-count" id="mCount" aria-label="Hits — tap for next, hold and slide to scrub through hits"><span id="mCountText">0</span><i class="jog" aria-hidden="true"></i></button>
+        <button class="mb" id="mNext" aria-label="Next hit"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+        <button class="mb" id="mNextPage" aria-label="Next page with hits"><svg viewBox="0 0 24 24"><path d="M7 6l5 5 5-5M7 13l5 5 5-5"/></svg></button>
+        <button class="mb" id="mMore" aria-label="View options — tap, or hold and slide to pick"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
+        <button class="mb m-ur" id="mRedoBtn" aria-label="Redo"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
+      </nav>
+    </main>
+  </div>
+
+  <div class="drop-overlay" aria-hidden="true">
+    <div class="drop-card">
+      <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+      <b>Drop to add to your library</b>
+      <span>PDF · Word · Text · Markdown · HTML — whole folders too</span>
+      <span class="drop-tip">Drop onto a folder in the library to add straight into it</span>
+    </div>
+  </div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <dialog id="linkDlg" aria-label="Add from a web link">
+    <form class="link-dlg" method="dialog" id="linkForm">
+      <header><h3>Add from a web link</h3><button class="icon-btn sm" type="button" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
+      <p class="muted">Paste a link to a document (like a PDF), or to a page that lists documents, like a publisher’s downloads page. Linked documents can be checked for updates later.</p>
+      <input id="linkUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" required />
+      <label class="link-row">Put it in
+        <select id="linkFolder"></select>
+      </label>
+      <p class="link-status" id="linkStatus" aria-live="polite"></p>
+      <div class="link-actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit" id="linkGo">Add</button></div>
+      <details class="helper ai-box" id="aiBox">
+        <summary>Find documents with AI <span id="aiState"></span></summary>
+        <div class="seg small ai-mode" id="aiMode" role="group" aria-label="What the AI should do"><button type="button" data-m="link" aria-pressed="true">Link files</button><button type="button" data-m="new" aria-pressed="false">Find new</button><button type="button" data-m="names" aria-pressed="false">Names</button></div>
+        <div data-for="link">
+          <p>For files you added yourself. This copies their names (with folders, page counts and opening words) plus a request asking the AI to find each one’s official source online — checked, not guessed.</p>
+          <label class="link-row">Files <select id="aiWhich"></select></label>
+        </div>
+        <div data-for="new" hidden>
+          <p>Say what you want, in your own words. The AI finds the official downloads, and the app adds them and keeps them up to date.</p>
+          <textarea id="aiAsk" rows="2" placeholder="e.g. the IRS publications for small businesses, or every part of a building code"></textarea>
+          <label class="link-row">Put them in <select id="aiDest"></select></label>
+          <label class="link-row" id="aiDestNameRow">Folder name <input id="aiDestName" type="text" autocomplete="off" placeholder="New folder" /></label>
+        </div>
+        <div data-for="names" hidden>
+          <p>For documents you already have, linked or not: the AI gives each one its document number (NFPA 70), full title (National Electrical Code) and usual abbreviation (NEC). Nothing is relinked. Settings › Document names picks which one the app shows.</p>
+          <label class="link-row">Documents <select id="aiWhichN"></select></label>
+        </div>
+        <label class="link-row">AI <select id="aiBot"></select></label>
+        <div class="link-actions"><button class="btn" type="button" id="aiCopy">Copy only</button><button class="btn primary" type="button" id="aiGo">Copy &amp; open</button></div>
+        <div id="aiAfter" hidden>
+        <label class="ai-label" for="aiAnswer">Then paste the AI’s answer here</label>
+        <div class="ai-paste"><textarea id="aiAnswer" rows="4" spellcheck="false" placeholder="name | PAGE: https://… | FILE: https://…"></textarea><button type="button" class="paste-clear" id="aiClear" aria-label="Clear the answer" title="Clear" hidden><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+        <p class="link-status" id="aiStatus" aria-live="polite"></p>
+        <div class="link-actions"><button class="btn" type="button" id="aiPaste">Paste from clipboard</button><button class="btn primary" type="button" id="aiCheck">Check &amp; add</button></div>
+        </div>
+      </details>
+      <div class="helper-row" id="helperBox">
+        <div><b>Download helper</b> <span id="helperState"></span><small>Lets Findly download from sites that block other apps, like many government sites. Free, about 5 minutes, once.</small></div>
+        <button class="btn" type="button" id="helperOpen">Set up</button>
+      </div>
+      <label class="check-row"><input type="checkbox" id="autoCheck" /> Check linked sources for updates automatically when I open the app (how often is in Settings)</label>
+    </form>
+  </dialog>
+
+  <dialog id="reviewDlg" aria-labelledby="reviewTitle">
+    <div class="review">
+      <header><h3 id="reviewTitle"></h3><button class="icon-btn sm review-x" type="button" id="reviewX" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
+      <div class="review-scroll">
+      <p class="muted" id="reviewIntro"></p>
+      <div class="review-bulk" id="reviewBulk" hidden><button type="button" class="link" data-all="1">Select all</button><button type="button" class="link" data-all="0">Select none</button><span class="grow"></span><span class="muted" id="reviewCount"></span></div>
+      <div class="review-list" id="reviewList"></div>
+      <div class="review-opts" id="reviewOpts"></div>
+      </div>
+      <div class="link-actions"><button class="btn" type="button" id="reviewCancel">Cancel</button><button class="btn primary" type="button" id="reviewApply">Apply</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="keys" aria-label="Keyboard shortcuts">
+    <div class="keys-dlg">
+      <header><h3>Keyboard shortcuts</h3><span class="grow"></span><button class="link" id="keysReset">Reset all</button><button class="icon-btn sm" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
+      <p class="muted">Click <b>+</b> to add a key, then press it. Click a key to remove it. Enter and Shift+Enter in the search box always move between hits.</p>
+      <div class="keys-list" id="keysList" tabindex="-1"></div>
+    </div>
+  </dialog>
+
+  <dialog id="help" aria-label="How to search">
+    <div class="help">
+      <header><h3>How to search</h3><button class="icon-btn sm" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></header>
+      <h4>Search types</h4>
+      <dl>
+        <dt>Any word</dt><dd>Pages that contain at least one of your words.</dd>
+        <dt>All words</dt><dd>Pages that contain every word, anywhere on the page.</dd>
+        <dt>Exact phrase</dt><dd>The words side by side, in order. Line breaks don’t matter.</dd>
+        <dt>Near</dt><dd>All words within a set number of words of each other.</dd>
+        <dt>Boolean</dt><dd><code>AND</code> <code>OR</code> <code>NOT</code> and <code>( )</code>, e.g. <code>(stall OR spin) AND recovery NOT training</code></dd>
+      </dl>
+      <h4>Works in every type</h4>
+      <dl>
+        <dt><code>"two words"</code></dt><dd>Quotes keep words together as one term.</dd>
+        <dt><code>-word</code></dt><dd>Leave out pages containing it.</dd>
+        <dt><code>hydraul*</code></dt><dd>A star matches any letters.</dd>
+        <dt><span class="tog-demo">Aa</span> <span class="tog-demo"><u>ab</u></span></dt><dd>Match case · whole words only.</dd>
+      </dl>
+      <h4>Keys</h4>
+      <dl class="keys">
+        <dt><kbd>Enter</kbd> / <kbd>⇧ Enter</kbd></dt><dd>Next / previous hit</dd>
+        <dt><kbd>?</kbd></dt><dd>See and change every shortcut</dd>
+      </dl>
+      <p class="muted">Pages without hits are folded between results. Open the page before or after any hit, or all of them, to keep reading. Click a coloured word above the results to step through just that word.</p>
+    </div>
+  </dialog>
+</body>
+</html>

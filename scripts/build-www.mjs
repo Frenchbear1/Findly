@@ -1,12 +1,14 @@
 // Copies the static web app into www/ so Capacitor can bundle it into the iOS app.
-// GitHub Pages keeps serving the repo root as the web app; www/ is a generated copy and is gitignored.
+// GitHub Pages serves the repo root, where index.html is now the app's home page (download links, contact,
+// privacy policy, assets in site/); the app itself is app.html, which becomes www/index.html for the iPhone app,
+// the Windows app and Vercel. www/ is a generated copy and is gitignored.
 import { cpSync, rmSync, readdirSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = join(root, 'www');
-const skip = new Set(['.git', '.github', '.gitignore', '.nojekyll', 'node_modules', 'www', 'ios', 'scripts', 'tests',
+const skip = new Set(['site', 'index.html', '.git', '.github', '.gitignore', '.nojekyll', 'node_modules', 'www', 'ios', 'scripts', 'tests',
   'package.json', 'package-lock.json', 'capacitor.config.json', 'vercel.json', 'src-tauri']);
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out);
@@ -14,6 +16,9 @@ for (const name of readdirSync(root)) {
   if (skip.has(name) || name.endsWith('.md')) continue;
   cpSync(join(root, name), join(out, name), { recursive: true });
 }
+// the app is index.html everywhere it runs
+cpSync(join(out, 'app.html'), join(out, 'index.html'));
+rmSync(join(out, 'app.html'));
 // the iPhone app bundles its own files: no service worker there (it would only get in the way of app updates);
 // the website (Vercel) keeps it for offline use
 if (process.env.IS_APP === '1' || process.argv.includes('--app')) writeFileSync(join(out, 'sw.js'), 'self.addEventListener("install",()=>self.skipWaiting());self.addEventListener("activate",e=>e.waitUntil(self.registration.unregister()));\n');
